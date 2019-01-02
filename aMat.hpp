@@ -54,6 +54,7 @@ namespace par {
         /**@brief number of globlal nodes */
         unsigned long     m_uiNumNodesGlobal;
 
+
         /**@brief */
         MPI_Comm          m_comm;
         /**@brief */
@@ -65,7 +66,10 @@ namespace par {
         Mat                 m_pMat;
         /**@brief map[e][local_node]  = global_node */
         I**               m_ulpMap;
+        /**@brief type of element list */
         par::ElementType*   m_pEtypes;
+        /**@brief number of elements */
+        unsigned int      m_uiNumElem;
 
     public:
         /**
@@ -87,7 +91,6 @@ namespace par {
          * @param[in]
          * */
         par::Error twin_element(unsigned int e);
-
         /**
         * @brief: set block matrix
         * @param[in]
@@ -115,13 +118,31 @@ namespace par {
                 default:
                     return (unsigned int)Error::UNKNOWN_ELEMENT_TYPE;
             }
-            return (unsigned int)Error::UNKNOWN_ELEMENT_TYPE;
+
         }
 
+        /**
+        * @brief: set mapping from element local node to global node
+        * @param[in] map[eid][local_node] = global_node
+        * */
         void set_map(I** map){
             m_ulpMap = map;
-
         }
+
+        /**
+        * @brief: set element types
+        * @param[in] nelem: number of total (local) element
+        * @param[in] etype[eid] = type of element eid
+        * */
+        void set_elem_types(unsigned int nelem, par::ElementType* etype){
+            m_uiNumElem = nelem;
+            m_pEtypes = etype;
+        }
+
+        /**
+         * @brief: print out data for debugging
+         */
+        void print_data();
 
     }; // end of class aMat
 
@@ -173,9 +194,11 @@ namespace par {
         std::vector<PetscInt> colIndices(num_nodes*dof);
         PetscInt rowId;
 
+        //MatAssemblyBegin(m_pMat,MAT_FLUSH_ASSEMBLY);
         unsigned int index = 0;
         for (unsigned int r = 0; r < num_nodes*dof; ++r) {
             rowId = m_ulpMap[eid][r/dof];
+            //if(m_uiRank==1)std::cout<<"rowID: "<<rowId<<std::endl;
             for (unsigned int c = 0; c < num_nodes*dof; ++c) {
                 colIndices[c] = m_ulpMap[eid][c/dof];
                 values[c] = e_mat[index];
@@ -186,7 +209,42 @@ namespace par {
             // values.clear();
             // colIndices.clear();
         } // r
+
+        //MatAssemblyEnd(m_pMat,MAT_FLUSH_ASSEMBLY);
+
         return Error::SUCCESS;
+    }
+
+    template <typename T, typename I>
+    void aMat<T,I>::print_data() {
+        // temporary printing for check
+        std::cout << "rank= " << m_uiRank << " size= " << m_uiSize << std::endl;
+        std::cout << "number of nodes= " << m_uiNumNodes << std::endl;
+        std::cout << "nelem= " << m_uiNumElem << std::endl;
+
+        for (unsigned n = 0; n < m_uiNumElem; n++){
+            printf("element %d\n",n);
+            printf("nodes= %d %d %d %d %d %d %d %d \n", m_ulpMap[n][0], m_ulpMap[n][1], m_ulpMap[n][2],
+                   m_ulpMap[n][3], m_ulpMap[n][4], m_ulpMap[n][5], m_ulpMap[n][6], m_ulpMap[n][7]);
+        }
+
+        // write to file
+        PetscViewer viewer;
+        //char fileName[256];
+        //sprintf(fileName,"gmat_%d_%d.dat",m_uiRank,m_uiSize);
+        PetscPrintf(PETSC_COMM_SELF,"Write matrix into file gmat.dat ...\n");
+        MatAssemblyBegin(m_pMat,MAT_FINAL_ASSEMBLY);
+        MatAssemblyEnd(m_pMat,MAT_FINAL_ASSEMBLY);
+        //PetscViewerASCIIOpen(m_comm,fileName,&viewer);
+        PetscViewerASCIIOpen(m_comm, "gmat.dat", &viewer);
+        MatView(m_pMat,viewer);
+        PetscViewerDestroy(&viewer);
+
+        // write to screen
+        /*MatAssemblyBegin(m_pMat,MAT_FINAL_ASSEMBLY);
+        MatAssemblyEnd(m_pMat,MAT_FINAL_ASSEMBLY);
+        MatView(m_pMat,PETSC_VIEWER_STDOUT_(m_comm));*/
+
     }
 
 }; // end of namespace par
