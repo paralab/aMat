@@ -14,6 +14,7 @@
 
 #include "../include/shfunction.hpp"
 #include "../include/ke_matrix.hpp"
+#include "../include/me_matrix.hpp"
 #include "../include/aMat.hpp"
 
 
@@ -43,7 +44,7 @@ int main(int argc, char *argv[]) {
 
     // number of (global) elements in x, y and z directions
     const int Nex = atoi(argv[1]);
-    const int Ney = 2, Nez = 2;
+    const int Ney = 1, Nez = 1;
 
     // nodal coordinates of an element
     double *xe = new double[nDim * nNodePerElem];
@@ -52,7 +53,7 @@ int main(int argc, char *argv[]) {
 
 
     // (global) length in x, y and z directions
-    const int Lx = 4, Ly = 2, Lz = 2;
+    const int Lx = 2, Ly = 1, Lz = 1;
     const double hx = double(Lx)/double(Nex);// element size in x direction
     const double hy = double(Ly)/double(Ney);// element size in y direction
     const double hz = double(Lz)/double(Nez);// element size in z direction
@@ -133,13 +134,10 @@ int main(int argc, char *argv[]) {
             }
         }
     }
-    /*
-    for (unsigned e = 0; e < nelem; e++){
+    /*for (unsigned e = 0; e < nelem; e++){
         printf("rank= %d, element= %d, nodes= %d %d %d %d %d %d %d %d\n", rank, e, map[e][0],map[e][1],map[e][2],map[e][3],
                map[e][4],map[e][5],map[e][6],map[e][7]);
-    }
-    */
-
+    }*/
 
     // exclusive scan to get the shift for global node/element id
     unsigned int nelem_scan = 0;
@@ -151,7 +149,7 @@ int main(int argc, char *argv[]) {
 
     // process ID on the left and right
     if (rank > 0 && rank < (size-1)) {
-        right = rank +1;
+        right = rank + 1;
         left = rank - 1;
     }
     if (rank == 0) right = rank +1;
@@ -181,23 +179,32 @@ int main(int argc, char *argv[]) {
             //printf("rank= %d, elem= %d, node= %d, nid= %d, {x,y,z}= %f, %f, %f\n", rank, e, n, nid, x, y, z);
         }
         ke = ke_hex8(xe);
-        /*
-        for (int j = 0; j < nNodePerElem; j++){
-            printf("rank= %d, elem= %d, row= %d: , (0,%f), (1,%f), (2,%f), (3,%f), (4,%f), (5,%f), (6,%f), (7,%f)\n",
-                    rank, e, j, ke[j*8], ke[j*8+1], ke[j*8+2], ke[j*8+3], ke[j*8+4], ke[j*8+5], ke[j*8+6], ke[j*8+7]);
-        }
-        */
+        //for (int j = 0; j < nNodePerElem; j++){
+        //    printf("rank= %d, elem= %d, row= %d: , (0,%f), (1,%f), (2,%f), (3,%f), (4,%f), (5,%f), (6,%f), (7,%f)\n",
+        //           rank, e, j, ke[j*8], ke[j*8+1], ke[j*8+2], ke[j*8+3], ke[j*8+4], ke[j*8+5], ke[j*8+6], ke[j*8+7]);
+        //}
+
         // assemble to global stiffness matrix
         stiffnessMat.set_element_matrix(e, ke, false, ADD_VALUES);
     }
+    stiffnessMat.init();
+    stiffnessMat.assemble();
 
-    std::vector<double> u, w;
-    u.resize(nnode*nDofPerNode);
-    u.resize(nnode*nDofPerNode);
-    for (unsigned i = 0; i < nnode*nDofPerNode; i++) u[i] = 1;
-    //stiffnessMat.matvec(u,u,w,w);
-
+    // view the assembled matrix
     stiffnessMat.print_data();
+
+    // fixme: just for tesing matvec now
+    std::vector<double> u, w, u_twin, w_twin;
+    u.resize(nnode*nDofPerNode);
+    u_twin.resize(nnode*nDofPerNode);
+    w.resize(nnode*nDofPerNode);
+    w_twin.resize(nnode*nDofPerNode);
+    for (unsigned i = 0; i < nnode*nDofPerNode; i++) {
+        u[i] = i;
+        u_twin[i] = 2*i;
+    }
+    stiffnessMat.matvec(u,u_twin,w,w_twin);
+    
 
     for (unsigned int eid = 0; eid < nelem; eid++)
         delete [] map[eid];
