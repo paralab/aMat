@@ -15,7 +15,7 @@ Output : double ke_hex8[8*8], element stiffness matrix
 */
 {
     const int NGT = 2; // number of Gauss points in each direction
-    double x[3], w[3];
+    double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
     double *xw;
     double *N;
     double *dN;
@@ -34,13 +34,13 @@ Output : double ke_hex8[8*8], element stiffness matrix
 
     for (int i = 0; i < NGT; i++){
         x[0] = xw[i*2];                     // xi
-        w[0] = xw[i*2 + 1];                 // wxi
+        w[0] = xw[i*2 + 1];                 // weight_xi
         for (int j = 0; j < NGT; j++){
             x[1] = xw[j*2];                 // eta
-            w[1] = xw[j*2 + 1];             // weta
+            w[1] = xw[j*2 + 1];             // weight_eta
             for (int k = 0; k < NGT; k++){
                 x[2] = xw[k*2];             // zeta
-                w[2] = xw[k*2 + 1];         // wzeta
+                w[2] = xw[k*2 + 1];         // weight_zeta
                 N = basis_hex8(x);
                 dN = dfbasis_hex8(x);
 
@@ -61,8 +61,6 @@ Output : double ke_hex8[8*8], element stiffness matrix
                 // jacobian
                 jaco =dxds[0]*(dyds[1]*dzds[2] - dzds[1]*dyds[2]) + dyds[0]*(dzds[1]*dxds[2] - dxds[1]*dzds[2]) +
                         dzds[0]*(dxds[1]*dyds[2] - dyds[1]*dxds[2]);
-
-
                 if (jaco < 0.0) {
                     printf(" Jacobian is negative!");
                     exit(0);
@@ -98,7 +96,7 @@ Output : double ke_hex8[8*8], element stiffness matrix
                 for (int i = 0; i < 8; i++){
                     for (int j = 0; j < 8; j++){
                         idx = (i*8) + j;
-                        ke[idx] = B0[i]*B0[j] + B1[i]*B1[j] + B2[i]*B2[j];
+                        ke[idx] = (B0[i]*B0[j] + B1[i]*B1[j] + B2[i]*B2[j]) * jaco * w[2] * w[1] * w[0];
                     }
                 }
 
