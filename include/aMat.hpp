@@ -228,9 +228,9 @@ namespace par {
 
         unsigned int index = 0;
         for (unsigned int r = 0; r < num_nodes*dof; ++r) {
-            rowId = m_ulpMap[eid][r/dof];
+            rowId = dof*m_ulpMap[eid][r/dof] + r%dof;
             for (unsigned int c = 0; c < num_nodes*dof; ++c) {
-                colIndices[c] = m_ulpMap[eid][c/dof];
+                colIndices[c] = dof*m_ulpMap[eid][c/dof] + c%dof;
                 values[c] = e_mat[index];
                 index++;
 
