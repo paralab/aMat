@@ -2,7 +2,7 @@
 // Created by Han Tran on 12/5/18.
 //
 #include <iostream>
-#include "../include/shfunction.hpp"
+#include "shfunction.hpp"
 #include <math.h>
 
 double *gauss(int n)
