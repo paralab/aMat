@@ -22,12 +22,14 @@ endif()
 set(INCLUDE_FILES include/shfunction.hpp
         include/ke_matrix.hpp
         include/me_matrix.hpp
+        include/fe_vector.hpp
         include/aMat.hpp)
 
-set(SOURCE_FILES src/main.cpp
+set(SOURCE_FILES
         src/shfunction.cpp
         src/ke_matrix.cpp
-        src/me_matrix.cpp)
+        src/me_matrix.cpp
+        src/fe_vector.cpp)
 
 # cmake options, which will be visible at ccmake ../
 option(BUILD_WITH_PETSC "Build code with the petsc" ON)
@@ -40,12 +42,26 @@ if(BUILD_WITH_PETSC)
 endif(BUILD_WITH_PETSC)
 
 
-add_executable(fem3d ${INCLUDE_FILES} ${SOURCE_FILES})
+set(EIGEN_HEADER_DIR Eigen)
+
+add_executable(fem3d src/fem3d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(fem3d PUBLIC include)
 target_include_directories(fem3d PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(fem3d PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(fem3d ${MPI_LIBRARIES} m)
+
+
+add_executable(testEigen ${INCLUDE_FILES} ${SOURCE_FILES} test/src/testEigen.cpp test/include/aMat.h)
+target_include_directories(testEigen PUBLIC include)
+target_include_directories(testEigen PUBLIC test/include)
+target_include_directories(testEigen PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(testEigen PRIVATE ${EIGEN_HEADER_DIR})
+target_link_libraries(testEigen ${MPI_LIBRARIES} m)
 
 if(BUILD_WITH_PETSC)
     target_include_directories(fem3d PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(fem3d ${PETSC_LIBRARIES})
+
+    target_include_directories(testEigen PUBLIC ${PETSC_INCLUDES})
+    target_link_libraries(testEigen ${PETSC_LIBRARIES})
 endif()
