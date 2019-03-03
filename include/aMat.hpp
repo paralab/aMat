@@ -221,10 +221,6 @@ namespace par {
         par::Error matvec(std::vector<T>& v_primary, std::vector<T>& v_twin, std::vector<T>& w_primary, std::vector<T>& w_twin);
 
 
-
-
-
-
         /**
         * @brief: set mapping from element local node to global node
         * @param[in] map[eid][local_node_ID]
@@ -260,23 +256,40 @@ namespace par {
         par::Error set_element_vector(Vec vec,unsigned int eid, T* e_vec, bool twin, InsertMode mode=ADD_VALUES);
 
         /**
-         * @brief: print out data for debugging
+         * @brief: write pestsc matrix to ASCII file
+         * @param[in/out] fmat: filename to write matrix to
          */
         par::Error dump_mat(const char* fmat);
 
         /**
-         * @brief:
+         * @brief: write petsc vector to ASCII file
+         * @param[in/out] fvec: filename to write vector to
+         * @param[in] vec : petsc vector to write to file
          * */
         par::Error dump_vec(const char* fvec,Vec vec);
 
         /**
          * @brief apply Dirichlet boundary conditions to the matrix.
+         * @param[in/out] rhs: the RHS vector (load vector)
+         * @param[in] eid: element number
+         * @param[in] dirichletBMap[eid][num_nodes]: indicator of boundary node (1) or interior node (0)
          * */
         par::Error apply_dirichlet(Vec rhs,unsigned int eid,const I** dirichletBMap);
         /**
          * @brief: invoke basic petsc solver
+         * @param[in] rhs: petsc RHS vector
+         * @param[out] out: petsc solution vector
          * */
         par::Error petsc_solve(const Vec rhs,Vec out);
+
+        /**
+         * @brief: invoke basic petsc solver
+         * @param[in/out] exact_sol: petsc exact solution vector
+         * @param[in] eid: element id
+         * @param[in] e_sol: elemet exact solution
+         * @param[in] mode: petsc insert or add modes
+         * */
+        par::Error exact_sol(Vec exact_sol, unsigned int eid, T* e_sol, InsertMode mode=INSERT_VALUES);
 
 
     }; // end of class aMat
@@ -602,6 +615,27 @@ namespace par {
         //KSPSetPC(ksp,pc);
         KSPSetFromOptions(ksp);
         KSPSolve(ksp,rhs,out);
+
+        return Error::SUCCESS; // fixme to have a specific error type for other cases
+    }
+
+    //******************************************************************************************************************
+    template <typename T, typename I>
+    par::Error aMat<T,I>:: exact_sol(Vec exact_sol, unsigned int eid, T* e_sol, InsertMode mode){
+        par::ElementType e_type = m_pEtypes[eid];
+        unsigned int num_nodes = aMat::nodes_per_element(e_type);
+        unsigned int dof = m_uiNumDOFperNode;
+
+        PetscScalar value;
+        PetscInt rowId;
+
+        unsigned int index = 0;
+        for (unsigned int r = 0; r < num_nodes*dof; ++r) {
+            rowId = dof * m_ulpMap[eid][r/dof] + r % dof;
+            value = e_sol[index];
+            index++;
+            VecSetValue(exact_sol, rowId, value, mode);
+        }
 
         return Error::SUCCESS; // fixme to have a specific error type for other cases
     }
