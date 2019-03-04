@@ -144,7 +144,6 @@ int main(int argc, char *argv[]) {
     }*/
 
 
-
     // boundary nodes: bound
     unsigned long** bound_nodes = new unsigned long *[nelem];
     for (unsigned int e = 0; e < nelem; e++) {
@@ -172,12 +171,12 @@ int main(int argc, char *argv[]) {
     // set element types
     stiffnessMat.set_elem_types(nelem, etype);
 
-    Vec rhs, out;
+
+
     // create vec rhs and solution vector
+    Vec rhs, out, sol_exact;
     stiffnessMat.create_vec(rhs);
     stiffnessMat.create_vec(out);
-    // create exact solution vector (to verify)
-    Vec sol_exact;
     stiffnessMat.create_vec(sol_exact);
 
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
@@ -245,12 +244,12 @@ int main(int argc, char *argv[]) {
     stiffnessMat.petsc_finalize_vec(out);
 
     // write results to files
-    stiffnessMat.dump_mat("mat");
-    stiffnessMat.dump_vec("rhs_vec", rhs);
-    stiffnessMat.dump_vec("out_vec", out);
+    /*stiffnessMat.dump_mat("stiff_mat.dat");
+    stiffnessMat.dump_vec("rhs_vec.dat", rhs);
+    stiffnessMat.dump_vec("out_vec.dat", out);*/
 
     // nodal coordinates of an element
-    double* exact_e = new double[nNodePerElem]; // only for 1 DOF/node
+    double* e_exact = new double[nNodePerElem]; // only for 1 DOF/node
 
     double x, y, z;
 
@@ -267,24 +266,36 @@ int main(int argc, char *argv[]) {
             if ((std::abs(x) < tol) || (std::abs(x - Lx) < tol) ||
                 (std::abs(y) < tol) || (std::abs(y - Ly) < tol) ||
                 (std::abs(z) < tol) || (std::abs(z - Lz) < tol)) {
-                exact_e[n] = 0.0; // boundary
+                e_exact[n] = 0.0; // boundary
             } else {
-                exact_e[n] = (1.0 / (12.0 * M_PI * M_PI)) * sin(2 * M_PI * x) * sin(2 * M_PI * y) * sin(2 * M_PI * z); // interior
+                e_exact[n] = (1.0 / (12.0 * M_PI * M_PI)) * sin(2 * M_PI * x) * sin(2 * M_PI * y) * sin(2 * M_PI * z);
             }
-            //printf("e= %d, nid= %d, {x,y,z}= %f, %f, %f, exact= %f \n", e, nid, x,y,z,exact_e[n]);
+            //printf("e= %d, nid= %d, {x,y,z}= %f, %f, %f, exact= %f \n", e, nid, x,y,z,e_exact[n]);
         }
         // set exact solution to pestc vector
-        stiffnessMat.exact_sol(sol_exact, e, exact_e);
+        stiffnessMat.set_vector(sol_exact, e, e_exact);
     }
 
 
-    delete [] exact_e;
+    delete [] e_exact;
 
-    // Pestc begins and completes assembling the global load vector
+    // Pestc begins and completes assembling the exact solution
     stiffnessMat.petsc_init_vec(sol_exact);
     stiffnessMat.petsc_finalize_vec(sol_exact);
 
-    stiffnessMat.dump_vec("exact_sol_vec", sol_exact);
+    //stiffnessMat.dump_vec("exact_vec.dat", sol_exact);
+
+
+    // subtract out from sol_exact
+    PetscScalar norm, alpha = -1.0;
+    VecAXPY(sol_exact, alpha, out);
+
+    // compute the norm of sol_exact
+    VecNorm(sol_exact, NORM_INFINITY, &norm);
+
+    if (rank == 0){
+        printf("L_inf norm= %f\n", norm);
+    }
 
     for (unsigned int eid = 0; eid < nelem; eid++)
     {

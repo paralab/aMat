@@ -22,10 +22,6 @@
 
 PETSC_EXTERN PetscErrorCode PCCreate_Jacobi(PC);
 
-
-
-
-
 namespace par {
 
     enum class Error {SUCCESS, INDEX_OUT_OF_BOUNDS, UNKNOWN_ELEMENT_TYPE, UNKNOWN_ELEMENT_STATUS};
@@ -172,6 +168,7 @@ namespace par {
             MatAssemblyEnd(m_pMat,mode);
             return Error::SUCCESS; // fixme
         }
+
         /**
          * @brief: end assembling the petsc vec,
          * @param[in] vec: pestc vector
@@ -275,6 +272,7 @@ namespace par {
          * @param[in] dirichletBMap[eid][num_nodes]: indicator of boundary node (1) or interior node (0)
          * */
         par::Error apply_dirichlet(Vec rhs,unsigned int eid,const I** dirichletBMap);
+
         /**
          * @brief: invoke basic petsc solver
          * @param[in] rhs: petsc RHS vector
@@ -289,8 +287,7 @@ namespace par {
          * @param[in] e_sol: elemet exact solution
          * @param[in] mode: petsc insert or add modes
          * */
-        par::Error exact_sol(Vec exact_sol, unsigned int eid, T* e_sol, InsertMode mode=INSERT_VALUES);
-
+        par::Error set_vector(Vec exact_sol, unsigned int eid, T *e_sol, InsertMode mode = INSERT_VALUES);
 
     }; // end of class aMat
 
@@ -349,7 +346,7 @@ namespace par {
             VecSetSizes(vec, m_uiNumNodes*m_uiNumDOFperNode, PETSC_DECIDE);
         }
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme 
 
     }
 
@@ -381,7 +378,7 @@ namespace par {
             // colIndices.clear();
         } // r
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme
     }
 
 
@@ -448,7 +445,7 @@ namespace par {
             MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
         } // r
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme
     }
 
 
@@ -461,7 +458,7 @@ namespace par {
         for(unsigned int i=0;i<numEMat;i++)
             set_element_matrix(eid, e_mat[i], mode);
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme
     }
 
 
@@ -535,7 +532,7 @@ namespace par {
             VecSetValue(vec, rowId, value, mode);
         }
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme
     }
 
 
@@ -585,7 +582,7 @@ namespace par {
         MatView(m_pMat,viewer);
         PetscViewerDestroy(&viewer);
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme
     }
 
     template <typename T, typename I>
@@ -596,7 +593,7 @@ namespace par {
         VecView(vec,viewer);
         PetscViewerDestroy(&viewer);
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme
 
     }
 
@@ -616,12 +613,12 @@ namespace par {
         KSPSetFromOptions(ksp);
         KSPSolve(ksp,rhs,out);
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme
     }
 
     //******************************************************************************************************************
     template <typename T, typename I>
-    par::Error aMat<T,I>:: exact_sol(Vec exact_sol, unsigned int eid, T* e_sol, InsertMode mode){
+    par::Error aMat<T,I>:: set_vector(Vec exact_sol, unsigned int eid, T *e_sol, InsertMode mode){
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
         unsigned int dof = m_uiNumDOFperNode;
@@ -637,7 +634,8 @@ namespace par {
             VecSetValue(exact_sol, rowId, value, mode);
         }
 
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
+        return Error::SUCCESS; // fixme
     }
+
 
 }; // end of namespace par
