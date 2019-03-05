@@ -1,20 +1,29 @@
-//
-// Created by Han Tran on 12/5/18.
-//
+/**
+ * @file shfunction.cpp
+ * @author Hari Sundar   hsundar@gmail.com
+ * @author Han Duc Tran  hantran@cs.utah.edu
+ *
+ * @brief functions to compute element stiffness matrices
+ *
+ * @version 0.1
+ * @date 2018-12-07
+ */
+
 #include <iostream>
 #include "shfunction.hpp"
 #include <math.h>
 
-double *gauss(int n)
-/*
-Purpose: generate Gauss points and weights
-Authors: Lin Xiao, Mark Mear (University of Texas at Austin).
-         This function is extracted from FADD3D (written in Fortran 90), a symmetric Galerkin boundary element program
-         for crack analysis in general anisotropic elastic media, Han Tran translated to C++
-Input  : int n, order of Gauss integration
-Output : double g[n*2], the Gauss points and weights corresponding with n formula
-         e.g. g[0] and g[1] are the coordinate and weight of the first point
-*/
+
+/**
+ * @brief: generate Gauss points
+ * @brief: This function is extracted from FADD3D, a symmetric Galerkin boundary element program
+ * @brief: for crack analysis in general anisotropic elastic media
+ * @param[in] n number of Gauss points
+ * @param[out] g coordinates and weights of the points
+ * @authors Lin Xiao, Mark Mear (University of Texas at Austin), Han Tran translated to C++
+* */
+
+double* gauss(int n)
 {
     const double EPS = 3.0e-14;
     const double x1 = -1.0;
@@ -50,12 +59,15 @@ Output : double g[n*2], the Gauss points and weights corresponding with n formul
     return g;
 }
 
+
+/**
+ * @brief: compute shape functions of 8-node hex element
+ * @param[in] x natural coordinates
+ * @param[out] N values of shape functions at x
+ * @author Han Tran
+* */
 double *basis_hex8 (double xi[])
-/*
-Purpose: compute shape functions of 8-node linear element
-Input  : double xi[3] natural coordinates
-Output : double *N[8] values of shape functions
-*/
+
 {
     double *N = new double[8];
 
@@ -71,6 +83,13 @@ Output : double *N[8] values of shape functions
     return N;
 }
 
+
+/**
+ * @brief: compute derivatives of shape functions of 8-node hex element
+ * @param[in] x natural coordinates
+ * @param[out] dN values of derivatives of shape functions at x
+ * @author Han Tran
+* */
 double *dfbasis_hex8 (double xi[])
 /*
 Purpose: compute derivatives of shape functions of 8-node linear element

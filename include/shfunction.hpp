@@ -1,6 +1,13 @@
-//
-// Created by Han Tran on 12/5/18.
-//
+/**
+ * @file shfunction.hpp
+ * @author Hari Sundar   hsundar@gmail.com
+ * @author Han Duc Tran  hantran@cs.utah.edu
+ *
+ * @brief header file of shfunction.cpp
+ *
+ * @version 0.1
+ * @date 2018-12-05
+ */
 
 #ifndef ADAPTIVEMATRIX_SHFUNCTION_H
 #define ADAPTIVEMATRIX_SHFUNCTION_H

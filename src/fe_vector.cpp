@@ -1,19 +1,28 @@
-//
-// Created by Han Tran on 12/7/18.
-//
+/**
+ * @file fe_matrix.cpp
+ * @author Hari Sundar   hsundar@gmail.com
+ * @author Han Duc Tran  hantran@cs.utah.edu
+ *
+ * @brief functions to compute element load vectors
+ *
+ * @version 0.1
+ * @date 2018-12-07
+ */
 #include <iostream>
 #include "../include/shfunction.hpp"
 #include "fe_vector.hpp"
 #include <math.h>
 
-void fe_hex8(double* fe,const double *xe) {
-//****************************************************************************80
-/*
-Purpose: element force of 8-node hex for Laplace problem (dof = 1)
-Author : Han Tran
-Input  : double xe[8*3], nodal coordinates of the element
-Output : double fe_hex8[8], element force vector
-*/
+
+/**
+ * @brief: element load vector of 8-node hex element for Poisson equation
+ * @param[in] xe nodal coordinates
+ * @param[out] fe element load vector
+ * @author Han Tran
+* */
+
+void fe_hex8(double* fe,const double* xe) {
+
     const int NGT = 2; // number of Gauss points in each direction
     double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
     double *xw;
@@ -85,6 +94,4 @@ Output : double fe_hex8[8], element force vector
             } // k integration
         } // j integration
     } // i integration
-
-
 }

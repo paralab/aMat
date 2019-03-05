@@ -1,6 +1,17 @@
-// Uses simple partition: arbitrary p will be partitioned in x direction only
-// Created by Han Tran on 11/30/18.
-//
+/**
+ * @file fem3d.cpp
+ * @author Hari Sundar   hsundar@gmail.com
+ * @author Han Duc Tran  hantran@cs.utah.edu
+ *
+ * @brief Example of solving 3D Poisson equation by FEM, in parallel, using Petsc
+ *
+ * @version 0.1
+ * @date 2018-11-30
+ *
+ * @copyright Copyright (c) 2018 School of Computing, University of Utah
+ *
+ */
+
 #include <iostream>
 #include <mpi.h>
 #include <omp.h>
@@ -50,7 +61,7 @@ int main(int argc, char *argv[]) {
     // Lx - length of the (global) domain in x direction
     // Ly - length of the (global) domain in y direction
     // Lz - length of the (global) domain in z direction
-    const double Lx = 0.5, Ly = 0.5, Lz = 0.5;
+    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
 
     // element sizes
     const double hx = Lx/double(Nex);// element size in x direction
@@ -284,7 +295,6 @@ int main(int argc, char *argv[]) {
     stiffnessMat.petsc_finalize_vec(sol_exact);
 
     //stiffnessMat.dump_vec("exact_vec.dat", sol_exact);
-
 
     // subtract out from sol_exact
     PetscScalar norm, alpha = -1.0;

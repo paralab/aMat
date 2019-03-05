@@ -1,6 +1,13 @@
-//
-// Created by Han Tran on 12/7/18.
-//
+/**
+ * @file ke_matrix.cpp
+ * @author Hari Sundar   hsundar@gmail.com
+ * @author Han Duc Tran  hantran@cs.utah.edu
+ *
+ * @brief functions to compute element stiffness matrices
+ *
+ * @version 0.1
+ * @date 2018-12-07
+ */
 #include <iostream>
 #include "shfunction.hpp"
 #include "ke_matrix.hpp"
@@ -13,7 +20,7 @@ using Eigen::Matrix;
 * @param[in] double xe[8*3] physical coordinates of element
 * @param[out] double ke_hex8[8*8] element stiffness matrix
 * */
-void ke_hex8(double * ke, const double *xe)
+void ke_hex8(double* ke, const double* xe)
 {
     const int NGT = 2; // number of Gauss points in each direction
     double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
@@ -102,7 +109,6 @@ void ke_hex8(double * ke, const double *xe)
             } // k integration
         } // j integration
     } // i integration
-
 
 }
 

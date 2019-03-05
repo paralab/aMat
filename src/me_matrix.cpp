@@ -1,19 +1,26 @@
-//
-// Created by Han Tran on 12/7/18.
-//
+/**
+ * @file me_matrix.cpp
+ * @author Hari Sundar   hsundar@gmail.com
+ * @author Han Duc Tran  hantran@cs.utah.edu
+ *
+ * @brief functions to compute element mass matrices
+ *
+ * @version 0.1
+ * @date 2018-12-07
+ */
+
 #include <iostream>
 #include "../include/shfunction.hpp"
 #include "me_matrix.hpp"
 #include <math.h>
 
-double *me_hex8(double *xe)
-//****************************************************************************80
-/*
-Purpose: element mass matrix of 8-node hex
-Author : Han Tran
-Input  : double xe[8*3], nodal coordinates of the element
-Output : double me_hex8[8*8], element mass matrix
-*/
+/**
+* @brief: element mass matrix of hex 8-node element of potential problem
+* @param[in] double xe[8*3] physical coordinates of element
+* @param[out] double ke_hex8[8*8] element stiffness matrix
+* */
+
+void me_hex8(double* me, const double *xe)
 {
     const int NGT = 2; // number of Gauss points in each direction
     double x[3], w[3];
@@ -24,7 +31,6 @@ Output : double me_hex8[8*8], element mass matrix
     double jaco;
     int idx;
 
-    double *me = new double[8*8];
     for (unsigned int i = 0; i < 8; i++) {
         for (unsigned int j = 0; j < 8; j++){
             me[i*8 + j] = 0.0;
@@ -81,5 +87,4 @@ Output : double me_hex8[8*8], element mass matrix
         } // j integration
     } // i integration
 
-    return me;
 }

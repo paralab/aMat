@@ -25,7 +25,7 @@ PETSC_EXTERN PetscErrorCode PCCreate_Jacobi(PC);
 namespace par {
 
     enum class Error {SUCCESS, INDEX_OUT_OF_BOUNDS, UNKNOWN_ELEMENT_TYPE, UNKNOWN_ELEMENT_STATUS};
-    enum class ElementType {TET, HEX, TET_TWIN, HEX_TWIN};
+    enum class ElementType {TET, HEX};
 
     template <typename T,typename I>
     class aMat {
@@ -51,10 +51,10 @@ namespace par {
         /**@brief number of processes */
         unsigned int      m_uiSize;
 
-        /**@brief PETSC matrix */
+        /**@brief PETSC matrix (global/structure stiffness matrix) */
         Mat                 m_pMat;
 
-        /**@brief map[e][local_node]  = global_node */
+        /**@brief local-to-global map[eid][local_node]  = global_node */
         I**               m_ulpMap;
 
         /**@brief type of element list */
@@ -81,8 +81,6 @@ namespace par {
             switch (etype) {
                 case par::ElementType::TET: return 4; break;
                 case par::ElementType::HEX: return 8; break;
-                case par::ElementType::TET_TWIN: return 4; break;
-                case par::ElementType::HEX_TWIN: return 8; break;
                 default:
                     return (unsigned int)Error::UNKNOWN_ELEMENT_TYPE;
             }
@@ -346,7 +344,7 @@ namespace par {
             VecSetSizes(vec, m_uiNumNodes*m_uiNumDOFperNode, PETSC_DECIDE);
         }
 
-        return Error::SUCCESS; // fixme 
+        return Error::SUCCESS; // fixme
 
     }
 
