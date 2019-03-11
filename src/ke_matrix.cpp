@@ -117,7 +117,7 @@ void ke_hex8(double* ke, const double* xe)
 * @param[in] double xe(8,3) physical coordinates of element
 * @param[out] double ke_hex8_eig(8,8) element stiffness matrix
 * */
-Matrix<double,8,8> ke_hex8_eig(Matrix<double,8,3> xe){
+void ke_hex8_eig(Matrix<double,8,8> &ke, double *xe){
 
     const int NGT = 2; // number of Gauss points in each direction
     double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
@@ -128,7 +128,6 @@ Matrix<double,8,8> ke_hex8_eig(Matrix<double,8,3> xe){
     double jaco;
     double B0[8], B1[8], B2[8];
 
-    Matrix<double,8,8> ke;
 
     for (unsigned int i = 0; i < 8; i++) {
         for (unsigned int j = 0; j < 8; j++){
@@ -157,16 +156,16 @@ Matrix<double,8,8> ke_hex8_eig(Matrix<double,8,3> xe){
                 }
                 for (int p = 0; p < 3; p++){
                     for (int m = 0; m < 8; m++){
-                        dxds[p] += xe(m,0) * dN[3*m + p];
-                        dyds[p] += xe(m,1) * dN[3*m + p];
-                        dzds[p] += xe(m,2) * dN[3*m + p];
+                        dxds[p] += xe[3*m+0] * dN[3*m + p];
+                        dyds[p] += xe[3*m+1] * dN[3*m + p];
+                        dzds[p] += xe[3*m+2] * dN[3*m + p];
                     }
                 }
 
                 // jacobian
                 jaco =dxds[0]*(dyds[1]*dzds[2] - dzds[1]*dyds[2]) + dyds[0]*(dzds[1]*dxds[2] - dxds[1]*dzds[2]) +
                       dzds[0]*(dxds[1]*dyds[2] - dyds[1]*dxds[2]);
-                assert(jaco <= 0.0);
+                assert(jaco >= 0.0);
                 if (jaco <= 0.0) {
                     printf(" Jacobian is negative!");
                     exit(0);
@@ -207,5 +206,4 @@ Matrix<double,8,8> ke_hex8_eig(Matrix<double,8,3> xe){
         } // j integration
     } // i integration
 
-    return ke;
 }

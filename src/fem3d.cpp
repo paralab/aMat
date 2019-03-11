@@ -31,6 +31,8 @@
 #include "Dense"
 
 using Eigen::MatrixXd;
+using Eigen::Matrix;
+using Eigen::VectorXd;
 
 int main(int argc, char *argv[]) {
     // User provides: Nex - number of elements (global) in x direction
@@ -38,6 +40,7 @@ int main(int argc, char *argv[]) {
     //                Nez - number of elements (global) in z direction
     int rc;
     double xmin, xmax;
+    double x, y, z;
     unsigned  int emin = 0, emax = 0;
     unsigned long nid, eid;
     const unsigned int nDofPerNode = 1;         // number of dofs per node
@@ -47,15 +50,14 @@ int main(int argc, char *argv[]) {
     // number of (global) elements in x, y and z directions
     const unsigned int Nex = atoi(argv[1]);
     const unsigned int Ney = atoi(argv[2]), Nez = atoi(argv[3]);
+    const bool useEigen = atoi(argv[4]);
 
-    // nodal coordinates of an element
+    Matrix<double,8,8> kee;
+
     double* xe = new double[nDim * nNodePerElem];
-
-    // element stiffness matrix
     double* ke = new double[(nDofPerNode * nNodePerElem) * (nDofPerNode * nNodePerElem)];
-
-    // element load vector
     double* fe = new double[nDofPerNode * nNodePerElem];
+
 
     // domain sizes:
     // Lx - length of the (global) domain in x direction
@@ -78,9 +80,14 @@ int main(int argc, char *argv[]) {
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
 
+
+    if(!rank)std::cout<<"============ parameters read  ======================="<<std::endl;
+    if(!rank)std::cout<<"\t\tNex : "<<Nex<<" Ney: "<<Ney<<" Nez: "<<Nez<<std::endl;
+    if(!rank)std::cout<<"\t\tuseEigen: "<<useEigen<<std::endl;
+    if(!rank)std::cout<<"====================================================="<<std::endl;
+
+
     if (rank == 0) {
-        printf("Nex = %d, Ney = %d, Nez = %d\n", Nex, Ney, Nez);
-        printf("Lx = %f, Ly = %f, Lz = %f\n", Lx, Ly, Lz);
         if (size > Nex) {
             printf("The number of processes must be less than or equal Nex, program stops.\n");
             MPI_Abort(comm, rc);
@@ -176,11 +183,10 @@ int main(int argc, char *argv[]) {
     }
 
     // declare aMat =================================
-    par::aMat<double,unsigned long> stiffnessMat(nnode,nDofPerNode,comm);
+    par::aMat<double,unsigned long> stiffnessMat(nelem,etype,nnode,nDofPerNode,comm);
     // set map
     stiffnessMat.set_map(map);
-    // set element types
-    stiffnessMat.set_elem_types(nelem, etype);
+
 
 
 
@@ -195,15 +201,20 @@ int main(int argc, char *argv[]) {
         for (unsigned int n = 0; n < nNodePerElem; n++){
             // global node ID
             nid = map[e][n];
+
             // nodal coordinates
-            xe[n * 3] = (double)(nid % (Nex + 1)) * hx;                             // x
-            xe[(n * 3) + 1] = (double)((nid % ((Nex+1)*(Ney+1))) / (Nex + 1)) * hy; // y
-            xe[(n * 3) + 2] = (double)(nid / ((Nex+1)*(Ney+1))) * hz;               // z
+            x = (double)(nid % (Nex + 1)) * hx;
+            y = (double)((nid % ((Nex+1)*(Ney+1))) / (Nex + 1)) * hy;
+            z = (double)(nid / ((Nex+1)*(Ney+1))) * hz;
+
+            xe[n * 3] = x;
+            xe[(n * 3) + 1] = y;
+            xe[(n * 3) + 2] = z;
 
             // specify boundary nodes
-            if ((std::abs(xe[n * 3]) < tol) || (std::abs(xe[n * 3] - Lx) < tol) ||
-                    (std::abs(xe[(n * 3) + 1]) < tol) || (std::abs(xe[(n * 3) +1] - Ly) < tol) ||
-                    (std::abs(xe[(n * 3) + 2]) < tol) || (std::abs(xe[(n * 3) + 2] - Lz) < tol)) {
+            if ((std::abs(x) < tol) || (std::abs(x - Lx) < tol) ||
+                    (std::abs(y) < tol) || (std::abs(y - Ly) < tol) ||
+                    (std::abs(z) < tol) || (std::abs(z - Lz) < tol)) {
                 bound_nodes[e][n] = 1; // boundary
             } else {
                 bound_nodes[e][n] = 0; // interior
@@ -211,12 +222,20 @@ int main(int argc, char *argv[]) {
         }
 
         // element stiffness matrix and force vector
-        ke_hex8(ke,xe);
+        if (useEigen) {
+            ke_hex8_eig(kee,xe);
+        } else {
+            ke_hex8(ke,xe);
+        }
+
         fe_hex8(fe,xe);
 
         // assemble to global ones
-        stiffnessMat.set_element_matrix(e, ke, false, ADD_VALUES);
-        stiffnessMat.set_element_vector(rhs,e, fe, false, ADD_VALUES);
+        if (useEigen){
+            stiffnessMat.set_element_matrix(e, kee, 0, ADD_VALUES);
+        }
+        stiffnessMat.set_element_matrix(e, ke, ADD_VALUES);
+        stiffnessMat.set_element_vector(rhs, e, fe, ADD_VALUES);
 
     }
 
@@ -261,8 +280,6 @@ int main(int argc, char *argv[]) {
 
     // nodal coordinates of an element
     double* e_exact = new double[nNodePerElem]; // only for 1 DOF/node
-
-    double x, y, z;
 
     for (unsigned int e = 0; e < nelem; e++) {
         for (unsigned int n = 0; n < nNodePerElem; n++) {

@@ -26,7 +26,7 @@ void ke_hex8(double* ke, const double* xe);
 * @param[in] double xe(8,3) physical coordinates of element
 * @param[out] double ke_hex8_eig(8,8) element stiffness matrix
 * */
-Eigen::Matrix<double,8,8> ke_hex8_eig(Eigen::Matrix<double,8,3> xe);
+void ke_hex8_eig(Eigen::Matrix<double,8,8> &ke, double* xe);
 
 
 #endif //ADAPTIVEMATRIX_KE_MATRIX_H

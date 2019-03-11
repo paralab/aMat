@@ -118,36 +118,36 @@ int main()
 
     /* ==================== test element stiffness matrix ============================== */
     Matrix<double,8,8> ke;
-    Matrix<double,8,3> xe;
+    double* xe = new double[24];
     double L = 1.0;
 
-    xe(0,0) = 0.0;
-    xe(0,1) = 0.0;
-    xe(0,2) = 0.0;
-    xe(1,0) = L;
-    xe(1,1) = 0.0;
-    xe(1,2) = 0.0;
-    xe(2,0) = L;
-    xe(2,1) = L;
-    xe(2,2) = 0.0;
-    xe(3,0) = 0.0;
-    xe(3,1) = L;
-    xe(3,2) = 0.0;
+    xe[0] = 0.0;
+    xe[1] = 0.0;
+    xe[2] = 0.0;
+    xe[3] = L;
+    xe[4] = 0.0;
+    xe[5] = 0.0;
+    xe[6] = L;
+    xe[7] = L;
+    xe[8] = 0.0;
+    xe[9] = 0.0;
+    xe[10] = L;
+    xe[11] = 0.0;
 
-    xe(4,0) = 0.0;
-    xe(4,1) = 0.0;
-    xe(4,2) = L;
-    xe(5,0) = L;
-    xe(5,1) = 0.0;
-    xe(5,2) = L;
-    xe(6,0) = L;
-    xe(6,1) = L;
-    xe(6,2) = L;
-    xe(7,0) = 0.0;
-    xe(7,1) = L;
-    xe(7,2) = L;
+    xe[12] = 0.0;
+    xe[13] = 0.0;
+    xe[14] = L;
+    xe[15] = L;
+    xe[16] = 0.0;
+    xe[17] = L;
+    xe[18] = L;
+    xe[19] = L;
+    xe[20] = L;
+    xe[21] = 0.0;
+    xe[22] = L;
+    xe[23] = L;
 
-    ke = ke_hex8_eig(xe);
+    ke_hex8_eig(ke,xe);
 
     std::cout << "ke matrix =\n" << ke << std::endl;
 

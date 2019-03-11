@@ -22,6 +22,10 @@
 
 PETSC_EXTERN PetscErrorCode PCCreate_Jacobi(PC);
 
+#define AMAT_MAX_CRACK_LEVEL 3
+#define AMAT_MAX_EMAT_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL)
+
+
 namespace par {
 
     enum class Error {SUCCESS, INDEX_OUT_OF_BOUNDS, UNKNOWN_ELEMENT_TYPE, UNKNOWN_ELEMENT_STATUS};
@@ -30,7 +34,7 @@ namespace par {
     template <typename T,typename I>
     class aMat {
 
-    typedef Eigen::Matrix<T,Eigen::Dynamic,Eigen::Dynamic> EigenMat;
+    typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
 
     protected:
         /**@brief number of local nodes */
@@ -130,20 +134,22 @@ namespace par {
          * @param[in] dof : degree of freedoms per node
          * @param[in] comm: MPI communicator
          * */
-        aMat(const unsigned int n_local, const unsigned int dof, MPI_Comm comm);
+        aMat(unsigned int nelem,par::ElementType* etype, unsigned int n_local, unsigned int dof, MPI_Comm comm);
 
+        /**@brief de-constructor for aMat*/
+        ~aMat();
 
         /**
          * @brief creates a petsc vector
          * @param
          * */
-        par::Error create_vec(Vec& vec);
+        par::Error create_vec(Vec& vec) const;
 
         /**
          * @brief: begin assembling the matrix, called after MatSetValues
          * @param[in] mode: petsc matrix assembly type
          */
-        inline par::Error petsc_init_mat(MatAssemblyType mode){
+        inline par::Error petsc_init_mat(MatAssemblyType mode) const {
             MatAssemblyBegin(m_pMat,mode);
             return Error::SUCCESS; //fixme
         }
@@ -152,7 +158,7 @@ namespace par {
          * @brief: begin assembling the petsc vec,
          * @param[in] vec: pestc vector
          */
-        inline par::Error petsc_init_vec(Vec vec){
+        inline par::Error petsc_init_vec(Vec vec) const {
             VecAssemblyBegin(vec);
             return Error::SUCCESS; //fixme
         }
@@ -162,7 +168,7 @@ namespace par {
          * @brief: complete assembling the matrix, called before using the matrix
          * @param[in] mode: petsc matrix assembly type
          */
-        par::Error petsc_finalize_mat(MatAssemblyType mode){
+        par::Error petsc_finalize_mat(MatAssemblyType mode) const{
             MatAssemblyEnd(m_pMat,mode);
             return Error::SUCCESS; // fixme
         }
@@ -171,7 +177,7 @@ namespace par {
          * @brief: end assembling the petsc vec,
          * @param[in] vec: pestc vector
          * */
-        par::Error petsc_finalize_vec(Vec vec){
+        par::Error petsc_finalize_vec(Vec vec) const{
             VecAssemblyEnd(vec);
             return Error::SUCCESS; // fixme
         }
@@ -180,13 +186,7 @@ namespace par {
         /**
          * @brief: intial interface, twin is indicator whether the element is cracked
          * */
-        par::Error set_element_matrix(unsigned int eid, T* e_mat, bool twin, InsertMode mode=ADD_VALUES);
-
-        /**
-         * @brief: assembly global stiffness matrix
-         * @param[in] element_status : 0 no crack, 1 cracked at level 1, 2 cracked at level 2, 3 cracked at level 3
-         * */
-        par::Error set_element_matrix(unsigned int eid, EigenMat* e_mat, unsigned int element_status, InsertMode mode=ADD_VALUES);
+        par::Error set_element_matrix(unsigned int eid, T* e_mat, InsertMode mode=ADD_VALUES);
 
 
         /**
@@ -195,7 +195,7 @@ namespace par {
          * @param[in] e_mat : element stiffness matrix
          * @param[in] mode = ADD_VALUES : add to existing values of the matrix
          * */
-        par::Error set_element_matrix(unsigned int eid, EigenMat* e_mat, InsertMode mode=ADD_VALUES);
+        par::Error set_element_matrix(unsigned int eid, EigenMat e_mat, unsigned int e_mat_id, InsertMode mode=ADD_VALUES);
 
 
         /**
@@ -213,7 +213,7 @@ namespace par {
          * @param[in] u : nodal displacements
          * @param[out] v : [v] = [K][u]
          * */
-        par::Error matvec(std::vector<T>& v_primary, std::vector<T>& v_twin, std::vector<T>& w_primary, std::vector<T>& w_twin);
+        par::Error matvec(std::vector<T>& v_primary, std::vector<T>& v_twin, std::vector<T>& w_primary, std::vector<T>& w_twin) const;
 
 
         /**
@@ -227,18 +227,6 @@ namespace par {
         }
 
 
-        /**
-        * @brief: set element types
-        * @param[in] nelem: number of total local elements
-        * @param[in] etype[eid]
-        * */
-        par::Error set_elem_types(unsigned int nelem, par::ElementType* etype){
-            m_uiNumElem = nelem;
-            m_pEtypes = etype;
-
-            return Error::SUCCESS; // fixme to have a specific error type for other cases
-        }
-
 
         /**
          * @brief: assembly global load vector
@@ -248,20 +236,20 @@ namespace par {
          * @param[in] twin : if element is twinned or not
          * @param[in] mode = ADD_VALUES : add to existing values of the matrix
          * */
-        par::Error set_element_vector(Vec vec,unsigned int eid, T* e_vec, bool twin, InsertMode mode=ADD_VALUES);
+        par::Error set_element_vector(Vec vec,unsigned int eid, T* e_vec, InsertMode mode=ADD_VALUES);
 
         /**
          * @brief: write pestsc matrix to ASCII file
          * @param[in/out] fmat: filename to write matrix to
          */
-        par::Error dump_mat(const char* fmat);
+        par::Error dump_mat(const char* fmat) const;
 
         /**
          * @brief: write petsc vector to ASCII file
          * @param[in/out] fvec: filename to write vector to
          * @param[in] vec : petsc vector to write to file
          * */
-        par::Error dump_vec(const char* fvec,Vec vec);
+        par::Error dump_vec(const char* fvec,Vec vec) const;
 
         /**
          * @brief apply Dirichlet boundary conditions to the matrix.
@@ -276,7 +264,7 @@ namespace par {
          * @param[in] rhs: petsc RHS vector
          * @param[out] out: petsc solution vector
          * */
-        par::Error petsc_solve(const Vec rhs,Vec out);
+        par::Error petsc_solve(const Vec rhs,Vec out) const;
 
         /**
          * @brief: invoke basic petsc solver
@@ -285,15 +273,14 @@ namespace par {
          * @param[in] e_sol: elemet exact solution
          * @param[in] mode: petsc insert or add modes
          * */
-        par::Error set_vector(Vec exact_sol, unsigned int eid, T *e_sol, InsertMode mode = INSERT_VALUES);
+        par::Error set_vector(Vec exact_sol, unsigned int eid, T *e_sol, InsertMode mode = INSERT_VALUES) const;
 
     }; // end of class aMat
 
-
-
     //******************************************************************************************************************
+
     template <typename T,typename I>
-    aMat<T,I>::aMat(const unsigned int n_local,const unsigned int dof, MPI_Comm comm) {
+    aMat<T,I>::aMat(unsigned int nelem,par::ElementType* etype, unsigned int n_local, unsigned int dof, MPI_Comm comm) {
 
         m_comm = comm;
 
@@ -326,10 +313,22 @@ namespace par {
         }
          // this will disable on preallocation errors. (but not good for performance)
          //MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
+
+
+        m_uiNumElem = nelem;
+        m_pEtypes = etype;
+
+        m_mats=new EigenMat[m_uiNumElem * AMAT_MAX_EMAT_PER_ELEMENT];
+
+    }
+    template <typename T,typename I>
+    aMat<T,I>::~aMat()
+    {
+        delete [] m_mats;
     }
 
     template <typename T,typename I>
-    par::Error aMat<T,I>::create_vec(Vec& vec)
+    par::Error aMat<T,I>::create_vec(Vec& vec) const
     {
         // initialize rhs vector
         VecCreate(m_comm, &vec);
@@ -349,9 +348,8 @@ namespace par {
     }
 
 
-    //******************************************************************************************************************
     template <typename T,typename I>
-    par::Error aMat<T,I>::set_element_matrix(unsigned int eid, T* e_mat, bool twin, InsertMode mode){
+    par::Error aMat<T,I>::set_element_matrix(unsigned int eid, T* e_mat, InsertMode mode){
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
         unsigned int dof = m_uiNumDOFperNode;
@@ -380,53 +378,17 @@ namespace par {
     }
 
 
-    //******************************************************************************************************************
     template <typename T,typename I>
-    par::Error aMat<T,I>::set_element_matrix(unsigned int eid, EigenMat* e_mat, unsigned int element_status, InsertMode mode) {
-
-        par::ElementType e_type = m_pEtypes[eid];
-        assert(e_mat->rows()==e_mat->cols());
-        unsigned int num_dofs = aMat::dofs_per_element(e_type, element_status);
-
-        // copy element matrix
-        m_mats[eid] = *e_mat;
-
-        // copy element status
-        m_status[eid] = element_status;
-
-        // now set values ...
-        std::vector<PetscScalar> values;
-        std::vector<PetscInt> colIndices;
-
-        colIndices.resize(num_dofs);
-        values.resize(num_dofs);
-
-        PetscInt rowId;
-        //unsigned int index = 0;
-        for (unsigned int r = 0; r < num_dofs; ++r) {
-            rowId = m_ulpMap[eid][r];
-            for (unsigned int c = 0; c < num_dofs; ++c) {
-                colIndices[c] = m_ulpMap[eid][c];
-                values[c] = m_mats[eid](r,c);
-            } // c
-            MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
-        } // r
-
-        return Error::SUCCESS; // fixme to have a specific error type for other cases
-    }
-
-
-    //******************************************************************************************************************
-    template <typename T,typename I>
-    par::Error aMat<T,I>::set_element_matrix(unsigned int eid, EigenMat* e_mat,InsertMode mode) {
+    par::Error aMat<T,I>::set_element_matrix(unsigned int eid, EigenMat e_mat,unsigned int e_mat_id, InsertMode mode) {
 
         par::ElementType e_type = m_pEtypes[eid];
 
-        assert(e_mat->rows()==e_mat->cols());
-        unsigned int num_dofs = e_mat->rows();
+        assert(e_mat.rows()==e_mat.cols());
+        unsigned int num_dofs = e_mat.rows();
+
 
         // copy element matrix
-        m_mats[eid] = *e_mat;
+        m_mats[eid * AMAT_MAX_EMAT_PER_ELEMENT + e_mat_id ] = e_mat;
 
         // now set values ...
         std::vector<PetscScalar> values(num_dofs);
@@ -438,7 +400,7 @@ namespace par {
             rowId = m_ulpMap[eid][r];
             for (unsigned int c = 0; c < num_dofs; ++c) {
                 colIndices[c] = m_ulpMap[eid][c];
-                values[c] = m_mats[eid](r,c);
+                values[c] = e_mat(r,c);
             } // c
             MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
         } // r
@@ -447,22 +409,20 @@ namespace par {
     }
 
 
-    //******************************************************************************************************************
     template <typename T,typename I>
     par::Error aMat<T,I>::set_element_matrices(unsigned int eid, EigenMat* e_mat, unsigned int twin_level, InsertMode mode) {
 
         // 1u left shift "twin_level" bits.
         unsigned int numEMat=(1u<<twin_level);
-        for(unsigned int i=0;i<numEMat;i++)
-            set_element_matrix(eid, e_mat[i], mode);
+        for(unsigned int i=0; i<numEMat; i++)
+            set_element_matrix(eid, e_mat[i], i, mode);
 
         return Error::SUCCESS; // fixme
     }
 
 
-    //******************************************************************************************************************
     template <typename T, typename I>
-    par::Error aMat<T,I>::matvec(std::vector<T>& v_primary, std::vector<T>& v_twin, std::vector<T>& w_primary, std::vector<T>& w_twin){
+    par::Error aMat<T,I>::matvec(std::vector<T>& v_primary, std::vector<T>& v_twin, std::vector<T>& w_primary, std::vector<T>& w_twin) const{
 
         Vec v, w;
         PetscScalar value, *array;
@@ -511,9 +471,8 @@ namespace par {
     }
 
 
-    //******************************************************************************************************************
     template <typename T, typename I>
-    par::Error aMat<T,I>::set_element_vector(Vec vec,unsigned int eid, T* e_vec, bool twin, InsertMode mode){
+    par::Error aMat<T,I>::set_element_vector(Vec vec,unsigned int eid, T* e_vec, InsertMode mode){
 
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
@@ -534,7 +493,6 @@ namespace par {
     }
 
 
-    //******************************************************************************************************************
     template <typename T, typename I>
     par::Error aMat<T,I>::apply_dirichlet(Vec rhs,unsigned int eid,const I** dirichletBMap) {
         par::ElementType e_type = m_pEtypes[eid];
@@ -570,9 +528,8 @@ namespace par {
     }
 
 
-    //******************************************************************************************************************
     template <typename T, typename I>
-    par::Error aMat<T,I>::dump_mat(const char* fmat) {
+    par::Error aMat<T,I>::dump_mat(const char* fmat) const {
 
         // write matrix to file
         PetscViewer viewer;
@@ -584,7 +541,7 @@ namespace par {
     }
 
     template <typename T, typename I>
-    par::Error aMat<T,I>::dump_vec(const char* fvec,Vec vec)
+    par::Error aMat<T,I>::dump_vec(const char* fvec,Vec vec) const
     {
         PetscViewer viewer;
         PetscViewerASCIIOpen(m_comm, fvec, &viewer);
@@ -596,9 +553,8 @@ namespace par {
     }
 
 
-    //******************************************************************************************************************
     template <typename T, typename I>
-    par::Error aMat<T,I>::petsc_solve(const Vec rhs, Vec out) {
+    par::Error aMat<T,I>::petsc_solve(const Vec rhs, Vec out) const {
 
         KSP ksp;     /* linear solver context */
         PC  pc;      /* pre conditioner context */
@@ -614,9 +570,9 @@ namespace par {
         return Error::SUCCESS; // fixme
     }
 
-    //******************************************************************************************************************
+
     template <typename T, typename I>
-    par::Error aMat<T,I>:: set_vector(Vec exact_sol, unsigned int eid, T *e_sol, InsertMode mode){
+    par::Error aMat<T,I>:: set_vector(Vec exact_sol, unsigned int eid, T *e_sol, InsertMode mode) const{
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
         unsigned int dof = m_uiNumDOFperNode;
