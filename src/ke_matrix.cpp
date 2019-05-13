@@ -112,6 +112,16 @@ void ke_hex8(double* ke, const double* xe)
 
 }
 
+void ke_hex8_test(double* ke, const double* xe){
+    unsigned int idx;
+    for (unsigned int i = 0; i < 8; i++){
+        for (unsigned int j = 0; j < 8; j++){
+            idx = (i*8) + j;
+            ke[idx] = 1.0;
+        }
+    }
+}
+
 /**
 * @brief: element stiffness matrix of hex 8-node element of potential problem, using Eigen matrix
 * @param[in] double xe(8,3) physical coordinates of element

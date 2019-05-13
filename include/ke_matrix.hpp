@@ -19,7 +19,7 @@
 * @param[out] double ke_hex8[8*8] element stiffness matrix
 * */
 void ke_hex8(double* ke, const double* xe);
-
+void ke_hex8_test(double* ke, const double* xe);
 
 /**
 * @brief: element stiffness matrix of hex 8-node element of potential problem, using Eigen matrix
