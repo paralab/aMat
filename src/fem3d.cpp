@@ -56,7 +56,8 @@ int main(int argc, char *argv[]) {
     const unsigned int Ney = atoi(argv[2]);
     const unsigned int Nez = atoi(argv[3]);
 
-    const bool useEigen = atoi(argv[4]);
+    const bool useEigen = atoi(argv[4]); // use Eigen matrix
+    const bool matFree = atoi(argv[5]);
 
     Matrix<double,8,8>* kee;
     kee = new Matrix<double,8,8>[AMAT_MAX_EMAT_PER_ELEMENT];// max of twining elements is set to 8
@@ -160,6 +161,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+
     /*for (unsigned int e = 0; e < nelem; e++)
     {
         printf("rank = %d, element = %d, nodes = %d,%d,%d,%d,%d,%d,%d,%d,\n",rank,e,map[e][0],map[e][1],map[e][2],map[e][3],map[e][4],map[e][5],map[e][6],map[e][7]);
@@ -185,19 +187,17 @@ int main(int argc, char *argv[]) {
     }
 
     // declare aMat =================================
-    par::aMat<double,unsigned long> stiffnessMat(nelem, etype, nnode, nDofPerNode, comm);
+    par::aMat<double,unsigned long> stMat(nelem, etype, nnode, comm);
 
     // set map
-    stiffnessMat.set_map(map);
-
-    // build scatter map
-    stiffnessMat.buildScatterMap();
+    stMat.set_map(map);
 
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact;
-    stiffnessMat.petsc_create_vec(rhs);
-    stiffnessMat.petsc_create_vec(out);
-    stiffnessMat.petsc_create_vec(sol_exact);
+    stMat.petsc_create_vec(rhs);
+    stMat.petsc_create_vec(out);
+    stMat.petsc_create_vec(sol_exact);
+
 
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -224,7 +224,8 @@ int main(int argc, char *argv[]) {
 
         // compute element stiffness matrix
         if (useEigen) {
-            ke_hex8_eig(kee[0], xe);
+            //ke_hex8_eig(kee[0], xe);
+            ke_hex8_eig_test(kee[0], xe);
         } else {
             ke_hex8(ke, xe);
         }
@@ -234,54 +235,94 @@ int main(int argc, char *argv[]) {
 
         // assemble element stiffness matrix to global K
         if (useEigen){
-            stiffnessMat.set_element_matrices(eid, (MatrixXd*)kee, twin_level, ADD_VALUES);
+            //stMat.set_element_matrices(eid, (MatrixXd*)kee, twin_level, ADD_VALUES);
+            stMat.set_element_matrix(eid, kee[0], ADD_VALUES);
+
+            // for matrix free test
+            stMat.set_element_matrix_matfree(eid, kee[0]);
+
         } else {
-            stiffnessMat.set_element_matrix(eid, ke, ADD_VALUES); //todo: implement twinning
+            stMat.set_element_matrix(eid, ke, ADD_VALUES); //todo: implement twinning
         }
 
         // assemble element load vector to global F
-        stiffnessMat.petsc_set_element_vector(rhs, eid, fe, ADD_VALUES);
-
+        stMat.petsc_set_element_vector(rhs, eid, fe, ADD_VALUES);
     }
+
+    //stMat.print_matrix();
 
     delete [] ke;
     delete [] fe;
     delete [] xe;
 
-    // Pestc begins and completes assembling the global stiffness matrix
-    stiffnessMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
-    stiffnessMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
 
+    // Pestc begins and completes assembling the global stiffness matrix
+    stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
+    stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
 
     // Pestc begins and completes assembling the global load vector
-    stiffnessMat.petsc_init_vec(rhs);
-    stiffnessMat.petsc_finalize_vec(rhs);
+    stMat.petsc_init_vec(rhs);
+    stMat.petsc_finalize_vec(rhs);
+
+
+    // for matrix free test
+    double* dv;
+    double* du;
+    const bool ghosted = false;
+
+    // build scatter map
+    stMat.buildScatterMap();
+
+    // create vectors
+    stMat.create_vec(dv, ghosted);
+    stMat.create_vec(du, ghosted, 1.0);
+
+    if (matFree){
+        // do matvec
+        stMat.matvec(dv, du, ghosted);
+        //stMat.print_vector(dv, ghosted);
+
+        // do matvec using Petsc
+        Vec petsc_dv, petsc_du, petsc_compare;
+        stMat.petsc_create_vec(petsc_dv, 0.0);
+        stMat.petsc_create_vec(petsc_du, 1.0);
+        stMat.petsc_matmult(petsc_du, petsc_dv);
+        stMat.dump_vec("petsc_dv.dat", petsc_dv);
+
+        // transform dv to pestc vector for easy to compare
+        stMat.petsc_create_vec(petsc_compare, 0.0);
+        stMat.transform_to_petsc_vector(dv, petsc_compare, ghosted);
+        stMat.dump_vec("petsc_compare.dat", petsc_compare);
+
+    }
+
 
 
     // apply boundary conditions by modifying stiffness matrix and load vector
-    for (unsigned e = 0; e < nelem; e++) {
-        stiffnessMat.apply_dirichlet(rhs,e,(const unsigned long**)bound_nodes);
+    for (unsigned eid = 0; eid < nelem; eid++) {
+        stMat.apply_dirichlet(rhs, eid, (const unsigned long**)bound_nodes);
     }
 
+
     // Pestc begins and completes assembling the global stiffness matrix
-    stiffnessMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
-    stiffnessMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+    stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
+    stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
 
     // Pestc begins and completes assembling the global load vector
-    stiffnessMat.petsc_init_vec(rhs);
-    stiffnessMat.petsc_finalize_vec(rhs);
+    stMat.petsc_init_vec(rhs);
+    stMat.petsc_finalize_vec(rhs);
 
     // solve the system
-    stiffnessMat.petsc_solve((const Vec) rhs, out);
+    stMat.petsc_solve((const Vec) rhs, out);
 
     // Pestc begins and completes assembling the global load vector
-    stiffnessMat.petsc_init_vec(out);
-    stiffnessMat.petsc_finalize_vec(out);
+    stMat.petsc_init_vec(out);
+    stMat.petsc_finalize_vec(out);
 
     // write results to files
-    /*stiffnessMat.dump_mat("stiff_mat.dat");
-    stiffnessMat.dump_vec("rhs_vec.dat", rhs);
-    stiffnessMat.dump_vec("out_vec.dat", out);*/
+    /*stMat.dump_mat("stiff_mat.dat");
+    stMat.dump_vec("rhs_vec.dat", rhs);
+    stMat.dump_vec("out_vec.dat", out);*/
 
 
     // nodal coordinates of an element
@@ -306,16 +347,16 @@ int main(int argc, char *argv[]) {
             }
         }
         // set exact solution to Pestc vector
-        stiffnessMat.petsc_set_vector(sol_exact, e, e_exact);
+        stMat.petsc_set_vector(sol_exact, e, e_exact);
     }
 
     delete [] e_exact;
 
     // Pestc begins and completes assembling the exact solution
-    stiffnessMat.petsc_init_vec(sol_exact);
-    stiffnessMat.petsc_finalize_vec(sol_exact);
+    stMat.petsc_init_vec(sol_exact);
+    stMat.petsc_finalize_vec(sol_exact);
 
-    //stiffnessMat.dump_vec("exact_vec.dat", sol_exact);
+    //stMat.dump_vec("exact_vec.dat", sol_exact);
 
     // subtract out from sol_exact
     PetscScalar norm, alpha = -1.0;
@@ -327,6 +368,7 @@ int main(int argc, char *argv[]) {
     if (rank == 0){
         printf("L_inf norm= %f\n", norm);
     }
+
 
     for (unsigned int eid = 0; eid < nelem; eid++)
     {

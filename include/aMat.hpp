@@ -19,9 +19,9 @@
 #include <petscksp.h>
 #include "Dense"
 PETSC_EXTERN PetscErrorCode PCCreate_Jacobi(PC);
-#define AMAT_MAX_CRACK_LEVEL 1 // number of cracks allowed in 1 element
-#define AMAT_MAX_EMAT_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL)
-#define AMAT_G2L_OFFSET 3
+
+#define AMAT_MAX_CRACK_LEVEL 0 // number of cracks allowed in 1 element
+#define AMAT_MAX_EMAT_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL) // max number of cracked elements on each element
 
 namespace par {
     enum class Error {SUCCESS,
@@ -33,6 +33,8 @@ namespace par {
     };
     enum class ElementType {TET, HEX};
 
+    // AsyncExchangeCtx is downloaded from Dedro-5.0 written by Milinda Fernando and Hari Sundar
+    // using of AsyncExchange was permitted by the author Milinda Fernando
     class AsyncExchangeCtx {
         private :
             /** pointer to the variable which perform the ghost exchange */
@@ -48,8 +50,7 @@ namespace par {
             std::vector<MPI_Request*>m_uiRequests;
         public:
             /**@brief creates an async ghost exchange context*/
-            AsyncExchangeCtx(const void* var)
-            {
+            AsyncExchangeCtx(const void* var) {
                 m_uiBuffer=(void*)var;
                 m_uiSendBuf=NULL;
                 m_uiRecvBuf=NULL;
@@ -57,36 +58,30 @@ namespace par {
             }
 
             /**@brief allocates send buffer for ghost exchange*/
-            inline void allocateSendBuffer(size_t bytes)
-            {
+            inline void allocateSendBuffer(size_t bytes) {
                 m_uiSendBuf = malloc(bytes);
             }
 
             /**@brief allocates recv buffer for ghost exchange*/
-            inline void allocateRecvBuffer(size_t bytes)
-            {
+            inline void allocateRecvBuffer(size_t bytes) {
                 m_uiRecvBuf=malloc(bytes);
             }
 
             /**@brief allocates send buffer for ghost exchange*/
-            inline void deAllocateSendBuffer()
-            {
+            inline void deAllocateSendBuffer() {
                 free(m_uiSendBuf);
                 m_uiSendBuf=NULL;
             }
 
             /**@brief allocates recv buffer for ghost exchange*/
-            inline void deAllocateRecvBuffer()
-            {
+            inline void deAllocateRecvBuffer() {
                 free(m_uiRecvBuf);
                 m_uiRecvBuf=NULL;
             }
 
             inline void* getSendBuffer() { return m_uiSendBuf;}
             inline void* getRecvBuffer() { return m_uiRecvBuf;}
-
             inline const void* getBuffer() {return m_uiBuffer;}
-
             inline std::vector<MPI_Request*>& getRequestList(){ return m_uiRequests;}
 
             bool operator== (AsyncExchangeCtx other) const{
@@ -112,12 +107,13 @@ namespace par {
         unsigned int      m_uiNumNodes;
 
         /**@brief number of DOFs per node */
-        unsigned int      m_uiNumDOFperNode;
+        // this is no longer used because the map is now in terms of dof
+        //unsigned int      m_uiNumDOFperNode;
 
         /**@brief number of globlal nodes */
         unsigned long     m_uiNumNodesGlobal;
 
-        /**@brief communicator */
+        /**@brief communicator used within aMat */
         MPI_Comm          m_comm;
 
         /**@brief my rank */
@@ -127,19 +123,19 @@ namespace par {
         unsigned int      m_uiSize;
 
         /**@brief PETSC global stiffness matrix */
-        Mat                 m_pMat;
+        Mat               m_pMat;
 
         /**@brief local-to-global map: m_ulpMap[eid][local_id]  = global_id */
         I**               m_ulpMap;
 
         /**@brief type of element list */
-        par::ElementType*   m_pEtypes;
+        par::ElementType* m_pEtypes;
 
         /**@brief number of elements belong to m_uiRank */
         unsigned int      m_uiNumElems;
 
         /**@brief storage of element matrices */
-        EigenMat* m_mats;
+        EigenMat*         m_mats;
 
         /**@brief number of nodes owned by each rank */
         std::vector<unsigned int> m_uiLocalNodeCounts;
@@ -155,10 +151,10 @@ namespace par {
         std::vector<unsigned int> m_uiLocalElementScan;
 
         /**@brief number of ghost nodes owned by "pre" processes (whose ranks are smaller than m_uiRank) */
-        unsigned int m_uiNumPreGhostNodes;
+        unsigned int              m_uiNumPreGhostNodes;
 
         /**@brief total number of ghost nodes owned by "post" processes (whose ranks are larger than m_uiRank) */
-        unsigned int m_uiNumPostGhostNodes;
+        unsigned int              m_uiNumPostGhostNodes;
 
         /**@brief local node IDs to be sent (size = total number of nodes to be sent */
         std::vector<unsigned int> m_uiSendNodeIds;
@@ -179,36 +175,31 @@ namespace par {
         std::vector<AsyncExchangeCtx> m_uiAsyncCtx;
 
         /**@brief MPI communication tag*/
-        int m_uiCommTag;
+        int                       m_uiCommTag;
 
         /**@brief local node-ID starting of pre-ghost nodes, always = 0 */
-        unsigned int m_uiNodePreGhostBegin;
+        unsigned int              m_uiNodePreGhostBegin;
 
         /**@brief local node-ID ending of pre-ghost nodes */
-        unsigned int m_uiNodePreGhostEnd;
+        unsigned int              m_uiNodePreGhostEnd;
 
         /**@brief local node-ID starting of nodes owned by me */
-        unsigned int m_uiNodeLocalBegin;
+        unsigned int              m_uiNodeLocalBegin;
 
         /**@brief local node-ID ending of nodes owned by me */
-        unsigned int m_uiNodeLocalEnd;
+        unsigned int              m_uiNodeLocalEnd;
 
         /**@brief local node-ID starting of post-ghost nodes */
-        unsigned int m_uiNodePostGhostBegin;
+        unsigned int              m_uiNodePostGhostBegin;
 
         /**@brief local node-ID ending of post-ghost nodes */
-        unsigned int m_uiNodePostGhostEnd;
+        unsigned int              m_uiNodePostGhostEnd;
 
         /**@brief total number of nodes including ghost nodes and nodes owned by me */
-        unsigned int m_uiNumNodesTotal;
+        unsigned int              m_uiNumNodesTotal;
 
         /**@brief local map m_uiMap[eid][element_node]  = local node-ID */
-        unsigned int** m_uiMap;
-
-
-    protected:
-
-        par::Error buildG2LMap();
+        unsigned int**            m_uiMap;
 
     public:
 
@@ -269,12 +260,12 @@ namespace par {
         }
 
         /**
-         * @brief: initialize variables of aMat
-         * @param[in] n_local : number of local nodes
-         * @param[in] dof : degree of freedoms per node
+         * @brief: constructor to initialize variables of aMat
+         * @param[in] etype : types of elements
+         * @param[in] n_local : number of local nodes (nodes owned by m_uiRank)
          * @param[in] comm: MPI communicator
          * */
-        aMat(unsigned int nelem,par::ElementType* etype, unsigned int n_local, unsigned int dof, MPI_Comm comm);
+        aMat(unsigned int nelem,par::ElementType* etype, unsigned int n_local, MPI_Comm comm);
 
         /**@brief de-constructor for aMat*/
         ~aMat();
@@ -368,17 +359,17 @@ namespace par {
         par::Error ghost_send_end(T* vec);
 
         /**
-         * @brief: initial interface, twin is indicator whether the element is cracked
+         * @brief: assembly global stiffness matrix (for matrix-based method)
          * */
-        par::Error set_element_matrix(unsigned int eid, T* e_mat, InsertMode mode=ADD_VALUES);
+        par::Error set_element_matrix(unsigned int eid, T* e_mat, InsertMode mode = ADD_VALUES);
+
+        par::Error set_element_matrix(unsigned int eid, EigenMat e_mat, InsertMode = ADD_VALUES);
 
         /**
-         * @brief: assembly global stiffness matrix
-         * @param[in] eid : element ID
-         * @param[in] e_mat : element stiffness matrix
-         * @param[in] mode = ADD_VALUES : add to existing values of the matrix
+         * @brief: copy element matrix to be used in matrix-free method
          * */
-        par::Error set_element_matrix(unsigned int eid, EigenMat e_mat, unsigned int e_mat_id, InsertMode mode=ADD_VALUES);
+        par::Error set_element_matrix_matfree(unsigned int eid, EigenMat e_mat);
+
 
         /**
          * @brief: assembly global stiffness matrix crack elements with multiple levels
@@ -389,13 +380,20 @@ namespace par {
          * */
         par::Error set_element_matrices(unsigned int eid, EigenMat* e_mat, unsigned int twin_level, InsertMode mode=ADD_VALUES);
 
+        par::Error set_element_matrix(unsigned int eid, EigenMat e_mat, unsigned int e_mat_id, InsertMode mode=ADD_VALUES);
+
         /**
          * @brief: matrix free matvec
-         * @param[in] u: global vector
-         * @param[in] elem_matvec(T* ve, const T* ue, unsigned int eid): function to compute ve = Ke*ue for element eid
-         * @param[out] v: global vector v = Ku
+         * @param[in] u: structure vector
+         * @param[out] v: structure vector v = K*u where K is stiffness matrix
+         * @param[in] isGhosted: if true then v and u included ghost dof's
          * */
-        par::Error matvec(T* v, T* u, void (*elem_matvec)(T *, const T *, unsigned int));
+        par::Error matvec(T* v, const T* u, bool isGhosted = false);
+
+        /**
+         * @brief: matrix free matvec, v and u include ghost dof's
+         * */
+        par::Error matvec_ghosted(T* v, T* u);
 
         /**
         * @brief: set mapping from element local node to global node
@@ -458,9 +456,14 @@ namespace par {
         par::Error petsc_matmult(Vec x, Vec y);
 
         /**
-         * @brief: display all components of vector on screen (for purpose of debugging)
+         * @brief: test only: display all components of vector on screen (for purpose of debugging)
          */
-        par::Error print_vector(const T* vec);
+        par::Error print_vector(const T* vec, bool ghosted = false);
+
+        /**
+         * @brief: test only: display all element matrices (for purpose of debugging)
+         */
+        par::Error print_matrix();
 
         /**
          * @brief: apply zero Dirichlet boundary condition on nodes dictated by dirichletBMap
@@ -471,7 +474,7 @@ namespace par {
         /**
          * @brief: transform vec to pestc vector (for purpose of debugging)
          */
-        par::Error transform_to_petsc_vector(const T* vec, Vec petsc_vec);
+        par::Error transform_to_petsc_vector(const T* vec, Vec petsc_vec, bool ghosted = false);
 
     }; // end of class aMat
 
@@ -479,7 +482,7 @@ namespace par {
 
     // constructor
     template <typename T,typename I>
-    aMat<T,I>::aMat(unsigned int nelem,par::ElementType* etype, unsigned int n_local, unsigned int dof, MPI_Comm comm) {
+    aMat<T,I>::aMat(unsigned int nelem, par::ElementType* etype, unsigned int n_local, MPI_Comm comm) {
 
         m_comm = comm;
 
@@ -487,25 +490,25 @@ namespace par {
         MPI_Comm_size(comm, (int*)&m_uiSize);
 
         m_uiNumNodes = n_local;
-        m_uiNumDOFperNode = dof;
 
         unsigned long nl = m_uiNumNodes;
 
         MPI_Allreduce(&nl, &m_uiNumNodesGlobal, 1, MPI_LONG, MPI_SUM, m_comm);
 
         MatCreate(m_comm, &m_pMat);
-        MatSetSizes(m_pMat, m_uiNumNodes*m_uiNumDOFperNode, m_uiNumNodes*m_uiNumDOFperNode, PETSC_DECIDE, PETSC_DECIDE);
+        //MatSetSizes(m_pMat, m_uiNumNodes*m_uiNumDOFperNode, m_uiNumNodes*m_uiNumDOFperNode, PETSC_DECIDE, PETSC_DECIDE);
+        MatSetSizes(m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE);
 
         if(m_uiSize > 1) {
             // initialize matrix
             MatSetType(m_pMat, MATMPIAIJ);
-            MatMPIAIJSetPreallocation(m_pMat, 30*m_uiNumDOFperNode , PETSC_NULL, 30*m_uiNumDOFperNode , PETSC_NULL);
+            //MatMPIAIJSetPreallocation(m_pMat, 30*m_uiNumDOFperNode , PETSC_NULL, 30*m_uiNumDOFperNode , PETSC_NULL);
+            MatMPIAIJSetPreallocation(m_pMat, 30 , PETSC_NULL, 30 , PETSC_NULL);
 
-        }else {
+        } else {
             MatSetType(m_pMat, MATSEQAIJ);
-            MatSeqAIJSetPreallocation(m_pMat, 30*m_uiNumDOFperNode, PETSC_NULL);
-
-
+            //MatSeqAIJSetPreallocation(m_pMat, 30*m_uiNumDOFperNode, PETSC_NULL);
+            MatSeqAIJSetPreallocation(m_pMat, 30, PETSC_NULL);
         }
         // this will disable on preallocation errors. (but not good for performance)
         //MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
@@ -516,8 +519,9 @@ namespace par {
         // etype[eid] = type of element eid
         m_pEtypes = etype;
 
-        // copy of element matrices, each element is allocated totally AMAT_MAX_EMAT_PER_ELEMENT of EigenMat
-        m_mats = new EigenMat[m_uiNumElems * AMAT_MAX_EMAT_PER_ELEMENT];
+        // storage of element matrices, each element is allocated totally AMAT_MAX_EMAT_PER_ELEMENT of EigenMat
+        //m_mats = new EigenMat[m_uiNumElems * AMAT_MAX_EMAT_PER_ELEMENT]; // could be use if they decide to have multiple matrices for cracked elements
+        m_mats = new EigenMat[m_uiNumElems];
 
         m_ulpMap = NULL;
 
@@ -546,11 +550,9 @@ namespace par {
     // build scatter map
     template <typename T,typename I>
     par::Error aMat<T,I>::buildScatterMap() {
-        /*
-        * Assumptions
-        * 1). We assume that the global nodes are continuously partitioned across processors.
-        * currently we do not account for twin elements
-        * */
+        /* Assumptions: We assume that the global nodes are continuously partitioned across processors.
+           Currently we do not account for twin elements
+           "node" is actually "dof" because the map is in terms of dofs */
 
         if (m_ulpMap == NULL) return Error::NULL_L2G_MAP;
 
@@ -565,23 +567,20 @@ namespace par {
         m_uiLocalElementScan.resize(m_uiSize);
 
         // gather local counts
-        //std::cout<<"local nodes: "<<m_uiNumNodes<<" m_uiSize: "<<m_uiSize<<std::endl;
         MPI_Allgather(&m_uiNumNodes, 1, MPI_INT, &(*(m_uiLocalNodeCounts.begin())), 1, MPI_INT, m_comm);
         MPI_Allgather(&m_uiNumElems, 1, MPI_INT, &(*(m_uiLocalElementCounts.begin())), 1, MPI_INT, m_comm);
 
         // scan local counts
         m_uiLocalNodeScan[0] = 0;
         m_uiLocalElementScan[0] = 0;
-
         for (unsigned int p = 1; p < m_uiSize; p++) {
             m_uiLocalNodeScan[p] = m_uiLocalNodeScan[p-1] + m_uiLocalNodeCounts[p-1];
             m_uiLocalElementScan[p] = m_uiLocalElementScan[p-1] + m_uiLocalElementCounts[p-1];
         }
 
+        // nodes are not owned by me: stored in pre or post lists
         std::vector<I> preGhostGIds;
         std::vector<I> postGhostGIds;
-
-        // nodes are not owned by me: stored in pre or post lists
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++) {
             par::ElementType e_type = m_pEtypes[eid];
             unsigned int num_nodes = aMat::nodes_per_element(e_type);
@@ -607,13 +606,6 @@ namespace par {
         // remove consecutive duplicates and erase all after .end()
         preGhostGIds.erase(std::unique(preGhostGIds.begin(), preGhostGIds.end()), preGhostGIds.end());
         postGhostGIds.erase(std::unique(postGhostGIds.begin(), postGhostGIds.end()), postGhostGIds.end());
-
-        /*for (unsigned int i = 0; i < preGhostGIds.size(); i++){
-            printf("after erase, rank= %d preGhostGIds= %d\n", m_uiRank, preGhostGIds[i]);
-        }
-        for (unsigned int i = 0; i < postGhostGIds.size(); i++){
-            printf("after erase, rank= %d postGhostGIds= %d\n", m_uiRank, postGhostGIds[i]);
-        }*/
 
         // number of ghost nodes
         m_uiNumPreGhostNodes = preGhostGIds.size();
@@ -714,24 +706,10 @@ namespace par {
         // compute offsets from sends
         sendOffset[0]=0;
         recvOffset[0]=0;
-        for(unsigned int i=1; i<m_uiSize; i++)
-        {
+        for(unsigned int i=1; i<m_uiSize; i++) {
             sendOffset[i] = sendOffset[i-1] + sendCounts[i-1];
             recvOffset[i] = recvOffset[i-1] + recvCounts[i-1];
         }
-
-        /*for (unsigned i = 0; i < m_uiSize; i++) {
-            printf("rank %d, sendCounts[%d] = %d\n", m_uiRank, i, sendCounts[i]);
-        }
-        for (unsigned i = 0; i < m_uiSize; i++) {
-            printf("rank %d, sendOffset[%d] = %d\n", m_uiRank, i, sendOffset[i]);
-        }
-        for (unsigned i = 0; i < m_uiSize; i++) {
-            printf("rank %d, recvCounts[%d] = %d\n", m_uiRank, i, recvCounts[i]);
-        }
-        for (unsigned i = 0; i < m_uiSize; i++) {
-            printf("rank %d, recvOffset[%d] = %d\n", m_uiRank, i, recvOffset[i]);
-        }*/
 
         std::vector<I> sendBuf;
         std::vector<I> recvBuf;
@@ -747,10 +725,6 @@ namespace par {
         for(unsigned int i = 0; i < m_uiNumPostGhostNodes; i++)
             sendBuf[i + m_uiNumPreGhostNodes] = postGhostGIds[i];
 
-        /*for (unsigned i = 0; i < sendBuf.size(); i++) {
-            printf("rank %d, sendBuf[%d] = %d\n", m_uiRank, i, sendBuf[i]);
-        }*/
-
         for(unsigned int i = 0; i < m_uiSize; i++) {
             sendCounts[i] *= sizeof(I);
             sendOffset[i] *= sizeof(I);
@@ -760,10 +734,6 @@ namespace par {
 
         MPI_Alltoallv(&(*(sendBuf.begin())), (int*)sendCounts, (int*)sendOffset, MPI_BYTE,
                       &(*(recvBuf.begin())), (int*)recvCounts, (int*)recvOffset, MPI_BYTE, m_comm);
-
-        /*for (unsigned i = 0; i < recvBuf.size(); i++) {
-            printf("rank %d, recvBuf[%d] = %d\n", m_uiRank, i, recvBuf[i]);
-        }*/
 
         for(unsigned int i = 0; i < m_uiSize; i++)
         {
@@ -791,19 +761,12 @@ namespace par {
         m_uiRecvNodeCounts.resize(m_uiSize);
         m_uiRecvNodeOffset.resize(m_uiSize);
 
-        for(unsigned int i = 0; i < m_uiSize; i++) {
+        for (unsigned int i = 0; i < m_uiSize; i++) {
             m_uiSendNodeCounts[i] = recvCounts[i];
             m_uiSendNodeOffset[i] = recvOffset[i];
             m_uiRecvNodeCounts[i] = sendCounts[i];
             m_uiRecvNodeOffset[i] = sendOffset[i];
         }
-
-        /*for (unsigned i = 0; i < m_uiSize; i++){
-            printf("rank %d, m_uiLocalNodeCounts[%d] = %d, m_uiLocalNodeScan[%d] = %d\n",m_uiRank,i,m_uiLocalNodeCounts[i],i,m_uiLocalNodeScan[i]);
-        }
-        for (unsigned i = 0; i < m_uiSize; i++){
-            printf("rank %d, m_uiLocalElementCounts[%d] = %d, m_uiLocalElementScan[%d] = %d\n",m_uiRank,i,m_uiLocalElementCounts[i],i,m_uiLocalElementScan[i]);
-        }*/
 
         // build local map m_uiMap[eid][nid]
         // structure displ vector = [0, ..., (m_uiNumPreGhostNodes - 1), --> ghost nodes owned by someone before me
@@ -829,30 +792,6 @@ namespace par {
                 }
             }
         }
-        /*for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            par::ElementType e_type = m_pEtypes[eid];
-            unsigned int num_nodes = aMat::nodes_per_element(e_type);
-            for (unsigned int i = 0; i < num_nodes; i++){
-                printf("rank= %d, element= %d, m_ulpMap[%d]= %d, m_uiMap[%d]= %d \n", m_uiRank, eid,i, m_ulpMap[eid][i], i, m_uiMap[eid][i]);
-            }
-        }*/
-
-        /*for(unsigned int i = 0; i < m_uiSize; i++)
-        {
-            for(unsigned int node=m_uiSendNodeOffset[i];node< (m_uiSendNodeOffset[i]+ m_uiSendNodeCounts[i]);node++)
-                printf("m_uiRank: %d  needs to send  local id : %d global id : %d  to proc: %d \n",m_uiRank,m_uiSendNodeIds[node],recvBuf[node],i);
-        }*/
-
-        /*for (unsigned i = 0; i < m_uiSize; i++){
-            printf("rank %d, m_uiSendNodeCounts[%d] = %d, m_uiSendNodeOffset[%d] = %d\n",m_uiRank,i,m_uiSendNodeCounts[i],i,m_uiSendNodeOffset[i]);
-        }
-        for (unsigned i = 0; i < m_uiSize; i++){
-            printf("rank %d, m_uiRecvNodeCounts[%d] = %d, m_uiRecvNodeOffset[%d] = %d\n", m_uiRank,i,m_uiRecvNodeCounts[i],i,m_uiRecvNodeOffset[i]);
-        }
-        for (unsigned i = 0; i < m_uiSendNodeIds.size(); i++){
-            printf("rank %d, m_uiSendNodeIds[%d] = %d\n",m_uiRank,i,m_uiSendNodeIds[i]);
-        }
-        printf("rank %d, m_uiNumPreGhostNodes = %d, m_uniPostGhostNodes = %d\n",m_uiRank,m_uiNumPreGhostNodes,m_uiNumPostGhostNodes);*/
 
         delete [] sendCounts;
         delete [] recvCounts;
@@ -860,7 +799,6 @@ namespace par {
         delete [] recvOffset;
         return Error::SUCCESS;
     } // buildScatterMap
-
 
 
     // create pestsc vector
@@ -871,36 +809,39 @@ namespace par {
     {
         // initialize rhs vector
         VecCreate(m_comm, &vec);
-        if(m_uiSize>1)
+        if (m_uiSize>1)
         {
             VecSetType(vec,VECMPI);
-            VecSetSizes(vec, m_uiNumNodes * m_uiNumDOFperNode, PETSC_DECIDE);
+            //VecSetSizes(vec, m_uiNumNodes * m_uiNumDOFperNode, PETSC_DECIDE);
+            VecSetSizes(vec, m_uiNumNodes, PETSC_DECIDE);
             VecSet(vec, alpha);
-        }else {
+        } else {
             VecSetType(vec,VECSEQ);
-            VecSetSizes(vec, m_uiNumNodes * m_uiNumDOFperNode, PETSC_DECIDE);
+            //VecSetSizes(vec, m_uiNumNodes * m_uiNumDOFperNode, PETSC_DECIDE);
+            VecSetSizes(vec, m_uiNumNodes, PETSC_DECIDE);
             VecSet(vec, alpha);
         }
         return Error::SUCCESS; // fixme
     } // petsc_create_vec
 
 
-
     // allocate memory for structure vector, if isGhosted then include space for ghost nodes
     template <typename T, typename I>
     par::Error aMat<T,I>::create_vec(T* &vec, bool isGhosted, T alpha){
         if (isGhosted){
-            vec = new T[m_uiNumNodesTotal * m_uiNumDOFperNode];
+            //vec = new T[m_uiNumNodesTotal * m_uiNumDOFperNode];
+            vec = new T[m_uiNumNodesTotal];
         } else {
-            vec = new T[m_uiNumNodes * m_uiNumDOFperNode];
+            //vec = new T[m_uiNumNodes * m_uiNumDOFperNode];
+            vec = new T[m_uiNumNodes];
         }
         // initialize
         if (isGhosted) {
-            for (unsigned int i = 0; i < m_uiNumNodesTotal * m_uiNumDOFperNode; i++){
+            for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
                 vec[i] = alpha;
             }
         } else {
-            for (unsigned int i = 0; i < m_uiNumNodes * m_uiNumDOFperNode; i++){
+            for (unsigned int i = 0; i < m_uiNumNodes; i++){
                 vec[i] = alpha;
             }
         }
@@ -908,11 +849,9 @@ namespace par {
     } // create_vec
 
 
-
     // transform structure vector to include ghost nodes: NOT count for DOF yet
     template <typename T, typename I>
     par::Error aMat<T,I>::local_to_ghost( T* & gVec, const T* local){
-            gVec = new T[m_uiNumNodesTotal];
         for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
             if ((i >= m_uiNumPreGhostNodes) && (i < m_uiNumPreGhostNodes + m_uiNumNodes)) {
                 gVec[i] = local[i - m_uiNumPreGhostNodes];
@@ -924,17 +863,14 @@ namespace par {
     } // local_to_ghost
 
 
-
     // transform structure vector to include only local nodes: NOT count for DOF yet
     template <typename T, typename I>
-    par::Error aMat<T,I>::ghost_to_local(T* & local, const T *gVec) {
-        local = new T[m_uiNumNodes];
+    par::Error aMat<T,I>::ghost_to_local(T* & local, const T* gVec) {
         for (unsigned int i = 0; i < m_uiNumNodes; i++){
             local[i] = gVec[i + m_uiNumPreGhostNodes];
         }
         return Error::SUCCESS;
     } // ghost_to_local
-
 
 
     // send and receive before matvec: ranks who own nodes send data to ranks who have ghost nodes
@@ -975,7 +911,6 @@ namespace par {
         m_uiCommTag++; // get a different value if we have another ghost_exchange for a different vec
         return Error::SUCCESS;
     } //ghost_receive_begin
-
 
 
     // send and receive after matvec: ranks who have ghost nodes send back data to ranks who own nodes
@@ -1024,7 +959,6 @@ namespace par {
     } // ghost_send_begin
 
 
-
     template <typename T, typename I>
     par::Error aMat<T,I>::ghost_receive_end(T* vec) {
 
@@ -1055,7 +989,6 @@ namespace par {
         m_uiAsyncCtx.erase(m_uiAsyncCtx.begin() + ctx_index);
         return Error::SUCCESS;
     } // ghost_receive_end
-
 
 
     template <typename T, typename I>
@@ -1095,26 +1028,32 @@ namespace par {
 
 
 
+    // use for regular array
     template <typename T,typename I>
     par::Error aMat<T,I>::set_element_matrix(unsigned int eid, T* e_mat, InsertMode mode){
 
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
-        unsigned int dof = m_uiNumDOFperNode;
+        //unsigned int dof = m_uiNumDOFperNode;
 
         // now set values ...
-        std::vector<PetscScalar> values(num_nodes*dof);
-        std::vector<PetscInt> colIndices(num_nodes*dof);
+        //std::vector<PetscScalar> values(num_nodes * dof);
+        std::vector<PetscScalar> values(num_nodes);
+        //std::vector<PetscInt> colIndices(num_nodes * dof);
+        std::vector<PetscInt> colIndices(num_nodes);
         PetscInt rowId;
 
         unsigned int index = 0;
-        for (unsigned int r = 0; r < num_nodes*dof; ++r) {
-            rowId = dof*m_ulpMap[eid][r/dof] + r%dof;
-            for (unsigned int c = 0; c < num_nodes*dof; ++c) {
-                colIndices[c] = dof*m_ulpMap[eid][c/dof] + c%dof;
+        //for (unsigned int r = 0; r < num_nodes * dof; ++r) {
+        for (unsigned int r = 0; r < num_nodes; ++r) {
+            //rowId = dof * m_ulpMap[eid][r/dof] + r % dof;
+            rowId = m_ulpMap[eid][r];
+            //for (unsigned int c = 0; c < num_nodes * dof; ++c) {
+            for (unsigned int c = 0; c < num_nodes; ++c) {
+                //colIndices[c] = dof * m_ulpMap[eid][c/dof] + c % dof;
+                colIndices[c] = m_ulpMap[eid][c];
                 values[c] = e_mat[index];
                 index++;
-                //std::cout<<" col: "<<colIndices[c]<<std::endl;
             } // c
             MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
             // values.clear();
@@ -1126,12 +1065,85 @@ namespace par {
 
 
 
+    // use with Eigen, matrix-based
+    template <typename T,typename I>
+    par::Error aMat<T,I>::set_element_matrix(unsigned int eid, EigenMat e_mat, InsertMode mode) {
+
+        par::ElementType e_type = m_pEtypes[eid];
+        unsigned int num_nodes = aMat::nodes_per_element(e_type);
+
+        assert(e_mat.rows()==e_mat.cols());
+        unsigned int num_rows = e_mat.rows();
+
+        // assemble global matrix (petsc matrix)
+        // now set values ...
+        std::vector<PetscScalar> values(num_rows);
+        std::vector<PetscInt> colIndices(num_rows);
+        PetscInt rowId;
+
+        for (unsigned int r = 0; r < num_rows; ++r) {
+            rowId = m_ulpMap[eid][r];
+            for (unsigned int c = 0; c < num_rows; ++c) {
+                colIndices[c] = m_ulpMap[eid][c];
+                values[c] = e_mat(r,c);
+            } // c
+            MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
+        } // r
+
+        return Error::SUCCESS; // fixme
+    } // set_element_matrix
+
+
+    // use with Eigen, matrix-free
+    template <typename T,typename I>
+    par::Error aMat<T,I>::set_element_matrix_matfree(unsigned int eid, EigenMat e_mat) {
+        // store element matrix, will be used for matvec
+        m_mats[eid] = e_mat;
+        return Error::SUCCESS; // fixme
+    }
+
+
+
+    // e_mat is an array of EigenMat with the size dictated by twin_level (e.g. twin_level = 1, then size of e_mat is 2)
+    template <typename T,typename I>
+    par::Error aMat<T,I>::set_element_matrices(unsigned int eid, EigenMat* e_mat, unsigned int twin_level, InsertMode mode) {
+
+        par::ElementType e_type = m_pEtypes[eid];
+
+        // number of twinning matrices (e.g. twin_level = 2 then numEMat = 4)
+        unsigned int numEMat = (1u<<twin_level);
+
+        // since e_mat is dynamic, then first casting it to void* so that we can move for each element of e_mat
+        void* eMat= (void*)e_mat;
+        for (unsigned int i=0; i<numEMat; i++) {
+            size_t bytes=0;
+            if(e_type==ElementType::TET){
+                 bytes = sizeof(Eigen::Matrix<T,4,4>);
+                 set_element_matrix(eid,(*(Eigen::Matrix<T,4,4>*)eMat), i, mode);
+
+            } else if(e_type==ElementType::HEX) {
+                bytes = sizeof(Eigen::Matrix<T,8,8>);
+                set_element_matrix(eid,(*(Eigen::Matrix<T,8,8>*)eMat), i, mode);
+
+            }else {
+                return Error::UNKNOWN_ELEMENT_TYPE;
+            }
+
+            // move to next block (each block has size of bytes)
+            eMat= (char*)eMat + bytes;
+        }
+        return Error::SUCCESS; // fixme
+    } // set_element_matrices
+
+
+
+    // used with set_element_matrices for the case of one eid but multiple matrices
     template <typename T,typename I>
     par::Error aMat<T,I>::set_element_matrix(unsigned int eid, EigenMat e_mat, unsigned int e_mat_id, InsertMode mode) {
 
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
-        unsigned int dof = m_uiNumDOFperNode;
+        //unsigned int dof = m_uiNumDOFperNode;
 
         assert(e_mat.rows()==e_mat.cols());
         unsigned int num_rows = e_mat.rows(); // num_rows = num_nodes * dof
@@ -1148,11 +1160,13 @@ namespace par {
         for (unsigned int r = 0; r < num_rows; ++r) {
             //rowId = m_ulpMap[eid][r]; // map in terms of dof
             //rowId = dof*m_ulpMap[eid][r/dof] + r%dof; // map in terms of nodes, 1 matrix per eid (old version)
-            rowId = dof*m_ulpMap[eid][e_mat_id * num_nodes + r/dof] + r%dof; // map in terms of nodes, multiple matrices per eid
+            //rowId = dof*m_ulpMap[eid][e_mat_id * num_nodes + r/dof] + r%dof; // map in terms of nodes, multiple matrices per eid
+            rowId = m_ulpMap[eid][e_mat_id * num_nodes + r]; // map in terms of nodes, multiple matrices per eid
             for (unsigned int c = 0; c < num_rows; ++c) {
                 //colIndices[c] = m_ulpMap[eid][c];
                 //colIndices[c] = dof*m_ulpMap[eid][c/dof] + c%dof;
-                colIndices[c] = dof*m_ulpMap[eid][e_mat_id * num_nodes + c/dof] + c%dof;
+                //colIndices[c] = dof*m_ulpMap[eid][e_mat_id * num_nodes + c/dof] + c%dof;
+                colIndices[c] = m_ulpMap[eid][e_mat_id * num_nodes + c];
                 values[c] = e_mat(r,c);
             } // c
             MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
@@ -1163,51 +1177,45 @@ namespace par {
 
 
 
-    template <typename T,typename I>
-    par::Error aMat<T,I>::set_element_matrices(unsigned int eid, EigenMat* e_mat, unsigned int twin_level, InsertMode mode) {
-
-        par::ElementType e_type = m_pEtypes[eid];
-
-        // number of twinning matrices (e.g. twin_level = 2 then numEMat = 4)
-        unsigned int numEMat=(1u<<twin_level);
-
-        // since e_mat is dynamic, then first casting it to void* so that we can move for each element of e_mat
-        void* eMat= (void*)e_mat;
-        for(unsigned int i=0; i<numEMat; i++)
-        {
-            size_t bytes=0;
-            if(e_type==ElementType::TET)
-            {
-                 bytes = sizeof(Eigen::Matrix<T,4,4>);
-                 set_element_matrix(eid,(*(Eigen::Matrix<T,4,4>*)eMat), i, mode);
-
-            }else if(e_type==ElementType::HEX)
-            {
-                bytes = sizeof(Eigen::Matrix<T,8,8>);
-                set_element_matrix(eid,(*(Eigen::Matrix<T,8,8>*)eMat), i, mode);
-
-            }else {
-                return Error::UNKNOWN_ELEMENT_TYPE;
-            }
-
-            // move to next block (each block has size of bytes)
-            eMat= (char*)eMat + bytes;
-        }
-        return Error::SUCCESS; // fixme
-    } // set_element_matrices
-
-
-
-    // compute v = Ku
-    // elem_matvec(T* ve, T* ue, unsigned int eid) is to compute element ve = ke * ue for element eid
     template <typename  T, typename I>
-    par::Error aMat<T,I>::matvec(T* v, T* u, void (*elem_matvec)(T *, const T *, unsigned int)){
+    par::Error aMat<T,I>::matvec(T* v, const T* u, bool isGhosted) {
+
+        if (isGhosted) {
+            matvec_ghosted(v, (T*)u);
+        } else {
+            T* gv;
+            T* gu;
+            // create vectors gv and gu including ghost dof's and initialize by 0.0
+            create_vec(gv, true, 0.0);
+            create_vec(gu, true, 0.0);
+
+            // transform u to gu
+            local_to_ghost(gu, u);
+
+            // do matrix vector multiply
+            matvec_ghosted(gv, gu);
+
+            // transform gv to v
+            ghost_to_local(v, gv);
+
+            // delete gv and gu
+            delete[] gv;
+            delete[] gu;
+        }
+        return Error::SUCCESS;
+    }
+
+
+
+    // compute v = Ku where v and u include ghost dof's
+    template <typename  T, typename I>
+    par::Error aMat<T,I>::matvec_ghosted(T* v, T* u){
 
         par::ElementType e_type;
         unsigned int num_nodes;
         T* ue;
         T* ve;
-        unsigned int dof = m_uiNumDOFperNode;
+        EigenMat emat;
 
         // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumNodesTotal)
         for (unsigned int i = 0; i < m_uiNodePostGhostEnd; i++){
@@ -1221,7 +1229,7 @@ namespace par {
             num_nodes = aMat::nodes_per_element(e_type);
             if (max_dpe < num_nodes) max_dpe = num_nodes;
         }
-        max_dpe = max_dpe * dof;
+        //max_dpe = max_dpe * dof;
 
         ue = new T[max_dpe];
         ve = new T[max_dpe];
@@ -1234,20 +1242,35 @@ namespace par {
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
             e_type = m_pEtypes[eid];
-            num_nodes = aMat::nodes_per_element(e_type);
+            num_nodes = aMat::nodes_per_element(e_type); // reminder: "node" is dof
 
             // extract element vector ue from structure vector u
-            for (unsigned int r = 0; r < num_nodes * dof; ++r) {
-                rowID = dof * m_uiMap[eid][r/dof] + r % dof;
+            //for (unsigned int r = 0; r < num_nodes * dof; ++r) {
+            for (unsigned int r = 0; r < num_nodes; ++r) {
+                //rowID = dof * m_uiMap[eid][r/dof] + r % dof;
+                rowID = m_uiMap[eid][r];
                 ue[r] = u[rowID];
             }
 
             // compute ve = ke * ue
-            elem_matvec(ve, (const T*) ue, eid);
+            //elem_matvec(ve, (const T*) ue, eid); // this is old version
+
+            // get element matrix from storage
+            emat = m_mats[eid];
+            assert(emat.rows() == emat.cols());
+            assert(emat.rows() == num_nodes);
+            for (unsigned int i = 0; i < emat.rows(); i++){
+                ve[i] = 0.0;
+                for (unsigned int j = 0; j < emat.cols(); j ++){
+                    ve[i] += emat(i,j) * ue[j];
+                }
+            }
 
             // accumulate element vector ve to structure vector v
-            for (unsigned int r = 0; r < num_nodes * dof; r++){
-                rowID = dof * m_uiMap[eid][r/dof] + r % dof;
+            //for (unsigned int r = 0; r < num_nodes * dof; r++){
+            for (unsigned int r = 0; r < num_nodes; r++){
+                //rowID = dof * m_uiMap[eid][r/dof] + r % dof;
+                rowID = m_uiMap[eid][r];
                 v[rowID] += ve[r];
             }
         }
@@ -1259,83 +1282,123 @@ namespace par {
         delete [] ue;
         delete [] ve;
         return Error::SUCCESS; // fixme
-    } // matvec
+    } // matvec_ghosted
 
 
-    // print out vec whose size including ghost nodes
+
+    // print out structure ghosted vector
     template <typename T, typename I>
-    par::Error aMat<T,I>::print_vector(const T* vec){
+    par::Error aMat<T,I>::print_vector(const T* vec, bool ghosted){
         for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
             if (i >= m_uiNumPreGhostNodes && i < m_uiNumPreGhostNodes + m_uiNumNodes) {
-                printf("rank= %d, v[%d]= %10.3f \n", m_uiRank, i-m_uiNumPreGhostNodes, vec[i]);
+                if (ghosted){
+                    printf("rank= %d, v[%d]= %10.3f \n", m_uiRank, i-m_uiNumPreGhostNodes, vec[i]);
+                } else {
+                    printf("rank= %d, v[%d]= %10.3f \n", m_uiRank, i-m_uiNumPreGhostNodes, vec[i-m_uiNumPreGhostNodes]);
+                }
+
             }
         }
         return Error::SUCCESS;
     } // print_vector
 
 
+
+    // print out structure vector
+    template <typename T, typename I>
+    par::Error aMat<T,I>::print_matrix(){
+        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+            unsigned int row = m_mats[eid].rows();
+            unsigned int col = m_mats[eid].cols();
+            printf("rank= %d, eid= %d, row= %d, col= %d, m_mats= \n", m_uiRank, eid, row, col);
+            for (unsigned int r = 0; r < row; r++){
+                for (unsigned int c = 0; c < col; c++){
+                    printf("%10.3f\n",m_mats[eid](r,c));
+                }
+            }
+        }
+        return Error::SUCCESS;
+    } // print_vector
+
+
+
     // transform vec to petsc vector for comparison between matrix-free and matrix-based methods
     template <typename T, typename I>
-    par::Error aMat<T,I>::transform_to_petsc_vector(const T* vec, Vec petsc_vec) {
+    par::Error aMat<T,I>::transform_to_petsc_vector(const T* vec, Vec petsc_vec, bool ghosted) {
         PetscScalar value;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
             par::ElementType e_type = m_pEtypes[eid];
             unsigned int num_nodes = aMat::nodes_per_element(e_type);
-            unsigned int dof = m_uiNumDOFperNode;
+            //unsigned int dof = m_uiNumDOFperNode;
 
-            for (unsigned int i = 0; i < num_nodes * dof; i++){
-                const unsigned int nidG = m_ulpMap[eid][i/dof]; // global node
+            //for (unsigned int i = 0; i < num_nodes * dof; i++){
+            for (unsigned int i = 0; i < num_nodes; i++){
+                const unsigned int nidG = m_ulpMap[eid][i]; // global node
                 unsigned int nidL = m_uiMap[eid][i];  // local node
+
                 if (nidL >= m_uiNumPreGhostNodes && nidL < m_uiNumPreGhostNodes + m_uiNumNodes) {
                     // nidL is owned by me
-                    value = vec[nidL];
-                    //printf("rank= %d, eid= %d, i= %d, nidG= %d, nidL= %d\n",m_uiRank, eid, i, nidG, nidL);
+                    if (ghosted){
+                        value = vec[nidL];
+                    } else {
+                        value = vec[nidL - m_uiNumPreGhostNodes];
+                    }
                     VecSetValue(petsc_vec, nidG, value, INSERT_VALUES);
                 }
+
             }
         }
         return Error::SUCCESS;
     } // transform_to_petsc_vector
 
 
+
+    // assemly element vector to structure vector (petsc vector)
     template <typename T, typename I>
     par::Error aMat<T,I>::petsc_set_element_vector(Vec vec, unsigned int eid, T *e_vec, InsertMode mode){
 
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
-        unsigned int dof = m_uiNumDOFperNode;
+        //unsigned int dof = m_uiNumDOFperNode;
 
         PetscScalar value;
         PetscInt rowId;
 
         unsigned int index = 0;
-        for (unsigned int r = 0; r < num_nodes*dof; ++r) {
-            rowId = dof * m_ulpMap[eid][r/dof] + r % dof;
+        //for (unsigned int r = 0; r < num_nodes*dof; ++r) {
+        for (unsigned int r = 0; r < num_nodes; ++r) {
+            //rowId = dof * m_ulpMap[eid][r/dof] + r % dof;
+            rowId = m_ulpMap[eid][r];
             value = e_vec[index];
             index++;
             VecSetValue(vec, rowId, value, mode);
         }
-
         return Error::SUCCESS; // fixme
     } // petsc_set_element_vector
 
 
 
+    // apply essential bc by modifying matrix and rhs vector (petsc vector)
     template <typename T, typename I>
     par::Error aMat<T,I>::apply_dirichlet(Vec rhs, unsigned int eid, const I** dirichletBMap) {
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
-        unsigned int dof = m_uiNumDOFperNode;
+        //unsigned int dof = m_uiNumDOFperNode;
 
         PetscInt rowId, colId, boundrow, boundcol;
 
-        for (unsigned int r = 0; r < num_nodes*dof; r++) {
-            rowId = dof * m_ulpMap[eid][r/dof] + r % dof;
-            boundrow = dirichletBMap[eid][r/dof]; // if a node is boundary, all dof's of this node are set to 0
+        //for (unsigned int r = 0; r < num_nodes*dof; r++) {
+        for (unsigned int r = 0; r < num_nodes; r++) {
+            //rowId = dof * m_ulpMap[eid][r/dof] + r % dof;
+            rowId = m_ulpMap[eid][r];
+            //boundrow = dirichletBMap[eid][r/dof]; // if a node is boundary, all dof's of this node are set to 0
+            boundrow = dirichletBMap[eid][r];
             if (boundrow == 1) {
                 VecSetValue(rhs, rowId, 0.0, INSERT_VALUES);
-                for (unsigned int c = 0; c < num_nodes*dof; c++) {
-                    colId = dof * m_ulpMap[eid][c/dof] + c % dof; //fixme: check for cases of dof > 1
+                //for (unsigned int c = 0; c < num_nodes*dof; c++) {
+                for (unsigned int c = 0; c < num_nodes; c++) {
+                    //colId = dof * m_ulpMap[eid][c/dof] + c % dof; //fixme: check for cases of dof > 1
+                    colId = m_ulpMap[eid][c];
                     if (colId == rowId) {
                         MatSetValue(m_pMat, rowId, colId, 1.0, INSERT_VALUES);
                     } else {
@@ -1343,9 +1406,12 @@ namespace par {
                     }
                 }
             } else {
-                for (unsigned int c = 0; c < num_nodes*dof; c++) {
-                    colId = dof * m_ulpMap[eid][c/dof] + c % dof;
-                    boundcol =  dirichletBMap[eid][c/dof];
+                //for (unsigned int c = 0; c < num_nodes*dof; c++) {
+                for (unsigned int c = 0; c < num_nodes; c++) {
+                    //colId = dof * m_ulpMap[eid][c/dof] + c % dof;
+                    colId = m_ulpMap[eid][c];
+                    //boundcol =  dirichletBMap[eid][c/dof];
+                    boundcol =  dirichletBMap[eid][c];
                     if (boundcol == 1) {
                         MatSetValue(m_pMat, rowId, colId, 0.0, INSERT_VALUES);
                     }
@@ -1407,17 +1473,18 @@ namespace par {
     par::Error aMat<T,I>:: petsc_set_vector(Vec exact_sol, unsigned int eid, T *e_sol, InsertMode mode) const{
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
-        unsigned int dof = m_uiNumDOFperNode;
+        //unsigned int dof = m_uiNumDOFperNode;
 
         PetscScalar value;
         PetscInt rowId;
 
-        for (unsigned int r = 0; r < num_nodes*dof; ++r) {
-            rowId = dof * m_ulpMap[eid][r/dof] + r % dof;
+        //for (unsigned int r = 0; r < num_nodes*dof; ++r) {
+        for (unsigned int r = 0; r < num_nodes; ++r) {
+            //rowId = dof * m_ulpMap[eid][r/dof] + r % dof;
+            rowId = m_ulpMap[eid][r];
             value = e_sol[r];
             VecSetValue(exact_sol, rowId, value, mode);
         }
-
         return Error::SUCCESS; // fixme
     } // petsc_set_vector
 
@@ -1431,16 +1498,19 @@ namespace par {
 
 
 
-    // apply Dirichlet boundary conditions
+    // explicitly apply Dirichlet boundary conditions on structure vector
     template <typename T, typename I>
     par::Error aMat<T,I>::set_vector_bc(T *vec, unsigned int eid, const I **dirichletBMap){
         par::ElementType e_type = m_pEtypes[eid];
         unsigned int num_nodes = aMat::nodes_per_element(e_type);
-        unsigned int dof = m_uiNumDOFperNode;
+        //unsigned int dof = m_uiNumDOFperNode;
         unsigned int rowId, boundrow;
-        for (unsigned int r = 0; r < num_nodes * dof; r++){
-            rowId = dof * m_uiMap[eid][r/dof] + r % dof;
-            boundrow = dirichletBMap[eid][r/dof];
+        //for (unsigned int r = 0; r < num_nodes * dof; r++){
+        for (unsigned int r = 0; r < num_nodes; r++){
+            //rowId = dof * m_uiMap[eid][r/dof] + r % dof;
+            rowId = m_uiMap[eid][r];
+            //boundrow = dirichletBMap[eid][r/dof];
+            boundrow = dirichletBMap[eid][r];
             if (boundrow == 1) {
                 // boundary node
                 vec[rowId] = 0.0;

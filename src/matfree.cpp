@@ -225,7 +225,7 @@ int main(int argc, char *argv[]) {
     }
 
     // declare aMat =================================
-    par::aMat<double,unsigned long> stiffnessMat(nelem, etype, nnode, nDofPerNode, comm);
+    par::aMat<double,unsigned long> stiffnessMat(nelem, etype, nnode, comm);
 
     // set map
     stiffnessMat.set_map(map);
@@ -332,7 +332,8 @@ int main(int argc, char *argv[]) {
     stiffnessMat.create_vec(dv, true);
     stiffnessMat.create_vec(du, true, 1.0);
     // compute dv = K * du
-    stiffnessMat.matvec(dv, du, elem_matvec);
+    //stiffnessMat.matvec(dv, du, elem_matvec);
+    stiffnessMat.matvec(dv, du);
 
     // apply Diriclet bc on dv by setting zero to all boundary nodes
     /*for (unsigned int e = 0; e < nelem; e++){
@@ -399,9 +400,9 @@ int main(int argc, char *argv[]) {
     // compute the norm of sol_exact
     VecNorm(sol_exact, NORM_INFINITY, &norm);
 
-    if (rank == 0){
+    /*if (rank == 0){
         printf("L_inf norm= %f\n", norm);
-    }
+    }*/
 
     for (unsigned int eid = 0; eid < nelem; eid++)
     {

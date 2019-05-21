@@ -112,6 +112,7 @@ void ke_hex8(double* ke, const double* xe)
 
 }
 
+// for testing only ke = 1
 void ke_hex8_test(double* ke, const double* xe){
     unsigned int idx;
     for (unsigned int i = 0; i < 8; i++){
@@ -137,7 +138,6 @@ void ke_hex8_eig(Matrix<double,8,8> &ke, double *xe){
     double dxids[3], detads[3], dzetads[3];
     double jaco;
     double B0[8], B1[8], B2[8];
-
 
     for (unsigned int i = 0; i < 8; i++) {
         for (unsigned int j = 0; j < 8; j++){
@@ -215,5 +215,12 @@ void ke_hex8_eig(Matrix<double,8,8> &ke, double *xe){
             } // k integration
         } // j integration
     } // i integration
+}
 
+void ke_hex8_eig_test(Eigen::Matrix<double,8,8> &ke, double* xe){
+    for (unsigned int i = 0; i < 8; i++){
+        for (unsigned int j = 0; j < 8; j++){
+            ke(i,j) = 1.0;
+        }
+    }
 }

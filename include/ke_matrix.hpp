@@ -27,6 +27,6 @@ void ke_hex8_test(double* ke, const double* xe);
 * @param[out] double ke_hex8_eig(8,8) element stiffness matrix
 * */
 void ke_hex8_eig(Eigen::Matrix<double,8,8> &ke, double* xe);
-
+void ke_hex8_eig_test(Eigen::Matrix<double,8,8> &ke, double* xe);
 
 #endif //ADAPTIVEMATRIX_KE_MATRIX_H
