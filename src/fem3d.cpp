@@ -2,6 +2,7 @@
  * @file fem3d.cpp
  * @author Hari Sundar   hsundar@gmail.com
  * @author Han Duc Tran  hantran@cs.utah.edu
+ * @author Milinda Fernando milinda@cs.utah.edu
  *
  * @brief Example of solving 3D Poisson equation by FEM, in parallel, using Petsc
  *
@@ -33,6 +34,79 @@
 using Eigen::MatrixXd;
 using Eigen::Matrix;
 using Eigen::VectorXd;
+
+
+typedef struct {
+
+    par::aMat<double,unsigned long> * aMat;
+    unsigned long ** bdyNodes;
+} aMatCtx;
+
+
+
+/**
+ * @ brief : laplace FEM discretization with zero dirichlet.
+ * */
+PetscErrorCode laplace_matvec(Mat A , Vec u, Vec v)
+{
+    aMatCtx * pCtx;
+    MatShellGetContext(A,(void **)&pCtx);
+
+    par::aMat<double, unsigned long> * pLap = pCtx->aMat;
+    unsigned long ** bdyNodes = pCtx->bdyNodes;
+
+    PetscScalar * vv;
+    PetscScalar * uu;
+
+    VecGetArrayRead(v,(const PetscScalar**)&vv);
+    VecGetArrayRead(u,(const PetscScalar**)&uu);
+
+    double * vvg;
+    double * uug;
+
+    pLap->create_vec(vvg,true,0);
+    pLap->create_vec(uug,true,0);
+
+    pLap->local_to_ghost(uug,uu);
+    pLap->local_to_ghost(vvg,vv);
+
+
+    pLap->matvec(vvg,uug,true);
+
+    unsigned int nelem=pLap->get_local_num_elements();
+    const unsigned int ** e2n_local = pLap -> get_e2n_local(); // includes ghost
+
+
+
+    for (unsigned int eid = 0; eid < nelem; eid++){
+
+        const unsigned nodePerElem = pLap->get_nodes_per_element(eid);
+
+        for (unsigned int n = 0; n < nodePerElem; n++)
+        {
+            if(bdyNodes[eid][n] && pLap->is_local_node(eid,n))
+            {
+                vvg[(e2n_local[eid][n])] = 0.0;
+            }
+
+        }
+    }
+
+
+
+    pLap->ghost_to_local(vv,vvg);
+    pLap->ghost_to_local(uu,uug);
+
+    VecRestoreArray(v,&vv);
+    VecRestoreArray(u,&uu);
+    return 0;
+
+
+
+}
+
+
+
 
 
 int main(int argc, char *argv[]) {
@@ -224,8 +298,8 @@ int main(int argc, char *argv[]) {
 
         // compute element stiffness matrix
         if (useEigen) {
-            //ke_hex8_eig(kee[0], xe);
-            ke_hex8_eig_test(kee[0], xe);
+            ke_hex8_eig(kee[0], xe);
+            //ke_hex8_eig_test(kee[0], xe);
         } else {
             ke_hex8(ke, xe);
         }
@@ -312,12 +386,40 @@ int main(int argc, char *argv[]) {
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    // solve the system
-    stMat.petsc_solve((const Vec) rhs, out);
+
+
+
+
+
+    if(matFree)
+    {
+        // matrix-free solver,
+        Mat pMatFree;
+        aMatCtx ctx;
+
+        ctx.aMat =  &stMat;
+        ctx.bdyNodes = bound_nodes;
+
+        MatCreateShell(comm,nnode,nnode,PETSC_DETERMINE,PETSC_DETERMINE,&ctx,&pMatFree);
+        MatShellSetOperation(pMatFree,MATOP_MULT,(void(*)(void))laplace_matvec);
+
+        KSP ksp;
+        PC  pc;
+
+        KSPCreate(comm,&ksp);
+        KSPSetOperators(ksp, pMatFree, pMatFree);
+        KSPSetFromOptions(ksp);
+        KSPSolve(ksp,rhs,out);
+    }else{
+        // solve the system
+        stMat.petsc_solve((const Vec) rhs, out);
+    }
+
 
     // Pestc begins and completes assembling the global load vector
     stMat.petsc_init_vec(out);
     stMat.petsc_finalize_vec(out);
+
 
     // write results to files
     /*stMat.dump_mat("stiff_mat.dat");
@@ -366,7 +468,7 @@ int main(int argc, char *argv[]) {
     VecNorm(sol_exact, NORM_INFINITY, &norm);
 
     if (rank == 0){
-        printf("L_inf norm= %f\n", norm);
+        printf("L_inf norm= %20.10f\n", norm);
     }
 
 

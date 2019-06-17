@@ -2,6 +2,7 @@
  * @file aMat.hpp
  * @author Hari Sundar   hsundar@gmail.com
  * @author Han Duc Tran  hantran@cs.utah.edu
+ * @author Milinda Fernando milinda@cs.utah.edu
  *
  * @brief A sparse matrix class for adaptive finite elements. 
  * 
@@ -259,6 +260,7 @@ namespace par {
             }
         }
 
+
         /**
          * @brief: constructor to initialize variables of aMat
          * @param[in] etype : types of elements
@@ -275,6 +277,37 @@ namespace par {
          * @param
          * */
         par::Error petsc_create_vec(Vec &vec, PetscScalar alpha = 0.0) const;
+
+        inline unsigned int get_local_num_nodes() const {return m_uiNumNodes;}
+
+        inline unsigned int get_local_num_elements() const {return m_uiNumElems;}
+
+        inline unsigned int get_nodes_per_element (unsigned int eid) const {
+           return nodes_per_element(m_pEtypes[eid]);
+        }
+
+        inline const unsigned int ** get_e2n_local() const{ return (const unsigned int **) m_uiMap;}
+        inline const I ** get_e2n_global() const { return m_ulpMap;}
+
+        inline unsigned int get_pre_ghost_begin() const {return m_uiNodePreGhostBegin;}
+        inline unsigned int get_pre_ghost_end() const {return m_uiNodePreGhostEnd;}
+
+        inline unsigned int get_post_ghost_begin() const {return m_uiNodePostGhostBegin;}
+        inline unsigned int get_post_ghost_end() const {return m_uiNodePostGhostEnd;}
+
+        inline unsigned int get_local_begin() const {return m_uiNodeLocalBegin;}
+        inline unsigned int get_local_end() const {return m_uiNodeLocalEnd;}
+
+        inline bool is_local_node(unsigned int eid, unsigned int n) const
+        {
+            const unsigned int nid = m_uiMap[eid][n];
+
+            if(n>=m_uiNodeLocalBegin && n< m_uiNodeLocalEnd)
+                return true;
+            else
+                return false;
+        }
+
 
         /**
          * @brief: begin assembling the matrix, called after MatSetValues
@@ -325,14 +358,14 @@ namespace par {
          * @param[in] local: vector not including ghost nodes
          * @param[out] gVec: vector including ghost nodes
          * */
-        par::Error local_to_ghost( T* & gVec, const T* local);
+        par::Error local_to_ghost( T*  gVec, const T* local);
 
         /**
          * @brief: create vector not including ghost nodes,
          * @param[in] gVec: vector including ghost nodes
          * @param[out] local: vector not including ghost nodes
          * */
-        par::Error ghost_to_local( T* & local, const T* gVec);
+        par::Error ghost_to_local( T*  local, const T* gVec);
 
         /**
          * @brief: ghost nodes receive data from other processes, start
@@ -851,7 +884,7 @@ namespace par {
 
     // transform structure vector to include ghost nodes: NOT count for DOF yet
     template <typename T, typename I>
-    par::Error aMat<T,I>::local_to_ghost( T* & gVec, const T* local){
+    par::Error aMat<T,I>::local_to_ghost( T*  gVec, const T* local){
         for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
             if ((i >= m_uiNumPreGhostNodes) && (i < m_uiNumPreGhostNodes + m_uiNumNodes)) {
                 gVec[i] = local[i - m_uiNumPreGhostNodes];
@@ -865,7 +898,7 @@ namespace par {
 
     // transform structure vector to include only local nodes: NOT count for DOF yet
     template <typename T, typename I>
-    par::Error aMat<T,I>::ghost_to_local(T* & local, const T* gVec) {
+    par::Error aMat<T,I>::ghost_to_local(T*  local, const T* gVec) {
         for (unsigned int i = 0; i < m_uiNumNodes; i++){
             local[i] = gVec[i + m_uiNumPreGhostNodes];
         }
