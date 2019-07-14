@@ -203,7 +203,8 @@ int main(int argc, char *argv[]) {
 
     // number of nodes, specify what nodes I own based
     unsigned int nnode_z;
-    if (rank == 1) {
+    // example: rank 0 owns nodes on both left and right faces (in z-direction), other ranks own nodes on right face
+    if (rank == 0) {
         nnode_z = nelem_z + 1;
     } else {
         nnode_z = nelem_z;
