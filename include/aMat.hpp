@@ -302,7 +302,7 @@ namespace par {
         {
             const unsigned int nid = m_uiMap[eid][n];
 
-            if(n>=m_uiNodeLocalBegin && n< m_uiNodeLocalEnd)
+            if(nid >= m_uiNodeLocalBegin && nid < m_uiNodeLocalEnd)
                 return true;
             else
                 return false;
