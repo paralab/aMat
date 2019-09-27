@@ -37,20 +37,16 @@ using Eigen::VectorXd;
 
 
 typedef struct {
-    par::aMat<double,unsigned long> * aMat;
-    unsigned long ** bdyNodes;
+    par::aMat<double,unsigned long> * aMatPtr;
+    unsigned int ** bdyNodes;
 } aMatCtx;
-
-typedef struct {
-    par::aMat<double, unsigned long> * aMat;
-} aMatCtx1;
 
 /**
  * @ brief : laplace FEM discretization with zero dirichlet.
  *
- *    v = Au (follow Petsc format, v is the result vector)
+ *    v = Au
  * */
-PetscErrorCode laplace_matvec(Mat A , Vec u, Vec v) {
+PetscErrorCode MatMult_mf(Mat A, Vec u, Vec v) {
 
     aMatCtx * pCtx;
 
@@ -58,8 +54,8 @@ PetscErrorCode laplace_matvec(Mat A , Vec u, Vec v) {
     //MatShellGetContext(A,(void **)&pCtx);
     MatShellGetContext(A, &pCtx);
 
-    par::aMat<double, unsigned long> * pLap = pCtx->aMat;
-    unsigned long ** bdyNodes = pCtx->bdyNodes;
+    par::aMat<double, unsigned long> * pLap = pCtx->aMatPtr;
+    unsigned int ** bdyNodes = pCtx->bdyNodes;
 
     PetscScalar * vv; // this allows vv to be considered as regular vector
     PetscScalar * uu;
@@ -71,12 +67,12 @@ PetscErrorCode laplace_matvec(Mat A , Vec u, Vec v) {
 
     double * vvg;
     double * uug;
-    double * uug_prime;
+    double * uug_p;
 
     // allocate memory for vvg and uug including ghost nodes
     pLap->create_vec(vvg, true, 0);
     pLap->create_vec(uug, true, 0);
-    pLap->create_vec(uug_prime, true, 0);
+    pLap->create_vec(uug_p, true, 0);
 
     // copy data of uu and vv (not-ghosted) to uug and vvg
     pLap->local_to_ghost(uug, uu);
@@ -84,7 +80,7 @@ PetscErrorCode laplace_matvec(Mat A , Vec u, Vec v) {
 
     // get local number of elements (m_uiNumElems)
     unsigned int nelem = pLap->get_local_num_elements();
-    // get local map (m_uiMap)
+    // get local map (m_uipLocalMap)
     const unsigned int ** e2n_local = pLap->get_e2local_map();
 
     // save value of U_c, then make U_c = 0
@@ -92,9 +88,9 @@ PetscErrorCode laplace_matvec(Mat A , Vec u, Vec v) {
         const unsigned nodePerElem = pLap->get_nodes_per_element(eid);
         for (unsigned int n = 0; n < nodePerElem; n++){
             if (bdyNodes[eid][n] && pLap->is_local_node(eid,n)){
-                // save value of U_c, later we will set them to V_c
-                uug_prime[(e2n_local[eid][n])] = uug[(e2n_local[eid][n])];
-                // set U_c to zero (to mimic K_fc * U_c without need to set K_fc = 0)
+                // save value of U_c
+                uug_p[(e2n_local[eid][n])] = uug[(e2n_local[eid][n])];
+                // set U_c to zero
                 uug[(e2n_local[eid][n])] = 0.0;
             }
         }
@@ -108,7 +104,7 @@ PetscErrorCode laplace_matvec(Mat A , Vec u, Vec v) {
         const unsigned nodePerElem = pLap->get_nodes_per_element(eid);
         for (unsigned int n = 0; n < nodePerElem; n++){
             if (bdyNodes[eid][n] && pLap->is_local_node(eid,n)){
-                vvg[(e2n_local[eid][n])] = uug_prime[(e2n_local[eid][n])];
+                vvg[(e2n_local[eid][n])] = uug_p[(e2n_local[eid][n])];
             }
         }
     }
@@ -122,33 +118,102 @@ PetscErrorCode laplace_matvec(Mat A , Vec u, Vec v) {
     return 0;
 }
 
-PetscErrorCode get_mat_diagonal(Mat A, Vec d){
+typedef struct {
+    par::aMat<double, unsigned long> * aMatPtr;
+} aMatCtx1;
+
+
+PetscErrorCode MatGetDiagonal_mf(Mat A, Vec d){
 
     aMatCtx1* pCtx;
 
     // get context for PETSc matrix A
     MatShellGetContext(A, &pCtx);
+
     // get pointer to aMat class
-    par::aMat<double, unsigned long> * pMat = pCtx->aMat;
-    // initialize d
-    VecZeroEntries(d);
-    // declare a `regular' vector representing d
+    par::aMat<double, unsigned long> * pMat = pCtx->aMatPtr;
+
+    // point to data of PETSc vector d
     PetscScalar* dd;
-    // point d to dd
     VecGetArray(d, &dd);
-    // declare regular vector used for get_diagonal() in aMat
+
+    // allocate regular vector used for get_diagonal() in aMat
     double* ddg;
-    // allocate memory (include ghost DoFs) for ddg
     pMat->create_vec(ddg, true, 0);
-    // get diagonal of matrix
-    pMat->get_diagonal(ddg, true);
-    // transform ghosted ddg into non-ghosted dd
+
+    // get diagonal of matrix and put into ddg
+    pMat->mat_get_diagonal(ddg, true);
+
+    // copy ddg (ghosted) into (non-ghosted) dd
     pMat->ghost_to_local(dd, ddg);
-    // put back to PETSc vector
+
+    // deallocate ddg
+    pMat->destroy_vec(ddg);
+
+    // update data of PETSc vector d
     VecRestoreArray(d, &dd);
 
     return 0;
-}// get_diagonal
+}
+
+PetscErrorCode MatGetDiagonalBlock_mf(Mat A, Mat* a){
+
+    aMatCtx1* pCtx;
+    MatShellGetContext(A, &pCtx);
+    par::aMat<double, unsigned long> * pMat = pCtx->aMatPtr;
+    unsigned int local_size = pMat->get_local_num_nodes();
+
+    PetscScalar* aa;
+
+    Mat B;
+
+    // B is sequential dense matrix
+    MatCreateSeqDense(PETSC_COMM_SELF,local_size,local_size,NULL,&B);
+    MatDenseGetArray(B, &aa);
+
+    // B is the same type as A
+    /*MatType mtype;
+    MatGetType(A, &mtype);
+    MatCreate(PETSC_COMM_WORLD, &B);
+    MatSetSizes(B, local_size, local_size, PETSC_DECIDE, PETSC_DECIDE);
+    MatSetType(B, mtype);
+    MatSetUp(B);
+    MatMPIAIJSetPreallocation(B, 30 , PETSC_NULL, 30 , PETSC_NULL);*/
+
+
+    //MatZeroEntries(B);
+    //MatSetValueLocal(B, &aa);
+
+    double** aag;
+    pMat->create_mat(aag, false, 0.0); //allocate, not include ghost nodes
+    pMat->mat_get_diagonal_block(aag);
+    for (unsigned int i = 0; i < local_size; i++){
+        for (unsigned int j = 0; j < local_size; j++){
+            //aa[i + (j*local_size)] = aag[i][j];
+            //(i==j) ? aa[(i*local_size) + j] = 1 : aa[(i*local_size) + j] = 0;
+            //aa[i][j] = aag[i][j];
+            //aa[(i*local_size) + j] = aag[i][j];
+
+            //MatSetValue(B,i,j,aag[i][j],INSERT_VALUES);
+            //MatSeqAIJSetValuesLocalFast(B,i,j,aag[i][j],INSERT_VALUES);
+        }
+    }
+    pMat->destroy_mat(aag,local_size);
+
+    //MatAssemblyBegin(B, MAT_FINAL_ASSEMBLY);
+    //MatAssemblyEnd(B, MAT_FINAL_ASSEMBLY);
+
+    // update data for B
+    MatDenseRestoreArray(B, &aa);
+
+    // copy B to a
+    MatDuplicate(B, MAT_COPY_VALUES, a);
+    
+    MatDestroy(&B);
+
+    return 0;
+
+}
 
 
 int main(int argc, char *argv[]) {
@@ -196,7 +261,7 @@ int main(int argc, char *argv[]) {
     PetscInitialize(&argc, &argv, NULL, NULL);
 
     int rank, size;
-    MPI_Comm comm = MPI_COMM_WORLD;
+    MPI_Comm comm = PETSC_COMM_WORLD;
     MPI_Status Stat;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
@@ -289,29 +354,15 @@ int main(int argc, char *argv[]) {
     }
     printf("rank= %d, start_global_node= %d\n", rank, start_global_node);
 
-    /*unsigned long end_global_node_scan;
-    MPI_Exscan(&end_global_node, &end_global_node_scan, 1, MPI_INT, MPI_SUM, comm);
-    printf("rank= %d, end_global_node= %d, end_global_node_scan= %d\n", rank, end_global_node, end_global_node_scan);*/
-
     for (unsigned int n = 0; n < nnode; n++){
         local_to_global[n] = start_global_node + n;
     }
 
-    /*for (unsigned int n = 0; n < nnode; n++){
-        printf("rank= %d, local_to_global[%d]= %d\n", rank, n, local_to_global[n]);
-    }*/
-
-
-    /*for (unsigned int e = 0; e < nelem; e++)
-    {
-        printf("rank = %d, element = %d, nodes = %d,%d,%d,%d,%d,%d,%d,%d,\n",rank,e,map[e][0],map[e][1],map[e][2],map[e][3],map[e][4],map[e][5],map[e][6],map[e][7]);
-    }
-    printf("rank = %d, nelem = %d, nnode = %d\n",rank,nelem,nnode);*/
 
     // boundary nodes: bound
-    unsigned long** bound_nodes = new unsigned long *[nelem];
+    unsigned int** bound_nodes = new unsigned int *[nelem];
     for (unsigned int e = 0; e < nelem; e++) {
-        bound_nodes[e] = new unsigned long[nNodePerElem];
+        bound_nodes[e] = new unsigned int[nNodePerElem];
     }
 
     // exclusive scan to get the shift for global node/element id =================================
@@ -330,10 +381,11 @@ int main(int argc, char *argv[]) {
     }
 
     // declare aMat =================================
-    par::aMat<double,unsigned long> stMat(nelem, etype, nnode, comm);
+    par::aMat<double,unsigned long> stMat(matFree, nelem, etype, nnode, comm);
 
     // set map
     stMat.set_map(map);
+
 
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact;
@@ -378,24 +430,25 @@ int main(int argc, char *argv[]) {
 
         // assemble element stiffness matrix to global K
         if (useEigen){
-
-            //stMat.set_element_matrices(eid, (MatrixXd*)kee, twin_level, ADD_VALUES);
-            stMat.petsc_set_element_matrix(eid, kee[0], ADD_VALUES);
-            //stMat.set_element_matrix_term_by_term(eid, kee[0], ADD_VALUES); // temporarily for testing matvec
-
-            // for matrix free: copy element matrix to store in m_mats[eid]
-            // todo: need to implement also in not_useEigen
             if (matFree) {
+                // copy element matrix to store in m_epMat[eid]
                 stMat.copy_element_matrix(eid, kee[0]);
+            } else {
+                stMat.petsc_set_element_matrix(eid, kee[0], ADD_VALUES);
             }
-
         } else {
-            stMat.petsc_set_element_matrix(eid, ke, ADD_VALUES); //todo: implement twinning
+            if (matFree){
+                std::cout<<"Error: matrix free only works for Eigen matrix"<<std::endl;
+            } else {
+                stMat.petsc_set_element_matrix(eid, ke, ADD_VALUES);
+            }
         }
-
         // assemble element load vector to global F
         stMat.petsc_set_element_vec(rhs, eid, fe, ADD_VALUES);
     }
+
+    // set boundary map
+    stMat.set_bdr_map(bound_nodes);
 
     //stMat.print_matrix();
 
@@ -405,8 +458,11 @@ int main(int argc, char *argv[]) {
 
 
     // Pestc begins and completes assembling the global stiffness matrix
-    stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
-    stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+    if (!matFree){
+        stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
+        stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+    }
+
 
     // Pestc begins and completes assembling the global load vector
     stMat.petsc_init_vec(rhs);
@@ -498,16 +554,6 @@ int main(int argc, char *argv[]) {
     }*/
 
 
-    // ---------------------------------------------------------------------------------------------
-
-    if (matFree){
-        // build scatter map to prepare for matvec()
-        stMat.buildScatterMap();
-        // get max dof per element
-        stMat.get_max_dof_per_elem(); //todo move this to constructor
-    }
-
-
     // testing the get_diagonal
     /*if (matFree){
         double* diag;
@@ -529,54 +575,65 @@ int main(int argc, char *argv[]) {
 
 
     // modifying stiffness matrix and load vector to apply dirichlet BCs
-    for (unsigned eid = 0; eid < nelem; eid++) {
-        stMat.apply_dirichlet(rhs, eid, (const unsigned long**)bound_nodes);
+    if (!matFree){
+        stMat.apply_bc_mat();
+        stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
+        stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
-
-    // Pestc begins and completes assembling the global stiffness matrix (after modifying matrix)
-    stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
-    stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
-
-    // Pestc begins and completes assembling the global load vector (after modifying rhs vector)
+    stMat.apply_bc_rhs(rhs);
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
+    if (matFree){
+        // build scatter map to prepare for matvec()
+        stMat.buildScatterMap();
+    }
+
     // solve
     if (matFree) {
-        // matrix-free solver
+        // create matrix shell
         Mat pMatFree; // petsc matrix
         aMatCtx ctx;  // aMatCtx includes aMat and boundary_nodes
 
-        ctx.aMat =  &stMat;
+        ctx.aMatPtr =  &stMat;
         ctx.bdyNodes = bound_nodes;
 
-        // Creates a new matrix class for use with a user-defined private data storage format
         MatCreateShell(comm, nnode, nnode, PETSC_DETERMINE, PETSC_DETERMINE, &ctx, &pMatFree);
+        //MatCreateShell(comm, nnode, nnode, PETSC_DETERMINE, PETSC_DETERMINE, NULL, &pMatFree);
 
-        // Set matrix operation for the shell matrix
-        MatShellSetOperation(pMatFree, MATOP_MULT, (void(*)(void))laplace_matvec);
-        MatShellSetOperation(pMatFree, MATOP_GET_DIAGONAL, (void(*)(void))get_mat_diagonal);
+        //auto fp  = stMat.get_MatMult_mf();
+        //MatShellSetOperation(pMatFree, MATOP_MULT, (void(*)(void)) fp);
 
-        // petsc solver with pMatFree and rhs
+        MatShellSetOperation(pMatFree, MATOP_MULT, (void(*)(void))MatMult_mf);
+        MatShellSetOperation(pMatFree, MATOP_GET_DIAGONAL, (void(*)(void))MatGetDiagonal_mf);
+        MatShellSetOperation(pMatFree, MATOP_GET_DIAGONAL_BLOCK, (void(*)(void))MatGetDiagonalBlock_mf);
+
+        // abstract Krylov object, linear solver context
         KSP ksp;
+        // abstract preconditioner object, pre conditioner context
         PC  pc;
+        // default KSP context
         KSPCreate(comm, &ksp);
 
-        // specify solver
-        //KSPSetType(ksp,KSPFGMRES);
+        // set default solver (e.g. KSPCG, KSPFGMRES, ...)
+        // could be overwritten at runtime using -ksp_type <type>
         KSPSetType(ksp, KSPCG);
+        KSPSetFromOptions(ksp);
 
+        // set the matrix associated the linear system
         KSPSetOperators(ksp, pMatFree, pMatFree);
 
-        // specify preconditioner
-        //KSPGetPC(ksp, &pc);
-        //PCSetType(pc,PCJACOBI);
+        // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
+        // could be overwritten at runtime using -pc_type <type>
+        KSPGetPC(ksp,&pc);
+        PCSetType(pc, PCJACOBI);
+        PCSetFromOptions(pc);
 
-        KSPSetFromOptions(ksp);
+        // solve the system
         KSPSolve(ksp, rhs, out);
 
         // clean up
-        //KSPDestroy(&ksp);
+        KSPDestroy(&ksp);
     } else {
         // solve the system
         stMat.petsc_solve((const Vec) rhs, out);
@@ -631,10 +688,7 @@ int main(int argc, char *argv[]) {
         printf("L_inf norm= %20.10f\n", norm);
     }
 
-
-
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
+    for (unsigned int eid = 0; eid < nelem; eid++){
         delete [] map[eid];
         delete [] bound_nodes[eid];
     }
