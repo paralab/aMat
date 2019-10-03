@@ -19,7 +19,6 @@
 #include <mpi.h>
 #include <petscksp.h>
 #include "Dense"
-PETSC_EXTERN PetscErrorCode PCCreate_Jacobi(PC);
 
 #define AMAT_MAX_CRACK_LEVEL 0 // number of cracks allowed in 1 element
 #define AMAT_MAX_EMAT_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL) // max number of cracked elements on each element
@@ -217,7 +216,7 @@ namespace par {
         I*                        m_ulpLocal2Global; // map from local dof to global dof, temporarily used for testing matvec()
 
         /**@brief Flag to use matrix free (1) or matrix based (0) method*/
-        bool matFreeFlag;
+        bool m_bIsMatFree;
 
     public:
 
@@ -373,6 +372,50 @@ namespace par {
         /**@brief v = K * u; v and u are of size including ghost DoFs*/
         par::Error matvec_ghosted(T* v, T* u);
 
+        /**@brief matrix-free version of MatMult of PETSc */
+        PetscErrorCode MatMult_mf(Mat A, Vec u, Vec v);
+
+        /**@brief matrix-free version of MatGetDiagonal of PETSc */
+        PetscErrorCode MatGetDiagonal_mf(Mat A, Vec d);
+
+        /**@brief matrix-free version of MatGetDiagonalBlock of PETSc */
+        PetscErrorCode MatGetDiagonalBlock_mf(Mat A, Mat* a);
+
+        /**@brief pointer function points to MatMult_mt */
+        inline std::function<PetscErrorCode(Mat,Vec,Vec)>* get_MatMult_func(){
+
+            std::function<PetscErrorCode(Mat,Vec,Vec)>* f= new std::function<PetscErrorCode(Mat, Vec, Vec)>();
+
+            (*f) = [this](Mat A, Vec u, Vec v){
+                this->MatMult_mf(A, u, v);
+                return 0;
+            };
+            return f;
+        }
+
+        /**@brief pointer function points to MatGetDiagonal_mf */
+        inline std::function<PetscErrorCode(Mat,Vec)>* get_MatGetDiagonal_func(){
+
+            std::function<PetscErrorCode(Mat,Vec)>* f= new std::function<PetscErrorCode(Mat, Vec)>();
+
+            (*f) = [this](Mat A, Vec d){
+                this->MatGetDiagonal_mf(A, d);
+                return 0;
+            };
+            return f;
+        }
+
+        /**@brief pointer function points to MatGetDiagonalBlock_mf */
+        inline std::function<PetscErrorCode(Mat, Mat*)>* get_MatGetDiagonalBlock_func(){
+
+            std::function<PetscErrorCode(Mat,Mat*)>* f= new std::function<PetscErrorCode(Mat, Mat*)>();
+
+            (*f) = [this](Mat A, Mat* a){
+                this->MatGetDiagonalBlock_mf(A, a);
+                return 0;
+            };
+            return f;
+        }
 
         /**@brief apply Dirichlet BCs by modifying the matrix "m_pMat"
          * */
@@ -386,18 +429,11 @@ namespace par {
         par::Error petsc_solve(const Vec rhs,Vec out) const;
 
 
-        // not yet SUCCESSFULLY to put MatMult_mf and MatGetDiagonal_mf from main function into aMat
-        /**@brief: aMat version of MatGetDiagonal of PETSc */
-        PetscErrorCode MatGetDiagonal_mf(Mat A, Vec d);
-
-        /**@brief: aMat version of MatMult of PETSc */
-        PetscErrorCode MatMult_mf(Mat A, Vec u, Vec v);
-
-        inline auto get_MatMult_mf(){
+        /*inline auto get_MatMult_mf(){
             //return std::bind((&aMat<T,I>::MatMult_mf),*(this),std::placeholders _1,Vec,Vec);
             //void (*fun_ptr)(void,void,void) =
             return (&par::aMat<double, long unsigned int>::MatMult_mf);
-        }
+        }*/
 
         /**@brief ********* FUNCTIONS FOR DEBUGGING **************************************************/
         inline void echo_rank() const {
@@ -516,9 +552,58 @@ namespace par {
 
     }; // end of class aMat
 
-    /**@brief ********************************************************************************************************/
 
-    // constructor
+
+    // context for aMat
+    template <typename T, typename I>
+    struct aMatCTX {
+        par::aMat<T,I> * aMatPtr;
+    };
+
+    // matrix shell to use aMat::MatMult_mf
+    template<typename T,typename I>
+    PetscErrorCode aMat_matvec(Mat A, Vec u, Vec v)
+    {
+        aMatCTX<T,I> * pCtx;
+        MatShellGetContext(A, &pCtx);
+
+        par::aMat<T, I> * pLap = pCtx->aMatPtr;
+        std::function<PetscErrorCode(Mat, Vec, Vec)>* f = pLap->get_MatMult_func();
+        (*f)(A, u , v);
+        delete f;
+        return 0;
+    }
+
+    // matrix shell to use aMat::MatGetDiagonal_mf
+    template<typename T,typename I>
+    PetscErrorCode aMat_matgetdiagonal(Mat A, Vec d)
+    {
+        aMatCTX<T,I> * pCtx;
+        MatShellGetContext(A, &pCtx);
+
+        par::aMat<T, I> * pLap = pCtx->aMatPtr;
+        std::function<PetscErrorCode(Mat, Vec)>* f = pLap->get_MatGetDiagonal_func();
+        (*f)(A, d);
+        delete f;
+        return 0;
+    }
+
+    // matrix shell to use aMat::MatGetDiagonalBlock_mf
+    template<typename T,typename I>
+    PetscErrorCode aMat_matgetdiagonalblock(Mat A, Mat* a)
+    {
+        aMatCTX<T,I> * pCtx;
+        MatShellGetContext(A, &pCtx);
+
+        par::aMat<T, I> * pLap = pCtx->aMatPtr;
+        std::function<PetscErrorCode(Mat, Mat*)>* f = pLap->get_MatGetDiagonalBlock_func();
+        (*f)(A, a);
+        delete f;
+        return 0;
+    }
+
+
+    // aMat constructor
     template <typename T,typename I>
     aMat<T,I>::aMat(const bool matFree, unsigned int nelem, par::ElementType* etype, unsigned int n_local, MPI_Comm comm) {
 
@@ -533,14 +618,14 @@ namespace par {
 
         // whether use matrix free or matrix based
         if (matFree) {
-            matFreeFlag = true;
+            m_bIsMatFree = true;
         } else {
-            matFreeFlag = false;
+            m_bIsMatFree = false;
         }
 
         MPI_Allreduce(&nl, &m_ulNumNodesGlobal, 1, MPI_LONG, MPI_SUM, m_comm);
 
-        if (!matFreeFlag){
+        if (!m_bIsMatFree){
             MatCreate(m_comm, &m_pMat);
             MatSetSizes(m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE);
             if(m_uiSize > 1) {
@@ -568,7 +653,7 @@ namespace par {
         m_ulpMap = NULL;
 
 
-        if (matFreeFlag){
+        if (m_bIsMatFree){
             // element matrices, each element is allocated totally AMAT_MAX_EMAT_PER_ELEMENT of EigenMat
             m_epMat = new EigenMat[m_uiNumElems];
             // could be use if they decide to have multiple matrices for cracked elements
@@ -580,6 +665,7 @@ namespace par {
                 m_uipLocalMap[eid] = new unsigned int[nodes_per_element(m_pEtypes[eid])];
             }
 
+            // todo buildScatterMap() here
             // max dof per element
             get_max_dof_per_elem();
         }
@@ -589,7 +675,7 @@ namespace par {
     aMat<T,I>::~aMat()
     {
         delete [] m_epMat;
-        if (matFreeFlag){
+        if (m_bIsMatFree){
             for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
                 delete [] m_uipLocalMap[eid]; //delete array
             }
@@ -1433,6 +1519,132 @@ namespace par {
     } // matvec_ghosted
 
 
+    template <typename  T, typename I>
+    PetscErrorCode aMat<T,I>::MatMult_mf(Mat A, Vec u, Vec v) {
+
+        PetscScalar * vv; // this allows vv to be considered as regular vector
+        PetscScalar * uu;
+
+        // VecZeroEntries(v);
+
+        VecGetArray(v, &vv);
+        VecGetArrayRead(u,(const PetscScalar**)&uu);
+
+        double * vvg;
+        double * uug;
+        double * uug_p;
+
+        // allocate memory for vvg and uug including ghost nodes
+        create_vec(vvg, true, 0);
+        create_vec(uug, true, 0);
+        create_vec(uug_p, true, 0);
+
+        // copy data of uu and vv (not-ghosted) to uug and vvg
+        local_to_ghost(uug, uu);
+        // pLap->local_to_ghost(vvg, vv);
+
+        // get local number of elements (m_uiNumElems)
+        unsigned int nelem = get_local_num_elements();
+        // get local map (m_uipLocalMap)
+        const unsigned int ** e2n_local = get_e2local_map();
+
+        // save value of U_c, then make U_c = 0
+        for (unsigned int eid = 0; eid < nelem; eid++){
+            const unsigned nodePerElem = get_nodes_per_element(eid);
+            for (unsigned int n = 0; n < nodePerElem; n++){
+                if (m_uipBdrMap[eid][n] && is_local_node(eid,n)){
+                    // save value of U_c
+                    uug_p[(e2n_local[eid][n])] = uug[(e2n_local[eid][n])];
+                    // set U_c to zero
+                    uug[(e2n_local[eid][n])] = 0.0;
+                }
+            }
+        }
+
+        // vvg = K * uug
+        matvec(vvg, uug, true); // this gives V_f = (K_ff * U_f) + (K_fc * 0) = K_ff * U_f
+
+        // now set V_c = U_c which was saved in U'_c
+        for (unsigned int eid = 0; eid < nelem; eid++){
+            const unsigned nodePerElem = get_nodes_per_element(eid);
+            for (unsigned int n = 0; n < nodePerElem; n++){
+                if (m_uipBdrMap[eid][n] && is_local_node(eid,n)){
+                    vvg[(e2n_local[eid][n])] = uug_p[(e2n_local[eid][n])];
+                }
+            }
+        }
+
+        ghost_to_local(vv,vvg);
+        ghost_to_local(uu,uug);
+
+        VecRestoreArray(v,&vv);
+        VecRestoreArray(u,&uu);
+
+        return 0;
+    }// MatMult_mf
+
+
+    template<typename T, typename I>
+    PetscErrorCode aMat<T,I>::MatGetDiagonal_mf(Mat A, Vec d){
+
+        // point to data of PETSc vector d
+        PetscScalar* dd;
+        VecGetArray(d, &dd);
+
+        // allocate regular vector used for get_diagonal() in aMat
+        double* ddg;
+        create_vec(ddg, true, 0);
+
+        // get diagonal of matrix and put into ddg
+        mat_get_diagonal(ddg, true);
+
+        // copy ddg (ghosted) into (non-ghosted) dd
+        ghost_to_local(dd, ddg);
+
+        // deallocate ddg
+        destroy_vec(ddg);
+
+        // update data of PETSc vector d
+        VecRestoreArray(d, &dd);
+
+        return 0;
+    }// MatGetDiagonal_mf
+
+
+    template<typename T, typename I>
+    PetscErrorCode aMat<T,I>::MatGetDiagonalBlock_mf(Mat A, Mat* a){
+
+        unsigned int local_size = get_local_num_nodes();
+
+        PetscScalar* aa;
+
+        Mat B;
+
+        // B is sequential dense matrix
+        MatCreateSeqDense(PETSC_COMM_SELF,local_size,local_size,NULL,&B);
+        MatDenseGetArray(B, &aa);
+
+        double** aag;
+        create_mat(aag, false, 0.0); //allocate, not include ghost nodes
+        mat_get_diagonal_block(aag);
+        for (unsigned int i = 0; i < local_size; i++){
+            for (unsigned int j = 0; j < local_size; j++){
+                aa[(i*local_size) + j] = aag[i][j];
+            }
+        }
+        destroy_mat(aag,local_size);
+
+        // update data for B
+        MatDenseRestoreArray(B, &aa);
+
+        // copy B to a
+        MatDuplicate(B, MAT_COPY_VALUES, a);
+
+        MatDestroy(&B);
+
+        return 0;
+    }
+
 
     // apply Dirichlet bc by modifying matrix
     template <typename T, typename I>
@@ -1469,6 +1681,7 @@ namespace par {
         return Error::SUCCESS;
     } // apply_bc_mat
 
+
     // apply Dirichlet bc by modifying rhs
     template <typename T, typename I>
     par::Error aMat<T,I>::apply_bc_rhs(Vec rhs){
@@ -1493,170 +1706,86 @@ namespace par {
     template <typename T, typename I>
     par::Error aMat<T,I>::petsc_solve(const Vec rhs, Vec out) const {
 
-        // abstract Krylov object, linear solver context
-        KSP ksp;
-        // abstract preconditioner object, pre conditioner context
-        PC  pc;
-        // default KSP context
-        KSPCreate(m_comm, &ksp);
+        if (m_bIsMatFree) {
+            // PETSc shell matrix
+            Mat pMatFree;
+            // get context to aMat
+            aMatCTX<T,I> ctx;
+            // point back to aMat
+            ctx.aMatPtr =  (aMat<T,I>*)this;
 
-        // set default solver (e.g. KSPCG, KSPFGMRES, ...)
-        // could be overwritten at runtime using -ksp_type <type>
-        KSPSetType(ksp, KSPCG);
-        KSPSetFromOptions(ksp);
+            // create matrix shell
+            MatCreateShell(m_comm, m_uiNumNodes, m_uiNumNodes, PETSC_DETERMINE, PETSC_DETERMINE, &ctx, &pMatFree);
 
-        // set the matrix associated the linear system
-        KSPSetOperators(ksp, m_pMat, m_pMat);
+            // set operation for matrix-vector multiplication using aMat::MatMult_mf
+            MatShellSetOperation(pMatFree, MATOP_MULT, (void(*)(void))aMat_matvec<T,I>);
 
-        // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
-        // could be overwritten at runtime using -pc_type <type>
-        KSPGetPC(ksp,&pc);
-        PCSetType(pc, PCJACOBI);
-        PCSetFromOptions(pc);
+            // set operation for geting matrix diagonal using aMat::MatGetDiagonal_mf
+            MatShellSetOperation(pMatFree, MATOP_GET_DIAGONAL, (void(*)(void))aMat_matgetdiagonal<T,I>);
 
-        // set default number of blocks per local if using block jacobi preconditioner
-        // could be overwritten at runtime using -pc_bjacobi_blocks <n>
-        /*PetscInt i, m, n, *blks;
-        m = 4;
-        // average block size
-        n = m_uiNumNodes/m;
-        PetscMalloc1(m, &blks);
-        for (i = 0; i < m; i++) {
-            if (i < (m-1)){
-                blks[i] = n;
-            } else {
-                blks[i] = n + m_uiNumNodes%m;
-            }
+            // set operation for geting block matrix diagonal using aMat::MatGetDiagonalBlock_mf
+            MatShellSetOperation(pMatFree, MATOP_GET_DIAGONAL_BLOCK, (void(*)(void))aMat_matgetdiagonalblock<T,I>);
+
+            // abstract Krylov object, linear solver context
+            KSP ksp;
+            // abstract preconditioner object, pre conditioner context
+            PC  pc;
+            // default KSP context
+            KSPCreate(m_comm, &ksp);
+
+            // set the matrix associated the linear system
+            KSPSetOperators(ksp, pMatFree, pMatFree);
+
+            // set default solver (e.g. KSPCG, KSPFGMRES, ...)
+            // could be overwritten at runtime using -ksp_type <type>
+            KSPSetType(ksp, KSPCG);
+            KSPSetFromOptions(ksp);
+
+            // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
+            // could be overwritten at runtime using -pc_type <type>
+            KSPGetPC(ksp,&pc);
+            PCSetType(pc, PCJACOBI);
+            PCSetFromOptions(pc);
+
+            // solve the system
+            KSPSolve(ksp, rhs, out);
+
+            // clean up
+            KSPDestroy(&ksp);
+
+        } else {
+            // abstract Krylov object, linear solver context
+            KSP ksp;
+            // abstract preconditioner object, pre conditioner context
+            PC  pc;
+            // default KSP context
+            KSPCreate(m_comm, &ksp);
+
+            // set default solver (e.g. KSPCG, KSPFGMRES, ...)
+            // could be overwritten at runtime using -ksp_type <type>
+            KSPSetType(ksp, KSPCG);
+            KSPSetFromOptions(ksp);
+
+            // set the matrix associated the linear system
+            KSPSetOperators(ksp, m_pMat, m_pMat);
+
+            // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
+            // could be overwritten at runtime using -pc_type <type>
+            KSPGetPC(ksp,&pc);
+            PCSetType(pc, PCJACOBI);
+            PCSetFromOptions(pc);
+
+            // solve the system
+            KSPSolve(ksp, rhs, out); // solve the linear system
+
+            // clean up
+            KSPDestroy(&ksp);
         }
-        PCBJacobiSetLocalBlocks(pc,m,blks);
-        PetscFree(blks);*/
-
-        // set separate linear solver for the subblocks
-        /*KSP* subksp;
-        PetscInt nlocal,first;
-        PetscBool isbjacobi;
-        PC subpc;    // PC context for subdomain
-        PetscObjectTypeCompare((PetscObject)pc, PCBJACOBI, &isbjacobi);
-        if (isbjacobi) {
-            KSPSetUp(ksp);
-            PCBJacobiGetSubKSP(pc, &nlocal, &first, &subksp);
-            for (i = 0; i < nlocal; i++) {
-                KSPGetPC(subksp[i], &subpc);
-                if (!m_uiRank) {
-                    if (i % 2) {
-                        PCSetType(subpc, PCILU);
-                    } else {
-                        PCSetType(subpc, PCNONE);
-                        KSPSetType(subksp[i], KSPBCGS);
-                        KSPSetTolerances(subksp[i], 1.e-6, PETSC_DEFAULT, PETSC_DEFAULT, PETSC_DEFAULT);
-                    }
-                } else {
-                    PCSetType(subpc, PCJACOBI);
-                    KSPSetType(subksp[i], KSPGMRES);
-                    KSPSetTolerances(subksp[i], 1.e-6, PETSC_DEFAULT, PETSC_DEFAULT, PETSC_DEFAULT);
-                }
-            }
-        }*/
-
-        // solve the system
-        KSPSolve(ksp, rhs, out); // solve the linear system
-
-        // clean up
-        KSPDestroy(&ksp);
 
         return Error::SUCCESS;
+
     } // petsc_solve
 
-
-    // This is trying to put MatMult_mf from main function into aMat, but so far not successful
-    template <typename T, typename I>
-    PetscErrorCode aMat<T,I>::MatMult_mf(Mat A, Vec u, Vec v) {
-
-        PetscScalar * vv;
-        PetscScalar * uu;
-
-        // VecZeroEntries(v);
-
-        VecGetArray(v, &vv);
-        VecGetArrayRead(u,(const PetscScalar**)&uu);
-
-        double * vvg;
-        double * uug;
-        double * uug_p;
-
-        // allocate memory for vvg and uug including ghost nodes
-        create_vec(vvg, true, 0);
-        create_vec(uug, true, 0);
-        create_vec(uug_p, true, 0);
-
-        // copy data of uu and vv (not-ghosted) to uug and vvg
-        local_to_ghost(uug, uu);
-
-        // get local number of elements (m_uiNumElems)
-        unsigned int nelem = get_local_num_elements();
-        // get local map (m_uipLocalMap)
-        const unsigned int ** e2n_local = get_e2local_map();
-
-        // save value of U_c, then make U_c = 0
-        for (unsigned int eid = 0; eid < nelem; eid++){
-            const unsigned nodePerElem = get_nodes_per_element(eid);
-            for (unsigned int n = 0; n < nodePerElem; n++){
-                if (e2n_local[eid][n] && is_local_node(eid,n)){
-                    // save value of U_c
-                    uug_p[(e2n_local[eid][n])] = uug[(e2n_local[eid][n])];
-                    // set U_c to zero
-                    uug[(e2n_local[eid][n])] = 0.0;
-                }
-            }
-        }
-
-        matvec(vvg, uug, true);
-
-        // now set V_c = U_c which was saved in U'_c
-        for (unsigned int eid = 0; eid < nelem; eid++){
-            const unsigned nodePerElem = get_nodes_per_element(eid);
-            for (unsigned int n = 0; n < nodePerElem; n++){
-                if (e2n_local[eid][n] && is_local_node(eid,n)){
-                    vvg[(e2n_local[eid][n])] = uug_p[(e2n_local[eid][n])];
-                }
-            }
-        }
-
-        ghost_to_local(vv,vvg);
-        ghost_to_local(uu,uug);
-
-        VecRestoreArray(v,&vv);
-        VecRestoreArray(u,&uu);
-
-        return 0;
-    }
-
-    // This is trying to put MatGetDiagonal_mf from main function into aMat, but so far not successful
-    template <typename T, typename I>
-    PetscErrorCode aMat<T,I>::MatGetDiagonal_mf(Mat A, Vec d){
-
-        // point to data of PETSc vector d
-        PetscScalar* dd;
-        VecGetArray(d, &dd);
-
-        // allocate regular vector used for get_diagonal() in aMat
-        double* ddg;
-        create_vec(ddg, true, 0);
-
-        // get diagonal of matrix and put into ddg
-        mat_get_diagonal(ddg, true);
-
-        // copy ddg (ghosted) into (non-ghosted) dd
-        ghost_to_local(dd, ddg);
-
-        // deallocate ddg
-        destroy_vec(ddg);
-
-        // update data of PETSc vector d
-        VecRestoreArray(d, &dd);
-
-        return 0;
-    }
 
     /**@brief ********* FUNCTIONS FOR DEBUGGING **************************************************/
 
@@ -1925,4 +2054,4 @@ namespace par {
         return Error::SUCCESS; // fixme
     } // petsc_set_element_matrix
 
-}; // end of namespace par
+} // end of namespace par
