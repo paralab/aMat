@@ -194,16 +194,30 @@ int main(int argc, char *argv[]) {
     printf("rank= %d, nnode= %d, nnode_scan= %d, nnode_total= %d\n", rank, nnode, nnode_scan, nnode_total);
 
     // type of elements =================================
-    par::ElementType *etype = new par::ElementType[nelem];
-    for (unsigned e = 0; e < nelem; e ++){
+    //par::ElementType *etype = new par::ElementType[nelem];
+    /*for (unsigned e = 0; e < nelem; e ++){
         etype[e] = par::ElementType::HEX;
+    }*/
+    unsigned int* nodes_per_element = new unsigned int[nelem];
+    for (unsigned e = 0; e < nelem; e ++){
+        nodes_per_element[e] = 8;
     }
 
     // declare aMat =================================
-    par::aMat<double,unsigned long> stMat(matFree, nelem, etype, nnode, comm);
+    //par::aMat<double,unsigned long> stMat(matFree, nelem, etype, nnode, comm);
+    par::AMAT_TYPE matType;
+    if (matFree){
+        matType = par::AMAT_TYPE::MAT_FREE;
+    } else {
+        matType = par::AMAT_TYPE::PETSC_SPARSE;
+    }
+    par::aMat<double, unsigned long, unsigned int> stMat(matType);
+
+    // set communicator
+    stMat.set_comm(comm);
 
     // set map
-    stMat.set_map(map);
+    stMat.set_map(map, nodes_per_element, nelem, nnode, nnode_total);
 
 
     // create rhs, solution and exact solution vectors
@@ -266,6 +280,7 @@ int main(int argc, char *argv[]) {
         stMat.petsc_set_element_vec(rhs, eid, fe, ADD_VALUES);
     }
 
+
     // set boundary map
     stMat.set_bdr_map(bound_nodes);
 
@@ -281,6 +296,7 @@ int main(int argc, char *argv[]) {
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
+
 
 
     // Pestc begins and completes assembling the global load vector
@@ -403,13 +419,10 @@ int main(int argc, char *argv[]) {
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    if (matFree){
-        // build scatter map to prepare for matvec()
-        stMat.buildScatterMap();
-    }
 
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
+
 
     // Pestc begins and completes assembling the global load vector
     stMat.petsc_init_vec(out);
@@ -467,7 +480,7 @@ int main(int argc, char *argv[]) {
 
     delete [] map;
     delete [] bound_nodes;
-    delete [] etype;
+    //delete [] etype;
     delete [] kee;
     delete [] local_to_global;
 
