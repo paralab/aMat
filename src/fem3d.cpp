@@ -280,7 +280,6 @@ int main(int argc, char *argv[]) {
         stMat.petsc_set_element_vec(rhs, eid, fe, ADD_VALUES);
     }
 
-
     // set boundary map
     stMat.set_bdr_map(bound_nodes);
 

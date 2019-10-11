@@ -31,12 +31,13 @@ namespace par {
                       UNKNOWN_ELEMENT_STATUS,
                       NULL_L2G_MAP,
                       GHOST_NODE_NOT_FOUND,
-                      UNKNOWN_MAT_TYPE
+                      UNKNOWN_MAT_TYPE,
+                      WRONG_COMMUNICATION
     };
 
 
-    // AsyncExchangeCtx is downloaded from Dendro-5.0 written by Milinda Fernando and Hari Sundar;
-    // Using of AsyncExchange was permitted by the author Milinda Fernando
+    // AsyncExchangeCtx is downloaded from Dendro-5.0 with permission from the author (Milinda Fernando)
+    // Dendro-5.0 is written by Milinda Fernando and Hari Sundar;
     class AsyncExchangeCtx {
 
         private:
@@ -108,6 +109,85 @@ namespace par {
             }
         };
 
+
+    template <typename Dt, typename Li>
+    class MatRecord {
+    private:
+        unsigned int m_uiRank;
+        Li m_uiRowId;
+        Li m_uiColId;
+        Dt m_dtVal;
+    public:
+        MatRecord(){
+            m_uiRank = 0;
+            m_uiRowId = 0;
+            m_uiColId = 0;
+            m_dtVal = 0;
+        }
+        MatRecord(unsigned int rank, unsigned int rowId, unsigned int colId, Dt val){
+            m_uiRank = rank;
+            m_uiRowId = rowId;
+            m_uiColId = colId;
+            m_dtVal = val;
+        }
+
+        inline unsigned int getRank() const { return m_uiRank; }
+        inline unsigned int getRowId() const { return m_uiRowId; }
+        inline unsigned int getColId()const { return m_uiColId; }
+        inline unsigned int getVal()const { return m_dtVal; }
+
+        inline void setRank(unsigned int rank) { m_uiRank = rank; }
+        inline void setRowId(unsigned int rowId) { m_uiRowId = rowId; }
+        inline void setColId(unsigned int colId) { m_uiColId = colId; }
+        inline void setVal(unsigned int val) { m_dtVal = val; }
+
+        bool operator == (MatRecord const &other) const {
+            return ((m_uiRank == other.getRank())&&(m_uiRowId == other.getRowId())&&(m_uiColId == other.getColId()));
+        }
+
+        bool operator < (MatRecord const &other) const {
+            if (m_uiRank < other.getRank()) {
+                return true;
+            } else if (m_uiRank == other.getRank()) {
+                if (m_uiRowId < other.getRowId()) {
+                    return true;
+                } else if (m_uiRowId == other.getRowId()) {
+                    if (m_uiColId < other.getColId()) {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        bool operator <= (MatRecord const &other) const {
+            return (((*this) < other) || (*this) == other);
+        }
+
+        ~MatRecord(){ }
+    }; // class MatRecord
+
+    // class is used to define MPI_Datatype for MatRecord
+    template <typename dt, typename li>
+    class MPI_datatype_matrecord{
+    public:
+        static MPI_Datatype value(){
+            static bool first = true;
+            static MPI_Datatype mpiDatatype;
+            if (first){
+                first=false;
+                MPI_Type_contiguous(sizeof(MatRecord<dt,li>),MPI_BYTE,&mpiDatatype);
+                MPI_Type_commit(&mpiDatatype);
+            }
+            return mpiDatatype;
+        }
+    }; // class MPI_datatype_matrecord
+
     // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
     template <typename DT, typename GI, typename LI>
     class aMat {
@@ -118,34 +198,34 @@ namespace par {
         AMAT_TYPE m_MatType;
 
         /**@brief communicator used within aMat */
-        MPI_Comm       m_comm;
+        MPI_Comm m_comm;
 
         /**@brief my rank */
-        unsigned int   m_uiRank;
+        unsigned int m_uiRank;
 
         /**@brief total number of ranks */
-        unsigned int   m_uiSize;
+        unsigned int m_uiSize;
 
         /**@brief (local) number of DoFs owned by rank */
-        unsigned int   m_uiNumNodes;
+        unsigned int m_uiNumNodes;
 
         /**@brief (global) number of DoFs owned by all ranks */
-        unsigned long  m_ulNumNodesGlobal;
+        GI m_ulNumNodesGlobal;
 
         /**@brief (local) number of elements owned by rank */
-        unsigned int   m_uiNumElems;
+        unsigned int m_uiNumElems;
 
         /**@brief max number of DoFs per element*/
-        unsigned int   m_uiMaxNodesPerElem;
+        unsigned int m_uiMaxNodesPerElem;
 
         /**@brief assembled stiffness matrix */
-        Mat            m_pMat;
+        Mat m_pMat;
 
         /**@brief storage of element matrices */
-        EigenMat*      m_epMat;
+        EigenMat* m_epMat;
 
         /**@brief map from local DoF of element to global DoF: m_ulpMap[eid][local_id]  = global_id */
-        const GI* const *            m_ulpMap;
+        const GI* const * m_ulpMap;
 
         /**@brief number of dofs per element */
         const unsigned int * m_uiDofsPerElem;
@@ -157,22 +237,22 @@ namespace par {
         unsigned int** m_uipBdrMap;
 
         /**@brief number of DoFs owned by each rank, NOT include ghost DoFs */
-        std::vector<unsigned int> m_uivLocalNodeCounts;
+        std::vector<LI> m_uivLocalNodeCounts;
 
         /**@brief number of elements owned by each rank */
-        std::vector<unsigned int> m_uivLocalElementCounts;
+        std::vector<LI> m_uivLocalElementCounts;
 
         /**@brief exclusive scan of (local) number of DoFs */
-        std::vector<unsigned int> m_uivLocalNodeScan; // todo use I
+        std::vector<GI> m_uivLocalNodeScan;
 
         /**@brief exclusive scan of (local) number of elements */
-        std::vector<unsigned int> m_uivLocalElementScan;
+        std::vector<GI> m_uivLocalElementScan;
 
         /**@brief number of ghost DoFs owned by "pre" processes (whose ranks are smaller than m_uiRank) */
-        unsigned int              m_uiNumPreGhostNodes;
+        unsigned int m_uiNumPreGhostNodes;
 
         /**@brief total number of ghost DoFs owned by "post" processes (whose ranks are larger than m_uiRank) */
-        unsigned int              m_uiNumPostGhostNodes;
+        unsigned int m_uiNumPostGhostNodes;
 
         /**@brief number of DoFs sent to each process (size = m_uiSize) */
         std::vector<unsigned int> m_uivSendNodeCounts;
@@ -190,35 +270,38 @@ namespace par {
         std::vector<unsigned int> m_uivRecvNodeOffset;
 
         /**@brief local node-ID starting of pre-ghost nodes, always = 0 */
-        unsigned int              m_uiNodePreGhostBegin;
+        unsigned int m_uiNodePreGhostBegin;
 
         /**@brief local node-ID ending of pre-ghost nodes */
-        unsigned int              m_uiNodePreGhostEnd;
+        unsigned int m_uiNodePreGhostEnd;
 
         /**@brief local node-ID starting of nodes owned by me */
-        unsigned int              m_uiNodeLocalBegin;
+        unsigned int m_uiNodeLocalBegin;
 
         /**@brief local node-ID ending of nodes owned by me */
-        unsigned int              m_uiNodeLocalEnd;
+        unsigned int m_uiNodeLocalEnd;
 
         /**@brief local node-ID starting of post-ghost nodes */
-        unsigned int              m_uiNodePostGhostBegin;
+        unsigned int m_uiNodePostGhostBegin;
 
         /**@brief local node-ID ending of post-ghost nodes */
-        unsigned int              m_uiNodePostGhostEnd;
+        unsigned int m_uiNodePostGhostEnd;
 
         /**@brief total number of nodes including ghost nodes and nodes owned by me */
-        unsigned int              m_uiNumNodesTotal;
+        unsigned int m_uiNumNodesTotal;
 
         /**@brief MPI communication tag*/
-        int                       m_iCommTag;
+        int m_iCommTag;
 
         /**@brief ghost exchange context*/
         std::vector<AsyncExchangeCtx> m_vAsyncCtx;
 
+        /**@brief matrix record for block jacobi matrix*/
+        std::vector<MatRecord<DT,LI>> m_vMatRec;
+
         /**@brief TEMPORARY VARIABLES FOR DEBUGGING */
-        Mat                       m_pMat_matvec; // matrix created by matvec() to compare with m_pMat
-        GI*                        m_ulpLocal2Global; // map from local dof to global dof, temporarily used for testing matvec()
+        Mat m_pMat_matvec; // matrix created by matvec() to compare with m_pMat
+        GI* m_ulpLocal2Global; // map from local dof to global dof, temporarily used for testing matvec()
 
     public:
 
@@ -357,8 +440,12 @@ namespace par {
         par::Error mat_get_diagonal(DT* diag, bool isGhosted = false);
         /**@brief get diagonal terms with ghosted vector diag */
         par::Error mat_get_diagonal_ghosted(DT* diag);
+
+        /**@brief compute the rank who owns gId */
+        unsigned int globalId_2_rank(GI gId) const;
         /**@brief get diagonal block matrix */
-        par::Error mat_get_diagonal_block(DT** diag_blk);
+        par::Error mat_get_diagonal_block(DT **diag_blk);
+
         /**@brief get max number of DoF per element*/
         par::Error get_max_dof_per_elem();
         /**@brief free memory allocated for vec and set vec to null */
@@ -495,6 +582,9 @@ namespace par {
         /**@brief: apply zero Dirichlet boundary condition on nodes dictated by dirichletBMap */
         par::Error set_vector_bc(DT* vec, unsigned int eid, const GI **dirichletBMap);
 
+        /**@brief get diagonal block matrix for sequential code (no communication among ranks) */
+        par::Error mat_get_diagonal_block_seq(DT **diag_blk);
+
 
         /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
         /**@brief assembly element matrix to structure matrix, multiple levels of twining
@@ -570,6 +660,9 @@ namespace par {
         m_epMat = nullptr;          // element matrices (Eigen matrix), used in matrix-free
         m_pMat = nullptr;           // structure matrix, used in matrix-based
         m_comm = MPI_COMM_NULL;     // communication of aMat
+        if (matType == AMAT_TYPE::MAT_FREE){
+            m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
+        }
     }// constructor
 
     template <typename DT,typename GI, typename LI>
@@ -1141,33 +1234,154 @@ namespace par {
         return Error::SUCCESS;
     }// mat_get_diagonal_ghosted
 
+    // return rank that owns global gId
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::mat_get_diagonal_block(DT** diag_blk){
-        //Note: diag_blk is already allocated with size of [m_uiNumNodes][m_uiNumNodes]
+    unsigned int aMat<DT, GI, LI>::globalId_2_rank(GI gId) const {
+        unsigned int rank;
+        if (gId >= m_uivLocalNodeScan[m_uiSize - 1]){
+            rank = m_uiSize - 1;
+        } else {
+            for (unsigned int i = 0; i < (m_uiSize - 1); i++){
+                if (gId >= m_uivLocalNodeScan[i] && gId < m_uivLocalNodeScan[i+1] && (i < (m_uiSize -1))) {
+                    rank = i;
+                    break;
+                }
+            }
+        }
+        return rank;
+    }
+
+
+    template <typename DT, typename GI, typename LI>
+    par::Error aMat<DT, GI, LI>::mat_get_diagonal_block(DT **diag_blk){
         unsigned int num_nodes;
         EigenMat e_mat;
-        GI rowID, colID;
+        GI glo_RowId, glo_ColId;
+        LI loc_RowId, loc_ColId;
+        LI rowID, colID;
+        unsigned int rank_r, rank_c;
+
+        std::vector<MatRecord<DT,LI>> matRec;
+        MatRecord<DT,LI> matr;
+
+        m_vMatRec.clear();
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
             num_nodes = m_uiDofsPerElem[eid];
-            // get element matrix
             e_mat = m_epMat[eid];
             for (unsigned int r = 0; r < num_nodes; r++){
-                rowID = m_uipLocalMap[eid][r];
-                if ((rowID >= m_uiNodeLocalBegin) && (rowID < m_uiNodeLocalEnd)){
-                    // only assembling if rowID is owned by my rank
-                    for (unsigned int c = 0; c < num_nodes; c++) {
-                        colID = m_uipLocalMap[eid][c];
-                        if ((colID >= m_uiNodeLocalBegin) && (colID < m_uiNodeLocalEnd)) {
-                            // only assembling if colID is owned by my rank
-                            diag_blk[rowID - m_uiNumPreGhostNodes][colID - m_uiNumPreGhostNodes] += e_mat(r, c);
-                        }
+                rowID = m_uipLocalMap[eid][r]; // local row Id (include ghost nodes)
+                glo_RowId = m_ulpMap[eid][r];  // global row Id
+                rank_r = globalId_2_rank(glo_RowId); //rank who owns global row Id
+                loc_RowId = (glo_RowId - m_uivLocalNodeScan[rank_r]); //local ID in that rank (not include ghost nodes)
+
+                for (unsigned int c = 0; c < num_nodes; c++){
+                    colID = m_uipLocalMap[eid][c]; // local column Id (include ghost nodes)
+                    glo_ColId = m_ulpMap[eid][c];  // global column Id
+                    rank_c = globalId_2_rank(glo_ColId); // rank who owns global column Id
+                    loc_ColId = (glo_ColId - m_uivLocalNodeScan[rank_c]); // local column Id in that rank (not include ghost nodes)
+
+                    // assemble to block diagonal matrix if both i and j belong to my rank
+                    if ((rowID >= m_uiNodeLocalBegin) && (rowID < m_uiNodeLocalEnd) && (colID >= m_uiNodeLocalBegin) && (colID < m_uiNodeLocalEnd)){
+                        diag_blk[rowID - m_uiNumPreGhostNodes][colID - m_uiNumPreGhostNodes] += e_mat(r,c);
+                    }
+
+                    // set to matrix record when both i and j belong to the same rank
+                    if ((rank_r == rank_c)&&(rank_r != m_uiRank)){
+                        matr.setRank(rank_r);
+                        matr.setRowId(loc_RowId);
+                        matr.setColId(loc_ColId);
+                        matr.setVal(e_mat(r,c));
+                        matRec.push_back(matr);
                     }
                 }
             }
         }
+        std::sort(matRec.begin(), matRec.end());
+
+        // accumulate value if 2 components of matRec are equal, then reduce the size of matRec
+        unsigned int i = 0;
+        while (i < matRec.size()) {
+            matr.setRank(matRec[i].getRank());
+            matr.setRowId(matRec[i].getRowId());
+            matr.setColId(matRec[i].getColId());
+
+            DT val = matRec[i].getVal();
+            while (((i + 1) < matRec.size()) && (matRec[i] == matRec[i + 1])) {
+                val += matRec[i + 1].getVal();
+                i++;
+            }
+            matr.setVal(val);
+
+            m_vMatRec.push_back(matr);
+            i++;
+        }
+
+
+        unsigned int* sendCounts = new unsigned int[m_uiSize];
+        unsigned int* recvCounts = new unsigned int[m_uiSize];
+        unsigned int* sendOffset = new unsigned int[m_uiSize];
+        unsigned int* recvOffset = new unsigned int[m_uiSize];
+
+        for (unsigned int i = 0; i < m_uiSize; i++){
+            sendCounts[i] = 0;
+            recvCounts[i] = 0;
+        }
+
+        // number of elements sending to each rank
+        for (unsigned int i = 0; i < m_vMatRec.size(); i++){
+            sendCounts[m_vMatRec[i].getRank()] ++;
+        }
+
+        // number of elements receiving from each rank
+        MPI_Alltoall(sendCounts, 1, MPI_UNSIGNED, recvCounts, 1, MPI_UNSIGNED, m_comm);
+
+        sendOffset[0] = 0;
+        recvOffset[0] = 0;
+        for (unsigned int i = 1; i < m_uiSize; i++){
+            sendOffset[i] = sendCounts[i-1] + sendOffset[i-1];
+            recvOffset[i] = recvCounts[i-1] + recvOffset[i-1];
+        }
+
+        // allocate receive buffer
+        std::vector<MatRecord<DT,LI>> recv_buff;
+        recv_buff.resize(recvCounts[m_uiSize-1]+recvOffset[m_uiSize-1]);
+
+        // send to all other ranks
+        for (unsigned int i = 0; i < m_uiSize; i++){
+            if (sendCounts[i] == 0) continue;
+            const MPI_Datatype dtype = par::MPI_datatype_matrecord<DT,LI>::value();
+            MPI_Send(&m_vMatRec[sendOffset[i]], sendCounts[i], dtype, i, m_iCommTag, m_comm);
+        }
+
+        // receive from all other ranks
+        for (unsigned int i = 0; i < m_uiSize; i++){
+            if (recvCounts[i] == 0) continue;
+            const MPI_Datatype dtype = par::MPI_datatype_matrecord<DT,LI>::value();
+            MPI_Status status;
+            MPI_Recv(&recv_buff[recvOffset[i]], recvCounts[i], dtype, i, m_iCommTag, m_comm, &status);
+        }
+
+        m_iCommTag++;
+
+        // accumulated to block diagonal matrix
+        for (unsigned int i = 0; i < recv_buff.size(); i++){
+            if (recv_buff[i].getRank() != m_uiRank) {
+                return Error::WRONG_COMMUNICATION;
+            } else {
+                loc_RowId = recv_buff[i].getRowId();
+                loc_ColId = recv_buff[i].getColId();
+                diag_blk[loc_RowId][loc_ColId] += recv_buff[i].getVal();
+            }
+        }
+
+        delete [] sendCounts;
+        delete [] recvCounts;
+        delete [] sendOffset;
+        delete [] recvOffset;
+
         return Error::SUCCESS;
-    }// mat_get_diagonal_block
+    }
 
     template <typename DT, typename  GI, typename LI>
     par::Error aMat<DT,GI,LI>::get_max_dof_per_elem(){
@@ -1214,10 +1428,11 @@ namespace par {
 
         // total number of DoFs to be sent
         const unsigned int total_send = m_uivSendNodeOffset[m_uiSize-1] + m_uivSendNodeCounts[m_uiSize-1];
+
         // total number of DoFs to be received
         const unsigned  int total_recv = m_uivRecvNodeOffset[m_uiSize-1] + m_uivRecvNodeCounts[m_uiSize-1];
 
-        // send data of owned DoFs to corresponding ghost DoFs in other ranks
+        // send data of owned DoFs to corresponding ghost DoFs in all other ranks
         if (total_send > 0){
             // allocate memory for sending buffer
             ctx.allocateSendBuffer(sizeof(DT) * total_send);
@@ -1233,11 +1448,12 @@ namespace par {
                 // send to rank i
                 MPI_Request* req = new MPI_Request();
                 MPI_Isend(&send_buf[m_uivSendNodeOffset[i]], m_uivSendNodeCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
+                // put output request req of sending into the Request list of ctx
                 ctx.getRequestList().push_back(req);
             }
         }
 
-        // received data for ghost DoFs
+        // received data for ghost DoFs from all other ranks
         if (total_recv > 0){
             ctx.allocateRecvBuffer(sizeof(DT) * total_recv);
             DT* recv_buf = (DT*) ctx.getRecvBuffer();
@@ -1245,11 +1461,14 @@ namespace par {
                 if (m_uivRecvNodeCounts[i] == 0) continue;
                 MPI_Request* req = new MPI_Request();
                 MPI_Irecv(&recv_buf[m_uivRecvNodeOffset[i]], m_uivRecvNodeCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
+                // pout output request req of receiving into Request list of ctx
                 ctx.getRequestList().push_back(req);
             }
         }
+        // save the ctx of v for later access
         m_vAsyncCtx.push_back(ctx);
-        m_iCommTag++; // get a different value if we have another ghost_exchange for a different vec
+        // get a different value of tag if we have another ghost_exchange for a different vec
+        m_iCommTag++;
         return Error::SUCCESS;
     } //ghost_receive_begin
 
@@ -1265,18 +1484,24 @@ namespace par {
             }
         }
         AsyncExchangeCtx ctx = m_vAsyncCtx[ctx_index];
-        int num_req = ctx.getRequestList().size();
 
+        // wait for all sends and receives finish
         MPI_Status sts;
+        // total number of sends and receives have issued
+        int num_req = ctx.getRequestList().size();
         for (unsigned int i =0; i < num_req; i++) {
             MPI_Wait(ctx.getRequestList()[i], &sts);
         }
 
-        const unsigned  int total_recv = m_uivRecvNodeOffset[m_uiSize-1] + m_uivRecvNodeCounts[m_uiSize-1];
+        //const unsigned  int total_recv = m_uivRecvNodeOffset[m_uiSize-1] + m_uivRecvNodeCounts[m_uiSize-1];
+
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
+        // copy values of pre-ghost nodes from recv_buf to vec
         std::memcpy(vec, recv_buf, m_uiNumPreGhostNodes*sizeof(DT));
+        // copy values of post-ghost nodes from recv_buf to vec
         std::memcpy(&vec[m_uiNumPreGhostNodes + m_uiNumNodes], &recv_buf[m_uiNumPreGhostNodes], m_uiNumPostGhostNodes*sizeof(DT));
 
+        // free memory of send and receive buffers
         ctx.deAllocateRecvBuffer();
         ctx.deAllocateSendBuffer();
 
@@ -1290,9 +1515,12 @@ namespace par {
 
         AsyncExchangeCtx ctx((const void*)vec);
 
+        // number of DoFs to be received (= number of DoFs that are sent before calling matvec)
         const unsigned  int total_recv = m_uivSendNodeOffset[m_uiSize-1] + m_uivSendNodeCounts[m_uiSize-1];
+        // number of DoFs to be sent (= number of DoFs that are received before calling matvec)
         const unsigned  int total_send = m_uivRecvNodeOffset[m_uiSize-1] + m_uivRecvNodeCounts[m_uiSize-1];
 
+        // receive data for owned DoFs that are sent back to my rank from other ranks (after matvec is done)
         if (total_recv > 0){
             ctx.allocateRecvBuffer(sizeof(DT) * total_recv);
             DT* recv_buf = (DT*) ctx.getRecvBuffer();
@@ -1304,13 +1532,16 @@ namespace par {
             }
         }
 
+        // send data of ghost DoFs to ranks owning the DoFs
         if (total_send > 0){
             ctx.allocateSendBuffer(sizeof(DT) * total_send);
             DT* send_buf = (DT*) ctx.getSendBuffer();
 
+            // pre-ghost DoFs
             for (unsigned int i = 0; i < m_uiNumPreGhostNodes; i++){
                 send_buf[i] = vec[i];
             }
+            // post-ghost DoFs
             for (unsigned int i = m_uiNumPreGhostNodes + m_uiNumNodes; i < m_uiNumPreGhostNodes + m_uiNumNodes + m_uiNumPostGhostNodes; i++){
                 send_buf[i - m_uiNumNodes] = vec[i];
             }
@@ -1345,7 +1576,7 @@ namespace par {
             MPI_Wait(ctx.getRequestList()[i],&sts);
         }
 
-        const unsigned  int total_recv = m_uivSendNodeOffset[m_uiSize-1] + m_uivSendNodeCounts[m_uiSize-1];
+        //const unsigned  int total_recv = m_uivSendNodeOffset[m_uiSize-1] + m_uivSendNodeCounts[m_uiSize-1];
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
 
         for (unsigned int i = 0; i < m_uiSize; i++){
@@ -1551,6 +1782,7 @@ namespace par {
 
         double** aag;
         create_mat(aag, false, 0.0); //allocate, not include ghost nodes
+        //mat_get_diagonal_block_seq(aag);
         mat_get_diagonal_block(aag);
         for (unsigned int i = 0; i < local_size; i++){
             for (unsigned int j = 0; j < local_size; j++){
@@ -1894,6 +2126,35 @@ namespace par {
         }
         return Error::SUCCESS;
     }// set_vector_bc
+
+
+    template <typename DT, typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::mat_get_diagonal_block_seq(DT **diag_blk){
+        //Note: diag_blk is already allocated with size of [m_uiNumNodes][m_uiNumNodes]
+        unsigned int num_nodes;
+        EigenMat e_mat;
+        LI rowID, colID;
+
+        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+            num_nodes = m_uiDofsPerElem[eid];
+            // get element matrix
+            e_mat = m_epMat[eid];
+            for (unsigned int r = 0; r < num_nodes; r++){
+                rowID = m_uipLocalMap[eid][r];
+                if ((rowID >= m_uiNodeLocalBegin) && (rowID < m_uiNodeLocalEnd)){
+                    // only assembling if rowID is owned by my rank
+                    for (unsigned int c = 0; c < num_nodes; c++) {
+                        colID = m_uipLocalMap[eid][c];
+                        if ((colID >= m_uiNodeLocalBegin) && (colID < m_uiNodeLocalEnd)) {
+                            // only assembling if colID is owned by my rank
+                            diag_blk[rowID - m_uiNumPreGhostNodes][colID - m_uiNumPreGhostNodes] += e_mat(r, c);
+                        }
+                    }
+                }
+            }
+        }
+        return Error::SUCCESS;
+    }// mat_get_diagonal_block_seq
 
 
     /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
