@@ -91,7 +91,10 @@ void fe_hex8(double* fe,const double* xe) {
                 for (unsigned int i = 0; i < 8; i++){
                     fe[i] += force * N[i] * jaco * w[2] * w[1] * w[0];
                 }
+                delete [] dN;
+                delete [] N;
             } // k integration
         } // j integration
     } // i integration
+    delete [] xw;
 }

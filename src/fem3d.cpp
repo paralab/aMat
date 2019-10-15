@@ -482,6 +482,7 @@ int main(int argc, char *argv[]) {
     //delete [] etype;
     delete [] kee;
     delete [] local_to_global;
+    delete [] nodes_per_element;
 
     // clean up Pestc vectors
     VecDestroy(&out);

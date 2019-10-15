@@ -1733,6 +1733,10 @@ namespace par {
         ghost_to_local(vv,vvg);
         ghost_to_local(uu,uug);
 
+        delete [] vvg;
+        delete [] uug;
+        delete [] uug_p;
+
         VecRestoreArray(v,&vv);
         VecRestoreArray(u,&uu);
 

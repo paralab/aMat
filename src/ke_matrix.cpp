@@ -212,9 +212,11 @@ void ke_hex8_eig(Matrix<double,8,8> &ke, double *xe){
                         ke(i,j) += (B0[i]*B0[j] + B1[i]*B1[j] + B2[i]*B2[j]) * jaco * w[2] * w[1] * w[0];
                     }
                 }
+                delete [] dN;
             } // k integration
         } // j integration
     } // i integration
+    delete [] xw;
 }
 
 void ke_hex8_eig_test(Eigen::Matrix<double,8,8> &ke, double* xe){
