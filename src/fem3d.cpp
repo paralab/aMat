@@ -39,6 +39,8 @@ int main(int argc, char *argv[]) {
     // User provides: Nex - number of elements (global) in x direction
     //                Ney - number of elements (global) in y direction
     //                Nez - number of elements (global) in z direction
+    //                flag1 - 1 use Eigen, 0 not use Eigen
+    //                flag2 - 1 matrix-free method, 0 matrix-based method
     int rc;
     double zmin, zmax;
 
@@ -60,8 +62,7 @@ int main(int argc, char *argv[]) {
     const bool matFree = atoi(argv[5]);
 
     Matrix<double,8,8>* kee;
-    kee = new Matrix<double,8,8>[AMAT_MAX_EMAT_PER_ELEMENT];// max of twining elements is set to 8
-    unsigned int twin_level = 0; // for this example: no element is twinned
+    kee = new Matrix<double,8,8>[AMAT_MAX_EMAT_PER_ELEMENT];
 
     double* xe = new double[nDim * nNodePerElem];
     double* ke = new double[(nDofPerNode * nNodePerElem) * (nDofPerNode * nNodePerElem)];
@@ -140,43 +141,105 @@ int main(int argc, char *argv[]) {
 
 
     // map from local nodes to global nodes
-    unsigned long int** map;
-    map = new unsigned long int *[nelem];
+    unsigned long int** globalMap;
+    globalMap = new unsigned long int *[nelem];
     for (unsigned int e = 0; e < nelem; e++) {
-        map[e] = new unsigned long int[AMAT_MAX_EMAT_PER_ELEMENT*nNodePerElem];
+        globalMap[e] = new unsigned long int[AMAT_MAX_EMAT_PER_ELEMENT*nNodePerElem];
     }
     for (unsigned k = 0; k < nelem_z; k++){
         for (unsigned j = 0; j < nelem_y; j++){
             for (unsigned i = 0; i < nelem_x; i++){
                 eid = nelem_x * nelem_y * k + nelem_x * j + i;
-                map[eid][0] = (emin*(Nex + 1)*(Ney + 1) + i) + j*(Nex + 1) + k*(Nex + 1)*(Ney + 1);
-                map[eid][1] = map[eid][0] + 1;
-                map[eid][3] = map[eid][0] + (Nex + 1);
-                map[eid][2] = map[eid][3] + 1;
-                map[eid][4] = map[eid][0] + (Nex + 1)*(Ney + 1);
-                map[eid][5] = map[eid][4] + 1;
-                map[eid][7] = map[eid][4] + (Nex + 1);
-                map[eid][6] = map[eid][7] + 1;
+                globalMap[eid][0] = (emin*(Nex + 1)*(Ney + 1) + i) + j*(Nex + 1) + k*(Nex + 1)*(Ney + 1);
+                globalMap[eid][1] = globalMap[eid][0] + 1;
+                globalMap[eid][3] = globalMap[eid][0] + (Nex + 1);
+                globalMap[eid][2] = globalMap[eid][3] + 1;
+                globalMap[eid][4] = globalMap[eid][0] + (Nex + 1)*(Ney + 1);
+                globalMap[eid][5] = globalMap[eid][4] + 1;
+                globalMap[eid][7] = globalMap[eid][4] + (Nex + 1);
+                globalMap[eid][6] = globalMap[eid][7] + 1;
             }
         }
     }
 
-    // local_to_global map
-    unsigned long * local_to_global = new unsigned long[nnode];
-    unsigned long start_global_node;
+    // build localMap from globalMap
+    unsigned int numPreGhostNodes, numPostGhostNodes, numLocalNodes;
+    unsigned long gNodeId;
+    std::vector<unsigned int> preGhostGIds, postGhostGIds;
 
-    printf("rank= %d, {emin, emax}= %d, %d\n", rank, emin, emax);
-    if (rank != 0){
-        start_global_node = nnode_x * nnode_y * (emin+1);
-    } else {
-        start_global_node = nnode_x * nnode_y * emin;
+    unsigned int* nnodeCount = new unsigned int [size];
+    unsigned int* nnodeOffset = new unsigned int [size];
+
+    MPI_Allgather(&nnode, 1, MPI_UNSIGNED, nnodeCount, 1, MPI_UNSIGNED, comm);
+
+    nnodeOffset[0] = 0;
+    for (unsigned int i = 1; i < size; i++){
+        nnodeOffset[i] = nnodeOffset[i-1] + nnodeCount[i-1];
     }
-    printf("rank= %d, start_global_node= %d\n", rank, start_global_node);
+    unsigned int nnode_total;
+    nnode_total = nnodeOffset[size-1] + nnodeCount[size-1];
 
-    for (unsigned int n = 0; n < nnode; n++){
-        local_to_global[n] = start_global_node + n;
+    preGhostGIds.clear();
+    postGhostGIds.clear();
+    for (unsigned int eid = 0; eid < nelem; eid++){
+        for (unsigned int nid = 0; nid < 8; nid++){
+            gNodeId = globalMap[eid][nid];
+            if (gNodeId < nnodeOffset[rank]){
+                preGhostGIds.push_back(gNodeId);
+            } else if (gNodeId >= nnodeOffset[rank] + nnode){
+                postGhostGIds.push_back(gNodeId);
+            }
+        }
+    }
+    // sort in ascending order
+    std::sort(preGhostGIds.begin(), preGhostGIds.end());
+    std::sort(postGhostGIds.begin(), postGhostGIds.end());
+
+    // remove consecutive duplicates and erase all after .end()
+    preGhostGIds.erase(std::unique(preGhostGIds.begin(), preGhostGIds.end()), preGhostGIds.end());
+    postGhostGIds.erase(std::unique(postGhostGIds.begin(), postGhostGIds.end()), postGhostGIds.end());
+
+    numPreGhostNodes = preGhostGIds.size();
+    numPostGhostNodes = postGhostGIds.size();
+    numLocalNodes = numPreGhostNodes + nnode + numPostGhostNodes;
+
+    unsigned int** localMap;
+    localMap = new unsigned int* [nelem];
+    for (unsigned int e = 0; e < nelem; e++){
+        localMap[e] = new unsigned int[8];
     }
 
+    for (unsigned int eid = 0; eid < nelem; eid++){
+        for (unsigned int i = 0; i < 8; i++){
+            gNodeId = globalMap[eid][i];
+            if (gNodeId >= nnodeOffset[rank] &&
+                    gNodeId < (nnodeOffset[rank] + nnode)) {
+                // nid is owned by me
+                localMap[eid][i] = gNodeId - nnodeOffset[rank] + numPreGhostNodes;
+            } else if (gNodeId < nnodeOffset[rank]){
+                // nid is owned by someone before me
+                const unsigned int lookUp = std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), gNodeId) - preGhostGIds.begin();
+                localMap[eid][i] = lookUp;
+            } else if (gNodeId >= (nnodeOffset[rank] + nnode)){
+                // nid is owned by someone after me
+                const unsigned int lookUp = std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), gNodeId) - postGhostGIds.begin();
+                localMap[eid][i] =  numPreGhostNodes + nnode + lookUp;
+            }
+        }
+    }
+
+    // local2GlobalMap map
+    unsigned long * local2GlobalMap = new unsigned long[numLocalNodes];
+    for (unsigned int eid = 0; eid < nelem; eid++){
+        for (unsigned int nid = 0; nid < 8; nid++){
+            gNodeId = globalMap[eid][nid];
+            local2GlobalMap[localMap[eid][nid]] = gNodeId;
+        }
+    }
+
+    unsigned long start_global_node, end_global_node;
+    start_global_node = nnodeOffset[rank];
+    end_global_node = start_global_node + (nnode - 1);
 
     // boundary nodes: bound
     unsigned int** bound_nodes = new unsigned int *[nelem];
@@ -184,40 +247,28 @@ int main(int argc, char *argv[]) {
         bound_nodes[e] = new unsigned int[nNodePerElem];
     }
 
-    // exclusive scan to get the shift for global node/element id =================================
-    unsigned int nelem_scan = 0;
-    unsigned int nnode_scan = 0;
-    unsigned int nnode_total;
-    MPI_Exscan(&nnode, &nnode_scan, 1, MPI_INT, MPI_SUM, comm);
-    MPI_Exscan(&nelem, &nelem_scan, 1, MPI_INT, MPI_SUM, comm);
-    MPI_Allreduce(&nnode, &nnode_total, 1, MPI_INT, MPI_SUM, comm);
-    printf("rank= %d, nnode= %d, nnode_scan= %d, nnode_total= %d\n", rank, nnode, nnode_scan, nnode_total);
 
-    // type of elements =================================
-    //par::ElementType *etype = new par::ElementType[nelem];
-    /*for (unsigned e = 0; e < nelem; e ++){
-        etype[e] = par::ElementType::HEX;
-    }*/
     unsigned int* nodes_per_element = new unsigned int[nelem];
     for (unsigned e = 0; e < nelem; e ++){
         nodes_per_element[e] = 8;
     }
 
-    // declare aMat =================================
-    //par::aMat<double,unsigned long> stMat(matFree, nelem, etype, nnode, comm);
+    // declare aMat object =================================
     par::AMAT_TYPE matType;
     if (matFree){
         matType = par::AMAT_TYPE::MAT_FREE;
     } else {
         matType = par::AMAT_TYPE::PETSC_SPARSE;
     }
+
     par::aMat<double, unsigned long, unsigned int> stMat(matType);
 
     // set communicator
     stMat.set_comm(comm);
 
-    // set map
-    stMat.set_map(map, nodes_per_element, nelem, nnode, nnode_total);
+    // set globalMap
+    stMat.set_map(nelem, localMap, nodes_per_element, numLocalNodes, local2GlobalMap, start_global_node,
+                  end_global_node, nnode_total);
 
 
     // create rhs, solution and exact solution vectors
@@ -230,7 +281,7 @@ int main(int argc, char *argv[]) {
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int n = 0; n < nNodePerElem; n++){
-            nid = map[eid][n];
+            nid = globalMap[eid][n];
 
             // get node coordinates
             x = (double)(nid % (Nex + 1)) * hx;
@@ -280,7 +331,7 @@ int main(int argc, char *argv[]) {
         stMat.petsc_set_element_vec(rhs, eid, fe, ADD_VALUES);
     }
 
-    // set boundary map
+    // set boundary globalMap
     stMat.set_bdr_map(bound_nodes);
 
     //stMat.print_matrix();
@@ -289,14 +340,11 @@ int main(int argc, char *argv[]) {
     delete [] fe;
     delete [] xe;
 
-
     // Pestc begins and completes assembling the global stiffness matrix
     if (!matFree){
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
-
-
 
     // Pestc begins and completes assembling the global load vector
     stMat.petsc_init_vec(rhs);
@@ -318,11 +366,11 @@ int main(int argc, char *argv[]) {
         // write assembled matrix for comparison
         stMat.dump_mat("mat_as.m");
 
-        // build scatter map
+        // build scatter globalMap
         stMat.buildScatterMap();
 
-        // set local to global map
-        stMat.set_Local2Global(local_to_global);
+        // set local to global globalMap
+        stMat.set_Local2Global(local2GlobalMap);
 
         // create m_pMat_matvec and initialize all to zero
         stMat.petsc_create_matrix_matvec();
@@ -361,32 +409,30 @@ int main(int argc, char *argv[]) {
         //stMat.petsc_compare_matrix();
         //stMat.petsc_norm_matrix_difference();
 
-
         // do matvec using Petsc
-//        Vec petsc_dv, petsc_du, petsc_compare;
-//        stMat.petsc_create_vec(petsc_dv, 0.0);
-//        stMat.petsc_create_vec(petsc_du, 1.0);
-//        stMat.petsc_matmult(petsc_du, petsc_dv); //petsc_du = matrix*pets_dv
-//        //stMat.dump_vec("petsc_dv.dat", petsc_dv);//print to file of petsc_dv
-//
-//        // transform dv to pestc vector for easy to compare
-//        stMat.petsc_create_vec(petsc_compare, 0.0);
-//        stMat.transform_to_petsc_vector(dv, petsc_compare, ghosted); // transform dv to pestc-type vector petsc_compare
-//        //stMat.dump_vec("petsc_compare.dat", petsc_compare); // print to file petsc_compare
-//
-//        // subtract two vectors: petsc_compare = petsc_compare - petsc_dv
-//        PetscScalar norm1, alpha1 = -1.0;
-//        VecAXPY(petsc_compare, alpha1, petsc_dv);
-//
-//        // compute the norm of petsc_compare
-//        VecNorm(petsc_compare, NORM_INFINITY, &norm1);
-//
-//        if (rank == 0){
-//            printf("petsc_compare norm= %20.10f\n", norm1);
-//        }
+        Vec petsc_dv, petsc_du, petsc_compare;
+        stMat.petsc_create_vec(petsc_dv, 0.0);
+        stMat.petsc_create_vec(petsc_du, 1.0);
+        stMat.petsc_matmult(petsc_du, petsc_dv); //petsc_du = matrix*pets_dv
+        //stMat.dump_vec("petsc_dv.dat", petsc_dv);//print to file of petsc_dv
+
+        // transform dv to pestc vector for easy to compare
+        stMat.petsc_create_vec(petsc_compare, 0.0);
+        stMat.transform_to_petsc_vector(dv, petsc_compare, ghosted); // transform dv to pestc-type vector petsc_compare
+        //stMat.dump_vec("petsc_compare.dat", petsc_compare); // print to file petsc_compare
+
+        // subtract two vectors: petsc_compare = petsc_compare - petsc_dv
+        PetscScalar norm1, alpha1 = -1.0;
+        VecAXPY(petsc_compare, alpha1, petsc_dv);
+
+        // compute the norm of petsc_compare
+        VecNorm(petsc_compare, NORM_INFINITY, &norm1);
+
+        if (rank == 0){
+            printf("petsc_compare norm= %20.10f\n", norm1);
+        }
 
     }*/
-
 
     // testing the get_diagonal
     /*if (matFree){
@@ -407,7 +453,6 @@ int main(int argc, char *argv[]) {
         stMat.dump_vec("petsc_diag.dat",petsc_diag);
     }*/
 
-
     // modifying stiffness matrix and load vector to apply dirichlet BCs
     if (!matFree){
         stMat.apply_bc_mat();
@@ -418,15 +463,12 @@ int main(int argc, char *argv[]) {
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
-
 
     // Pestc begins and completes assembling the global load vector
     stMat.petsc_init_vec(out);
     stMat.petsc_finalize_vec(out);
-
 
     // compute exact solution for comparison
     double* e_exact = new double[nNodePerElem]; // only for 1 DOF/node
@@ -434,7 +476,7 @@ int main(int argc, char *argv[]) {
     for (unsigned int e = 0; e < nelem; e++) {
         for (unsigned int n = 0; n < nNodePerElem; n++) {
             // global node ID
-            nid = map[e][n];
+            nid = globalMap[e][n];
             // nodal coordinates
             x = (double)(nid % (Nex + 1)) * hx;
             y = (double)((nid % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
@@ -473,15 +515,23 @@ int main(int argc, char *argv[]) {
     }
 
     for (unsigned int eid = 0; eid < nelem; eid++){
-        delete [] map[eid];
+        delete [] globalMap[eid];
         delete [] bound_nodes[eid];
     }
-
-    delete [] map;
+    delete [] globalMap;
     delete [] bound_nodes;
+
+    for (unsigned int eid = 0; eid < nelem; eid++){
+        delete [] localMap[eid];
+    }
+    delete [] localMap;
+
+    delete [] nnodeCount;
+    delete [] nnodeOffset;
+
     //delete [] etype;
     delete [] kee;
-    delete [] local_to_global;
+    delete [] local2GlobalMap;
     delete [] nodes_per_element;
 
     // clean up Pestc vectors

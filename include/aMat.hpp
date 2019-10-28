@@ -56,8 +56,8 @@ namespace par {
             /**@brief creates an async ghost exchange context*/
             AsyncExchangeCtx(const void* var) {
                 m_uiBuffer = (void*)var;
-                m_uiSendBuf = NULL;
-                m_uiRecvBuf = NULL;
+                m_uiSendBuf = nullptr;
+                m_uiRecvBuf = nullptr;
                 m_uiRequests.clear();
             }
             /**@brief allocates send buffer for ghost exchange */
@@ -71,12 +71,12 @@ namespace par {
             /**@brief allocates send buffer for ghost exchange */
             inline void deAllocateSendBuffer() {
                 free(m_uiSendBuf);
-                m_uiSendBuf = NULL;
+                m_uiSendBuf = nullptr;
             }
             /**@brief allocates recv buffer for ghost exchange */
             inline void deAllocateRecvBuffer() {
                 free(m_uiRecvBuf);
-                m_uiRecvBuf = NULL;
+                m_uiRecvBuf = nullptr;
             }
             /**@brief */
             inline void* getSendBuffer() {
@@ -103,7 +103,7 @@ namespace par {
                 /*for(unsigned int i=0;i<m_uiRequests.size();i++)
                  {
                      delete m_uiRequests[i];
-                     m_uiRequests[i]=NULL;
+                     m_uiRequests[i]=nullptr;
                  }
                  m_uiRequests.clear();*/
             }
@@ -207,16 +207,25 @@ namespace par {
         unsigned int m_uiSize;
 
         /**@brief (local) number of DoFs owned by rank */
-        unsigned int m_uiNumNodes;
+        LI m_uiNumNodes;
 
         /**@brief (global) number of DoFs owned by all ranks */
         GI m_ulNumNodesGlobal;
 
+        /**@brief start of global ID of owned dofs, just for assertion */
+        GI m_ulGlobalDofStart_assert;
+
+        /**@brief end of global ID of owned dofs, just for assertion */
+        GI m_ulGlobalDofEnd_assert;
+
+        /**@brief total dofs inclulding ghost, just for assertion */
+        LI m_uiTotalDofs_assert;
+
         /**@brief (local) number of elements owned by rank */
-        unsigned int m_uiNumElems;
+        LI m_uiNumElems;
 
         /**@brief max number of DoFs per element*/
-        unsigned int m_uiMaxNodesPerElem;
+        LI m_uiMaxNodesPerElem;
 
         /**@brief assembled stiffness matrix */
         Mat m_pMat;
@@ -225,16 +234,16 @@ namespace par {
         EigenMat* m_epMat;
 
         /**@brief map from local DoF of element to global DoF: m_ulpMap[eid][local_id]  = global_id */
-        const GI* const * m_ulpMap;
+        GI** m_ulpMap;
 
         /**@brief number of dofs per element */
-        const unsigned int * m_uiDofsPerElem;
+        const LI * m_uiDofsPerElem;
 
         /**@brief map from local DoF of element to local DoF: m_uiMap[eid][element_node]  = local node-ID */
-        unsigned int** m_uipLocalMap;
+        const LI * const*  m_uipLocalMap;
 
         /**@brief map from local DoF of element to boundary flag: 0 = interior dof; 1 = boundary dof */
-        unsigned int** m_uipBdrMap;
+        LI** m_uipBdrMap;
 
         /**@brief number of DoFs owned by each rank, NOT include ghost DoFs */
         std::vector<LI> m_uivLocalNodeCounts;
@@ -255,40 +264,40 @@ namespace par {
         unsigned int m_uiNumPostGhostNodes;
 
         /**@brief number of DoFs sent to each process (size = m_uiSize) */
-        std::vector<unsigned int> m_uivSendNodeCounts;
+        std::vector<LI> m_uivSendNodeCounts;
 
         /**@brief offsets (i.e. exclusive scan) of m_uiSendNodeCounts */
-        std::vector<unsigned int> m_uivSendNodeOffset;
+        std::vector<LI> m_uivSendNodeOffset;
 
         /**@brief local DoF IDs to be sent (size = total number of nodes to be sent */
-        std::vector<unsigned int> m_uivSendNodeIds;
+        std::vector<LI> m_uivSendNodeIds;
 
         /**@brief number of DoFs to be received from each process (size = m_uiSize) */
-        std::vector<unsigned int> m_uivRecvNodeCounts;
+        std::vector<LI> m_uivRecvNodeCounts;
 
         /**@brief offsets (i.e. exclusive scan) of m_uiRecvNodeCounts */
-        std::vector<unsigned int> m_uivRecvNodeOffset;
+        std::vector<LI> m_uivRecvNodeOffset;
 
         /**@brief local node-ID starting of pre-ghost nodes, always = 0 */
-        unsigned int m_uiNodePreGhostBegin;
+        LI m_uiNodePreGhostBegin;
 
         /**@brief local node-ID ending of pre-ghost nodes */
-        unsigned int m_uiNodePreGhostEnd;
+        LI m_uiNodePreGhostEnd;
 
         /**@brief local node-ID starting of nodes owned by me */
-        unsigned int m_uiNodeLocalBegin;
+        LI m_uiNodeLocalBegin;
 
         /**@brief local node-ID ending of nodes owned by me */
-        unsigned int m_uiNodeLocalEnd;
+        LI m_uiNodeLocalEnd;
 
         /**@brief local node-ID starting of post-ghost nodes */
-        unsigned int m_uiNodePostGhostBegin;
+        LI m_uiNodePostGhostBegin;
 
         /**@brief local node-ID ending of post-ghost nodes */
-        unsigned int m_uiNodePostGhostEnd;
+        LI m_uiNodePostGhostEnd;
 
         /**@brief total number of nodes including ghost nodes and nodes owned by me */
-        unsigned int m_uiNumNodesTotal;
+        LI m_uiNumNodesTotal;
 
         /**@brief MPI communication tag*/
         int m_iCommTag;
@@ -318,11 +327,13 @@ namespace par {
         }
 
         /**@brief set mapping from element local node to global node */
-        inline par::Error set_map(const GI* const * map, const unsigned int * dof_per_element, unsigned int n_elems,
-                                  unsigned int n_nodes, unsigned long n_global_nodes);
+        par::Error set_map(const LI n_element_on_rank, const LI* const * element_to_rank_map, const LI * dof_per_element,
+                                  const LI n_all_dofs_on_rank, const GI* rank_to_global_map,
+                                  const GI owned_global_dof_range_begin, const GI owned_global_dof_range_end,
+                                  const GI n_global_dofs);
 
         /**@brief build scatter-gather map (used for communication) and local-to-local map (used for matvec) */
-        par::Error buildScatterMap();// todo buildScatterMap should be in protected
+        par::Error buildScatterMap();
 
         /**@brief set mapping from element local node to global node */
         inline par::Error set_bdr_map(unsigned int** bdr_map){
@@ -347,12 +358,11 @@ namespace par {
             return m_uiDofsPerElem[eid];
         }
         /**@brief return the map from DoF of element to local ID of vector (included ghost DoFs) */
-        inline const unsigned int ** get_e2local_map() const {
-            return (const unsigned int **)m_uipLocalMap;
+        inline const LI * const * get_e2local_map() const {
+            return m_uipLocalMap;
         }
         /**@brief return the map from DoF of element to global ID */
-        inline const GI* const * get_e2global_map() const {
-            //return (const I **)m_ulpMap;
+        inline GI** get_e2global_map() const {
             return m_ulpMap;
         }
         /**@brief return the ID of first pre-ghost DoF */
@@ -381,7 +391,7 @@ namespace par {
         }
         /**@brief return true if DoF "enid" of element "eid" is owned by this rank, false otherwise */
         inline bool is_local_node(unsigned int eid, unsigned int enid) const {
-            const unsigned int nid = m_uipLocalMap[eid][enid];
+            const unsigned int nid = (const unsigned int)m_uipLocalMap[eid][enid];
             if (nid >= m_uiNodeLocalBegin && nid < m_uiNodeLocalEnd)
                 return true;
             else
@@ -598,7 +608,6 @@ namespace par {
     }; // end of class aMat
 
 
-
     // context for aMat
     template <typename DT, typename GI, typename LI>
     struct aMatCTX {
@@ -671,9 +680,9 @@ namespace par {
         delete [] m_epMat;
         if (m_MatType == AMAT_TYPE::MAT_FREE){
             for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-                delete [] m_uipLocalMap[eid]; //delete array
+                delete [] m_ulpMap[eid]; //delete array
             }
-            delete [] m_uipLocalMap;
+            delete [] m_ulpMap;
         } else if (m_MatType == AMAT_TYPE::PETSC_SPARSE){
             //MatDestroy(&m_pMat);
         }
@@ -682,57 +691,56 @@ namespace par {
 
 
     template <typename DT,typename GI, typename LI>
-    inline par::Error aMat<DT,GI,LI>::set_map(const GI* const * map, const unsigned int * dofs_per_element, unsigned int n_elems,
-                              unsigned int n_nodes, unsigned long n_global_nodes){
-        // set local-to-global dof map
-        m_ulpMap = map;
-        // set number of dofs per element
-        m_uiDofsPerElem = dofs_per_element;
-        // set mesh size
-        m_uiNumElems = n_elems;
-        m_uiNumNodes = n_nodes;
-        m_ulNumNodesGlobal = n_global_nodes;
-        // verify whether n_global_nodes is correct
-        unsigned long nl = m_uiNumNodes;
-        unsigned long ng;
-        MPI_Allreduce(&nl, &ng, 1, MPI_LONG, MPI_SUM, m_comm);
-        assert(n_global_nodes == ng);
+    par::Error aMat<DT,GI,LI>::set_map(const LI n_element_on_rank, const LI* const * element_to_rank_map, const LI * dof_per_element,
+                              const LI n_all_dofs_on_rank, const GI* rank_to_global_map,
+                              const GI owned_global_dof_range_begin, const GI owned_global_dof_range_end,
+                              const GI n_global_dofs){
 
-        // allocate matrix or matrix free
+        // This is number of owned element
+        m_uiNumElems = n_element_on_rank;
+        m_uiNumNodes = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
+
+        m_ulNumNodesGlobal = n_global_dofs; // curently this is not used
+        m_ulGlobalDofStart_assert = owned_global_dof_range_begin; // this will be used for assertion in buildScatterMap
+        m_ulGlobalDofEnd_assert = owned_global_dof_range_end; // this will be used for assertion in buildScatterMap
+        m_uiTotalDofs_assert = n_all_dofs_on_rank; // this will be used for assertion in buildScatterMap
+
+        m_uiDofsPerElem = dof_per_element; // pointing to
+
+        m_ulpMap = new GI* [m_uiNumElems];
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
+        }
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (unsigned int nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
+                m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
+            }
+        }
+
         if (m_MatType == AMAT_TYPE::PETSC_SPARSE){
             MatCreate(m_comm, &m_pMat);
             MatSetSizes(m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE);
             if(m_uiSize > 1) {
-                // initialize matrix
                 MatSetType(m_pMat, MATMPIAIJ);
-                //MatMPIAIJSetPreallocation(m_pMat, 30*m_uiNumDOFperNode , PETSC_NULL, 30*m_uiNumDOFperNode , PETSC_NULL);
                 MatMPIAIJSetPreallocation(m_pMat, 30 , PETSC_NULL, 30 , PETSC_NULL);
             } else {
                 MatSetType(m_pMat, MATSEQAIJ);
-                //MatSeqAIJSetPreallocation(m_pMat, 30*m_uiNumDOFperNode, PETSC_NULL);
                 MatSeqAIJSetPreallocation(m_pMat, 30, PETSC_NULL);
             }
             // this will disable on preallocation errors (but not good for performance)
             MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
 
         } else if (m_MatType == AMAT_TYPE::MAT_FREE){
-            // element matrices
             if (m_epMat != nullptr){
                 delete [] m_epMat;
                 m_epMat = nullptr;
             }
             m_epMat = new EigenMat[m_uiNumElems];
 
-            // local map (for communication)
-            m_uipLocalMap = new unsigned int*[m_uiNumElems];
-            for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-                m_uipLocalMap[eid] = new unsigned int[m_uiDofsPerElem[eid]];
-            }
+            m_uipLocalMap = element_to_rank_map;
 
-            // build scatter map
             buildScatterMap();
 
-            // compute max dof-per-element (among all elements)
             get_max_dof_per_elem();
 
         } else {
@@ -740,7 +748,8 @@ namespace par {
             return Error::UNKNOWN_MAT_TYPE;
         }
         return Error::SUCCESS;
-    }
+
+    } //set_map
 
     // build scatter map
     template <typename DT,typename GI, typename LI>
@@ -749,7 +758,7 @@ namespace par {
            Currently we do not account for twin elements
            "node" is actually "dof" because the map is in terms of dofs */
 
-        if (m_ulpMap == NULL) return Error::NULL_L2G_MAP;
+        if (m_ulpMap == nullptr) return Error::NULL_L2G_MAP;
 
         m_uivLocalNodeCounts.clear();
         m_uivLocalElementCounts.clear();
@@ -765,7 +774,8 @@ namespace par {
         MPI_Allgather(&m_uiNumNodes, 1, MPI_INT, &(*(m_uivLocalNodeCounts.begin())), 1, MPI_INT, m_comm);
         MPI_Allgather(&m_uiNumElems, 1, MPI_INT, &(*(m_uivLocalElementCounts.begin())), 1, MPI_INT, m_comm);
 
-        // scan local counts
+        // scan local counts to determine owned-range:
+        // range of global ID of owned dofs = [m_uivLocalNodeScan[m_uiRank], m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)
         m_uivLocalNodeScan[0] = 0;
         m_uivLocalElementScan[0] = 0;
         for (unsigned int p = 1; p < m_uiSize; p++) {
@@ -773,21 +783,25 @@ namespace par {
             m_uivLocalElementScan[p] = m_uivLocalElementScan[p-1] + m_uivLocalElementCounts[p-1];
         }
 
-        // nodes are not owned by me: stored in pre or post lists
+        // dofs are not owned by me: stored in pre or post lists
         std::vector<GI> preGhostGIds;
         std::vector<GI> postGhostGIds;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++) {
             unsigned int num_nodes = m_uiDofsPerElem[eid];
             for (unsigned int i = 0; i < num_nodes; i++) {
-                const unsigned  int nid = m_ulpMap[eid][i];
+                // global ID
+                const unsigned int nid = m_ulpMap[eid][i];
                 if (nid < m_uivLocalNodeScan[m_uiRank]) {
-                    // pre-ghost global ID nodes
+                    // dofs with global ID < owned-range --> pre-ghost dofs
+                    assert( nid < m_ulGlobalDofStart_assert);
                     preGhostGIds.push_back(nid);
                 } else if (nid >= (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)){
-                    // post-ghost global ID nodes
+                    // dofs with global ID > owned-range --> post-ghost dofs
+                    assert( nid > m_ulGlobalDofEnd_assert);
                     postGhostGIds.push_back(nid);
                 } else {
                     assert ((nid >= m_uivLocalNodeScan[m_uiRank])  && (nid< (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)));
+                    assert((nid >= m_ulGlobalDofStart_assert) && (nid <= m_ulGlobalDofEnd_assert));
                 }
             }
         }
@@ -800,26 +814,27 @@ namespace par {
         preGhostGIds.erase(std::unique(preGhostGIds.begin(), preGhostGIds.end()), preGhostGIds.end());
         postGhostGIds.erase(std::unique(postGhostGIds.begin(), postGhostGIds.end()), postGhostGIds.end());
 
-        // number of ghost nodes
+        // number of ghost dofs
         m_uiNumPreGhostNodes = preGhostGIds.size();
         m_uiNumPostGhostNodes = postGhostGIds.size();
 
-        // index of pre-ghost nodes
+        // range of local ID of pre-ghost dofs = [0, m_uiNodePreGhostEnd)
         m_uiNodePreGhostBegin = 0;
         m_uiNodePreGhostEnd = m_uiNumPreGhostNodes;
 
-        // index of owned nodes
+        // range of local ID of owned dofs = [m_uiNodeLocalBegin, m_uiNodeLocalEnd)
         m_uiNodeLocalBegin = m_uiNodePreGhostEnd;
         m_uiNodeLocalEnd = m_uiNodeLocalBegin + m_uiNumNodes;
 
-        // index of post-ghost nodes
+        // range of local ID of post-ghost dofs = [m_uiNodePostGhostBegin, m_uiNodePostGhostEnd)
         m_uiNodePostGhostBegin = m_uiNodeLocalEnd;
         m_uiNodePostGhostEnd = m_uiNodePostGhostBegin + m_uiNumPostGhostNodes;
 
-        // total number of nodes including ghost nodes
+        // total number of dofs including ghost dofs
         m_uiNumNodesTotal = m_uiNumNodes + m_uiNumPreGhostNodes + m_uiNumPostGhostNodes;
+        assert( m_uiNumNodesTotal == m_uiTotalDofs_assert);
 
-        // owners of pre and post ghost nodes
+        // determine owners of pre- and post-ghost dofs
         std::vector<unsigned int> preGhostOwner;
         std::vector<unsigned int> postGhostOwner;
         preGhostOwner.resize(m_uiNumPreGhostNodes);
@@ -827,24 +842,22 @@ namespace par {
 
         // pre-ghost
         unsigned int pcount = 0; // processor count, start from 0
-        unsigned int gcount = 0; // node id count
+        unsigned int gcount = 0; // global ID count
         while (gcount < m_uiNumPreGhostNodes) {
+            // global ID of pre-ghost dof gcount
             unsigned int nid = preGhostGIds[gcount];
             while ((pcount < m_uiRank) &&
                    (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount]))))) {
-                // nid NOT owned by pcount
+                // nid is not in the range of global ID of dofs owned by pcount
                 pcount++;
             }
+            // check if nid is really in the range of global ID of dofs owned by pcount
             if (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount])))) {
                 std::cout << "m_uiRank: " << m_uiRank << " pre ghost gid : " << nid << " was not found in any processor" << std::endl;
                 return Error::GHOST_NODE_NOT_FOUND;
             }
-            while ((gcount < m_uiNumPreGhostNodes) &&
-                   (((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount]))))) {
-                // nid owned by pcount
-                preGhostOwner[gcount] = pcount;
-                gcount++;
-            }
+            preGhostOwner[gcount] = pcount;
+            gcount++;
         }
 
         // post-ghost
@@ -852,22 +865,20 @@ namespace par {
         gcount = 0;
         while(gcount < m_uiNumPostGhostNodes)
         {
+            // global ID of post-ghost dof gcount
             unsigned int nid = postGhostGIds[gcount];
             while ((pcount < m_uiSize) &&
                    (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount]))))){
-                // nid is NOT owned by pcount
+                // nid is not the range of global ID of dofs owned by pcount
                 pcount++;
             }
+            // check if nid is really in the range of global ID of dofs owned by pcount
             if (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount])))) {
                 std::cout << "m_uiRank: " << m_uiRank << " post ghost gid : " << nid << " was not found in any processor" << std::endl;
                 return Error::GHOST_NODE_NOT_FOUND;
             }
-            while ((gcount < m_uiNumPostGhostNodes) &&
-                   (((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount]))))){
-                // nid is owned by pcount
-                postGhostOwner[gcount] = pcount;
-                gcount++;
-            }
+            postGhostOwner[gcount] = pcount;
+            gcount++;
         }
 
         unsigned int * sendCounts = new unsigned int[m_uiSize];
@@ -875,17 +886,19 @@ namespace par {
         unsigned int * sendOffset = new unsigned int[m_uiSize];
         unsigned int * recvOffset = new unsigned int[m_uiSize];
 
-        // Note: the send here is just for use in MPI_Alltoallv, it is NOT the sends in communications between processors later
+        // Note: the send here is just for use in MPI_Alltoallv, it is NOT the send in communications between processors later
         for (unsigned int i = 0; i < m_uiSize; i++) {
-            // many of these will be zero, only none zero for processors that own my ghost nodes
+            // many of these will be zero, only non zero for processors that own my ghost nodes
             sendCounts[i] = 0;
         }
+
+        // count number of pre-ghost dofs to corresponding owners
         for (unsigned int i = 0; i < m_uiNumPreGhostNodes; i++) {
-            // accumulate number of nodes that owned by preGhostOwner[i]
             sendCounts[preGhostOwner[i]] += 1;
         }
+
+        // count number of post-ghost dofs to corresponding owners
         for (unsigned int i = 0; i < m_uiNumPostGhostNodes; i++) {
-            // accumulate number of nodes that owned by postGhostOwner[i]
             sendCounts[postGhostOwner[i]] += 1;
         }
 
@@ -903,12 +916,12 @@ namespace par {
         std::vector<GI> sendBuf;
         std::vector<GI> recvBuf;
 
-        // count of total send
+        // total elements to be sent => global ID of ghost dofs that are owned by destination rank
         sendBuf.resize(sendOffset[m_uiSize-1] + sendCounts[m_uiSize-1]);
-        // count of total recv
+        // total elements to be received => global ID of owned dofs that are ghost in source rank
         recvBuf.resize(recvOffset[m_uiSize-1] + recvCounts[m_uiSize-1]);
 
-        // put all sending data to sendBuf
+        // put global ID of pre- and post-ghost dofs to sendBuf
         for(unsigned int i = 0; i < m_uiNumPreGhostNodes; i++)
             sendBuf[i] = preGhostGIds[i];
         for(unsigned int i = 0; i < m_uiNumPostGhostNodes; i++)
@@ -921,27 +934,30 @@ namespace par {
             recvOffset[i] *= sizeof(GI);
         }
 
+        // exchange the global ID of ghost dofs with ranks who own them
         MPI_Alltoallv(&(*(sendBuf.begin())), (int*)sendCounts, (int*)sendOffset, MPI_BYTE,
                       &(*(recvBuf.begin())), (int*)recvCounts, (int*)recvOffset, MPI_BYTE, m_comm);
 
-        for(unsigned int i = 0; i < m_uiSize; i++)
-        {
+        for(unsigned int i = 0; i < m_uiSize; i++) {
             sendCounts[i] /= sizeof(GI);
             sendOffset[i] /= sizeof(GI);
             recvCounts[i] /= sizeof(GI);
             recvOffset[i] /= sizeof(GI);
         }
 
-        // build the scatter map.
+        // compute local ID of owned dofs i (i = 0..recBuf.size()) that need to be send data to where i is a ghost dof
         m_uivSendNodeIds.resize(recvBuf.size());
 
-        // local node IDs that need to be sent out
         for(unsigned int i = 0; i < recvBuf.size(); i++) {
+            // global ID of recvBuf[i]
             const unsigned int gid = recvBuf[i];
+            // check if gid is really owned by my rank (if not then something goes wrong with sendBuf above
             if (gid < m_uivLocalNodeScan[m_uiRank]  || gid >=  (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)) {
                 std::cout<<" m_uiRank: "<<m_uiRank<< "scatter map error : "<<__func__<<std::endl;
                 par::Error::GHOST_NODE_NOT_FOUND;
             }
+            assert((gid >= m_ulGlobalDofStart_assert) && (gid <= m_ulGlobalDofEnd_assert));
+            // local ID
             m_uivSendNodeIds[i] = m_uiNumPreGhostNodes + (gid - m_uivLocalNodeScan[m_uiRank]);
         }
 
@@ -957,7 +973,7 @@ namespace par {
             m_uivRecvNodeOffset[i] = sendOffset[i];
         }
 
-        // build local map m_uipLocalMap[eid][nid]
+        // assert local map m_uipLocalMap[eid][nid]
         // structure displ vector = [0, ..., (m_uiNumPreGhostNodes - 1), --> ghost nodes owned by someone before me
         //    m_uiNumPreGhostNodes, ..., (m_uiNumPreGhostNodes + m_uiNumNodes - 1), --> nodes owned by me
         //    (m_uiNumPreGhostNodes + m_uiNumNodes), ..., (m_uiNumPreGhostNodes + m_uiNumNodes + m_uiNumPostGhostNodes - 1)] --> nodes owned by someone after me
@@ -969,15 +985,15 @@ namespace par {
                 if (nid >= m_uivLocalNodeScan[m_uiRank] &&
                     nid < (m_uivLocalNodeScan[m_uiRank] + m_uivLocalNodeCounts[m_uiRank])) {
                     // nid is owned by me
-                    m_uipLocalMap[eid][i] = nid - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+                    assert(m_uipLocalMap[eid][i] == nid - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes);
                 } else if (nid < m_uivLocalNodeScan[m_uiRank]){
                     // nid is owned by someone before me
                     const unsigned int lookUp = std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), nid) - preGhostGIds.begin();
-                    m_uipLocalMap[eid][i] = lookUp;
+                    assert(m_uipLocalMap[eid][i] == lookUp);
                 } else if (nid >= (m_uivLocalNodeScan[m_uiRank] + m_uivLocalNodeCounts[m_uiRank])){
                     // nid is owned by someone after me
                     const unsigned int lookUp = std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), nid) - postGhostGIds.begin();
-                    m_uipLocalMap[eid][i] =  (m_uiNumPreGhostNodes + m_uiNumNodes) + lookUp;
+                    assert(m_uipLocalMap[eid][i] ==  (m_uiNumPreGhostNodes + m_uiNumNodes) + lookUp);
                 }
             }
         }
@@ -1397,24 +1413,24 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::destroy_vec(DT* &vec) {
-        if (vec != NULL) {
+        if (vec != nullptr) {
             delete[] vec;
-            vec = NULL;
+            vec = nullptr;
         }
         return Error::SUCCESS;
     }
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::destroy_mat(DT** &mat, const unsigned int nrow){
-        if (mat != NULL){
+        if (mat != nullptr){
             for (unsigned int i = 0; i < nrow; i++){
-                if (mat[i] != NULL){
+                if (mat[i] != nullptr){
                     delete[](mat[i]);
-                    mat[i] = NULL;
+                    mat[i] = nullptr;
                 }
             }
             delete[](mat);
-            mat = NULL;
+            mat = nullptr;
         }
         return Error::SUCCESS;
     }
@@ -1702,7 +1718,7 @@ namespace par {
         // get local number of elements (m_uiNumElems)
         unsigned int nelem = get_local_num_elements();
         // get local map (m_uipLocalMap)
-        const unsigned int ** e2n_local = get_e2local_map();
+        const LI * const * e2n_local = get_e2local_map();
 
         // save value of U_c, then make U_c = 0
         for (unsigned int eid = 0; eid < nelem; eid++){
@@ -1781,7 +1797,7 @@ namespace par {
         Mat B;
 
         // B is sequential dense matrix
-        MatCreateSeqDense(PETSC_COMM_SELF,local_size,local_size,NULL,&B);
+        MatCreateSeqDense(PETSC_COMM_SELF,local_size,local_size,nullptr,&B);
         MatDenseGetArray(B, &aa);
 
         double** aag;
@@ -2226,7 +2242,7 @@ namespace par {
             MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
         } // r
 
-        return Error::SUCCESS; // fixme
+        return Error::SUCCESS;
     } // petsc_set_element_matrix
 
 } // end of namespace par
