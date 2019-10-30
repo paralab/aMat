@@ -188,6 +188,8 @@ namespace par {
         }
     }; // class MPI_datatype_matrecord
 
+
+
     // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
     template <typename DT, typename GI, typename LI>
     class aMat {
@@ -327,10 +329,13 @@ namespace par {
         }
 
         /**@brief set mapping from element local node to global node */
-        par::Error set_map(const LI n_element_on_rank, const LI* const * element_to_rank_map, const LI * dof_per_element,
+        par::Error set_map(const LI n_elements_on_rank, const LI* const * element_to_rank_map, const LI * dofs_per_element,
                                   const LI n_all_dofs_on_rank, const GI* rank_to_global_map,
                                   const GI owned_global_dof_range_begin, const GI owned_global_dof_range_end,
                                   const GI n_global_dofs);
+
+        /**@brief update map when cracks created */
+        par::Error update_map( unsigned int n_elems, unsigned int n_nodes, unsigned long n_global_nodes );
 
         /**@brief build scatter-gather map (used for communication) and local-to-local map (used for matvec) */
         par::Error buildScatterMap();
@@ -421,9 +426,8 @@ namespace par {
         /**@brief allocate memory for a PETSc vector "vec", initialized by alpha */
         par::Error petsc_create_vec(Vec &vec, PetscScalar alpha = 0.0) const;
         /**@brief assembly global load vector */
-        par::Error petsc_set_element_vec(Vec vec, unsigned int eid, DT* e_vec, InsertMode mode = ADD_VALUES);
+        par::Error petsc_set_element_vec(Vec vec, LI eid, DT* e_vec, InsertMode mode = ADD_VALUES);
         /**@brief assembly element matrix to structural matrix (for matrix-based method) */
-        par::Error petsc_set_element_matrix(unsigned int eid, DT *e_mat, InsertMode mode = ADD_VALUES);
         par::Error petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, InsertMode = ADD_VALUES);
         /**@brief: write PETSc matrix "m_pMat" to filename "fmat" */
         par::Error dump_mat(const char* fmat) const;
@@ -442,8 +446,6 @@ namespace par {
         par::Error local_to_ghost(DT*  gVec, const DT* local);
         /**@brief copy gVec (size including ghost DoFs) to local (size of local DoFs) */
         par::Error ghost_to_local(DT* local, const DT* gVec);
-        /**@brief copy gMat (size including ghost DoFs) to lMat (size of local DoFs) */
-        par::Error ghost_to_local_mat(DT**  lMat, DT** gMat);
         /**@brief copy element matrix and store in m_mats, used for matrix-free method */
         par::Error copy_element_matrix(unsigned int eid, EigenMat e_mat);
         /**@brief get diagonal terms of structure matrix by accumulating diagonal of element matrices */
@@ -595,6 +597,13 @@ namespace par {
         /**@brief get diagonal block matrix for sequential code (no communication among ranks) */
         par::Error mat_get_diagonal_block_seq(DT **diag_blk);
 
+        /**@brief copy gMat (size including ghost DoFs) to lMat (size of local DoFs) */
+        par::Error ghost_to_local_mat(DT**  lMat, DT** gMat);
+
+        /**@brief assemble element matrix to global matrix for matrix-based, not using Eigen */
+        par::Error petsc_set_element_matrix(unsigned int eid, DT *e_mat, InsertMode mode = ADD_VALUES);
+
+
 
         /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
         /**@brief assembly element matrix to structure matrix, multiple levels of twining
@@ -602,7 +611,6 @@ namespace par {
          * @param[in] twin_level: level of twinning (0 no crack, 1 one crack, 2 two cracks, 3 three cracks)
          * */
         par::Error set_element_matrices(unsigned int eid, EigenMat* e_mat, unsigned int twin_level, InsertMode mode=ADD_VALUES);
-
         par::Error petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, unsigned int e_mat_id, InsertMode mode=ADD_VALUES);
 
     }; // end of class aMat
@@ -691,13 +699,13 @@ namespace par {
 
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_map(const LI n_element_on_rank, const LI* const * element_to_rank_map, const LI * dof_per_element,
+    par::Error aMat<DT,GI,LI>::set_map(const LI n_elements_on_rank, const LI* const * element_to_rank_map, const LI * dofs_per_element,
                               const LI n_all_dofs_on_rank, const GI* rank_to_global_map,
                               const GI owned_global_dof_range_begin, const GI owned_global_dof_range_end,
                               const GI n_global_dofs){
 
         // This is number of owned element
-        m_uiNumElems = n_element_on_rank;
+        m_uiNumElems = n_elements_on_rank;
         m_uiNumNodes = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
         m_ulNumNodesGlobal = n_global_dofs; // curently this is not used
@@ -705,7 +713,7 @@ namespace par {
         m_ulGlobalDofEnd_assert = owned_global_dof_range_end; // this will be used for assertion in buildScatterMap
         m_uiTotalDofs_assert = n_all_dofs_on_rank; // this will be used for assertion in buildScatterMap
 
-        m_uiDofsPerElem = dof_per_element; // pointing to
+        m_uiDofsPerElem = dofs_per_element; // pointing to
 
         m_ulpMap = new GI* [m_uiNumElems];
         for (LI eid = 0; eid < m_uiNumElems; eid++){
@@ -750,6 +758,64 @@ namespace par {
         return Error::SUCCESS;
 
     } //set_map
+
+
+    template <typename DT, typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::update_map( unsigned int n_elems, unsigned int n_nodes, unsigned long n_global_nodes ) {
+
+        m_uiNumElems = n_elems;
+        m_uiNumNodes = n_nodes;
+        m_ulNumNodesGlobal = n_global_nodes;
+
+        unsigned long nl = m_uiNumNodes;
+        unsigned long ng;
+        MPI_Allreduce( &nl, &ng, 1, MPI_LONG, MPI_SUM, m_comm );
+        assert( n_global_nodes == ng );
+
+        // allocate matrix
+        if( m_MatType == AMAT_TYPE::PETSC_SPARSE ){
+
+            if( m_pMat != nullptr )
+            {
+                MatDestroy( &m_pMat );
+                m_pMat = nullptr;
+            }
+
+            MatCreate( m_comm, &m_pMat );
+            MatSetSizes( m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE );
+            if (m_uiSize > 1) {
+                // initialize matrix
+                MatSetType(m_pMat, MATMPIAIJ);
+                MatMPIAIJSetPreallocation(m_pMat, 30 , PETSC_NULL, 30 , PETSC_NULL);
+            }
+            else {
+                MatSetType(m_pMat, MATSEQAIJ);
+                MatSeqAIJSetPreallocation(m_pMat, 30, PETSC_NULL);
+            }
+        }
+        else if (m_MatType == AMAT_TYPE::MAT_FREE){
+            // copies of element matrices
+
+            if(m_epMat != nullptr)
+            {
+                delete [] m_epMat;
+                m_epMat = nullptr;
+            }
+
+            m_epMat = new EigenMat[ m_uiNumElems ];
+            // element-to-structure map including ghost dofs
+            m_uipLocalMap = new unsigned int*[m_uiNumElems];
+            for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+                m_uipLocalMap[eid] = new unsigned int[ m_uiDofsPerElem[eid] ];
+            }
+            // build scatter map
+            buildScatterMap();
+        }
+
+        return Error::SUCCESS;
+
+    }// update_map
+
 
     // build scatter map
     template <typename DT,typename GI, typename LI>
@@ -1021,7 +1087,7 @@ namespace par {
     } // petsc_create_vec
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, unsigned int eid, DT *e_vec, InsertMode mode){
+    par::Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, LI eid, DT *e_vec, InsertMode mode){
         unsigned int num_nodes = m_uiDofsPerElem[eid];
         PetscScalar value;
         PetscInt rowId;
@@ -1195,15 +1261,6 @@ namespace par {
         return Error::SUCCESS;
     } // ghost_to_local
 
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_to_local_mat(DT** lMat, DT** gMat){
-        for (unsigned int r = 0; r < m_uiNumNodes; r++){
-            for (unsigned int c = 0; c < m_uiNumNodes; c++){
-                lMat[r][c] = gMat[r + m_uiNumPreGhostNodes][c + m_uiNumPreGhostNodes];
-            }
-        }
-        return Error::SUCCESS;
-    }// ghost_to_local_mat
 
     template <typename DT,typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::copy_element_matrix(unsigned int eid, EigenMat e_mat) {
@@ -1230,7 +1287,7 @@ namespace par {
     par::Error aMat<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
         unsigned int num_nodes;
         EigenMat e_mat;
-        GI rowID;
+        LI rowID;
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
             num_nodes = m_uiDofsPerElem[eid];
@@ -2176,6 +2233,15 @@ namespace par {
         return Error::SUCCESS;
     }// mat_get_diagonal_block_seq
 
+    template <typename DT, typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::ghost_to_local_mat(DT** lMat, DT** gMat){
+        for (unsigned int r = 0; r < m_uiNumNodes; r++){
+            for (unsigned int c = 0; c < m_uiNumNodes; c++){
+                lMat[r][c] = gMat[r + m_uiNumPreGhostNodes][c + m_uiNumPreGhostNodes];
+            }
+        }
+        return Error::SUCCESS;
+    }// ghost_to_local_mat
 
     /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
     // e_mat is an array of EigenMat with the size dictated by twin_level (e.g. twin_level = 1, then size of e_mat is 2)
