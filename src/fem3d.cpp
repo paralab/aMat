@@ -14,33 +14,62 @@
  */
 
 #include <iostream>
-#include <mpi.h>
-#include <omp.h>
+
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
 
+#include <omp.h>
+#include <mpi.h>
+
 #ifdef BUILD_WITH_PETSC
-    #include "petsc.h"
+#    include <petsc.h>
 #endif
+
+#include <Eigen/Dense>
 
 #include "shfunction.hpp"
 #include "ke_matrix.hpp"
 #include "me_matrix.hpp"
 #include "fe_vector.hpp"
 #include "aMat.hpp"
-#include "Dense"
 
 using Eigen::MatrixXd;
 using Eigen::Matrix;
 using Eigen::VectorXd;
 
-int main(int argc, char *argv[]) {
+using namespace std;
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void
+usage()
+{
+    cout << "\n";
+    cout << "Usage:\n";
+    cout << "  fem3d <Nex> <Ney> <Nez> <use eigen> <use matrix-free>\n";
+    cout << "\n";
+    cout << "     Nex: Number of elements in X\n";
+    cout << "     Ney: Number of elements in y\n";
+    cout << "     Nez: Number of elements in z\n";
+    cout << "     use eigen: 1 => yes\n";
+    cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
+    exit( 0) ;        
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
+int main( int argc, char *argv[] ) {
     // User provides: Nex - number of elements (global) in x direction
     //                Ney - number of elements (global) in y direction
     //                Nez - number of elements (global) in z direction
     //                flag1 - 1 use Eigen, 0 not use Eigen
     //                flag2 - 1 matrix-free method, 0 matrix-based method
+
+    if( argc < 5 ) {
+        usage();
+    }
+
     int rc;
     double zmin, zmax;
 
@@ -86,13 +115,15 @@ int main(int argc, char *argv[]) {
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
 
-    if(!rank)std::cout<<"============ parameters read  ======================="<<std::endl;
-    if(!rank)std::cout<<"\t\tNex : "<<Nex<<" Ney: "<<Ney<<" Nez: "<<Nez<<std::endl;
-    if(!rank && useEigen)std::cout<<"\t\tuseEigen: "<<useEigen<<std::endl;
-    if(!rank && matFree)std::cout<<"\t\tmatrix free: "<<matFree<<std::endl;
-    if(!rank)std::cout<<"====================================================="<<std::endl;
+    if(!rank) {
+        std::cout<<"============ parameters read  =======================\n"; 
+        std::cout<<"\t\tNex : "<<Nex<<" Ney: "<<Ney<<" Nez: "<<Nez<< "\n";
+    }
+    if(!rank && useEigen) { std::cout<<"\t\tuseEigen: "<<useEigen << "\n"; }
+    if(!rank && matFree)  { std::cout<<"\t\tmatrix free: "<<matFree << "\n"; }
+    if(!rank) { std::cout<<"=====================================================\n"; }
 
-    if (rank == 0) {
+    if( rank == 0 ) {
         if (size > Nez) {
             printf("The number of processes must be less than or equal Nez, program stops.\n");
             MPI_Abort(comm, rc);

@@ -9,10 +9,14 @@
  * @date 2018-12-07
  */
 #include <iostream>
+
+#include <math.h>
+
+#include <Eigen/Dense>
+
 #include "shfunction.hpp"
 #include "ke_matrix.hpp"
-#include <math.h>
-#include "Dense"
+
 using Eigen::Matrix;
 
 /**

@@ -1,7 +1,7 @@
 /**
  * @file aMat.hpp
- * @author Hari Sundar   hsundar@gmail.com
- * @author Han Duc Tran  hantran@cs.utah.edu
+ * @author Hari Sundar      hsundar@gmail.com
+ * @author Han Duc Tran     hantran@cs.utah.edu
  * @author Milinda Fernando milinda@cs.utah.edu
  *
  * @brief A sparse matrix class for adaptive finite elements. 
@@ -12,103 +12,113 @@
  * @copyright Copyright (c) 2018 School of Computing, University of Utah
  * 
  */
-#include <vector>
-#include "petsc.h"
-#include "petscvec.h"
-#include "petscmat.h"
-#include <mpi.h>
-#include <petscksp.h>
-#include "Dense"
 
-#define AMAT_MAX_CRACK_LEVEL 0 // number of cracks allowed in 1 element
+#include <Eigen/Dense>
+
+#include <mpi.h>
+
+#include <petsc.h>
+#include <petscvec.h>
+#include <petscmat.h>
+#include <petscksp.h>
+
+#include <vector>
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+#define AMAT_MAX_CRACK_LEVEL      0                          // number of cracks allowed in 1 element
 #define AMAT_MAX_EMAT_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL) // max number of cracked elements on each element
 
+//////////////////////////////////////////////////////////////////////////////////////////////
+
 namespace par {
+
     enum class AMAT_TYPE { PETSC_SPARSE, MAT_FREE };
-    enum class Error {SUCCESS,
-                      INDEX_OUT_OF_BOUNDS,
-                      UNKNOWN_ELEMENT_TYPE,
-                      UNKNOWN_ELEMENT_STATUS,
-                      NULL_L2G_MAP,
-                      GHOST_NODE_NOT_FOUND,
-                      UNKNOWN_MAT_TYPE,
-                      WRONG_COMMUNICATION
-    };
 
+    enum class Error { SUCCESS,
+                       INDEX_OUT_OF_BOUNDS,
+                       UNKNOWN_ELEMENT_TYPE,
+                       UNKNOWN_ELEMENT_STATUS,
+                       NULL_L2G_MAP,
+                       GHOST_NODE_NOT_FOUND,
+                       UNKNOWN_MAT_TYPE,
+                       WRONG_COMMUNICATION };
 
-    // AsyncExchangeCtx is downloaded from Dendro-5.0 with permission from the author (Milinda Fernando)
+    //////////////////////////////////////////////////////////////////////////////////////////////
+    // Class AsyncExchangeCtx is downloaded from Dendro-5.0 with permission from the author (Milinda Fernando)
     // Dendro-5.0 is written by Milinda Fernando and Hari Sundar;
     class AsyncExchangeCtx {
 
-        private:
+    private:
 
-            /** pointer to the variable which perform the ghost exchange */
-            void* m_uiBuffer;
-            /** pointer to the send buffer*/
-            void* m_uiSendBuf;
-            /** pointer to the receive buffer*/
-            void* m_uiRecvBuf;
-            /** list of request*/
-            std::vector<MPI_Request*> m_uiRequests;
+        /** pointer to the variable which perform the ghost exchange */
+        void* m_uiBuffer;
 
-        public:
+        /** pointer to the send buffer*/
+        void* m_uiSendBuf;
 
-            /**@brief creates an async ghost exchange context*/
-            AsyncExchangeCtx(const void* var) {
-                m_uiBuffer = (void*)var;
-                m_uiSendBuf = nullptr;
-                m_uiRecvBuf = nullptr;
-                m_uiRequests.clear();
-            }
-            /**@brief allocates send buffer for ghost exchange */
-            inline void allocateSendBuffer(size_t bytes) {
-                m_uiSendBuf = malloc(bytes);
-            }
-            /**@brief allocates recv buffer for ghost exchange */
-            inline void allocateRecvBuffer(size_t bytes) {
-                m_uiRecvBuf = malloc(bytes);
-            }
-            /**@brief allocates send buffer for ghost exchange */
-            inline void deAllocateSendBuffer() {
-                free(m_uiSendBuf);
-                m_uiSendBuf = nullptr;
-            }
-            /**@brief allocates recv buffer for ghost exchange */
-            inline void deAllocateRecvBuffer() {
-                free(m_uiRecvBuf);
-                m_uiRecvBuf = nullptr;
-            }
-            /**@brief */
-            inline void* getSendBuffer() {
-                return m_uiSendBuf;
-            }
-            /**@brief */
-            inline void* getRecvBuffer() {
-                return m_uiRecvBuf;
-            }
-            /**@brief */
-            inline const void* getBuffer() {
-                return m_uiBuffer;
-            }
-            /**@brief */
-            inline std::vector<MPI_Request*>& getRequestList(){
-                return m_uiRequests;
-            }
-            /**@brief */
-            bool operator== (AsyncExchangeCtx other) const{
-                return( m_uiBuffer == other.m_uiBuffer );
-            }
+        /** pointer to the receive buffer*/
+        void* m_uiRecvBuf;
 
-            ~AsyncExchangeCtx() {
-                /*for(unsigned int i=0;i<m_uiRequests.size();i++)
-                 {
-                     delete m_uiRequests[i];
-                     m_uiRequests[i]=nullptr;
-                 }
-                 m_uiRequests.clear();*/
-            }
-        };
+        /** list of request*/
+        std::vector<MPI_Request*> m_uiRequests;
 
+    public:
+
+        /**@brief creates an async ghost exchange context*/
+        AsyncExchangeCtx( const void* var ) {
+            m_uiBuffer  = (void*)var;
+            m_uiSendBuf = nullptr;
+            m_uiRecvBuf = nullptr;
+            m_uiRequests.clear();
+        }
+
+        /**@brief allocates send buffer for ghost exchange */
+        inline void allocateSendBuffer(size_t bytes) { m_uiSendBuf = malloc(bytes); }
+
+        /**@brief allocates recv buffer for ghost exchange */
+        inline void allocateRecvBuffer(size_t bytes) { m_uiRecvBuf = malloc(bytes); }
+
+        /**@brief allocates send buffer for ghost exchange */
+        inline void deAllocateSendBuffer() {
+            free( m_uiSendBuf );
+            m_uiSendBuf = nullptr;
+        }
+
+        /**@brief allocates recv buffer for ghost exchange */
+        inline void deAllocateRecvBuffer() {
+            free( m_uiRecvBuf );
+            m_uiRecvBuf = nullptr;
+        }
+
+        /**@brief */
+        inline void* getSendBuffer() { return m_uiSendBuf; }
+
+        /**@brief */
+        inline void* getRecvBuffer() { return m_uiRecvBuf; }
+
+        /**@brief */
+        inline const void* getBuffer() { return m_uiBuffer; }
+
+        /**@brief */
+        inline std::vector<MPI_Request*>& getRequestList() { return m_uiRequests; }
+
+        /**@brief */
+        bool operator== (AsyncExchangeCtx other) const { return( m_uiBuffer == other.m_uiBuffer ); }
+
+        ~AsyncExchangeCtx() {
+            /*for(unsigned int i=0;i<m_uiRequests.size();i++)
+              {
+              delete m_uiRequests[i];
+              m_uiRequests[i]=nullptr;
+              }
+              m_uiRequests.clear();*/
+        }
+    };
+
+    //////////////////////////////////////////////////////////////////////////////////////////////
+    // Class MatRecord
+    //      DT => type of data stored in matrix (eg: double). LI => size of local index.
 
     template <typename Dt, typename Li>
     class MatRecord {
@@ -131,15 +141,15 @@ namespace par {
             m_dtVal = val;
         }
 
-        inline unsigned int getRank() const { return m_uiRank; }
+        inline unsigned int getRank()  const { return m_uiRank; }
         inline unsigned int getRowId() const { return m_uiRowId; }
-        inline unsigned int getColId()const { return m_uiColId; }
-        inline unsigned int getVal()const { return m_dtVal; }
+        inline unsigned int getColId() const { return m_uiColId; }
+        inline unsigned int getVal()   const { return m_dtVal; }
 
-        inline void setRank(unsigned int rank) { m_uiRank = rank; }
-        inline void setRowId(unsigned int rowId) { m_uiRowId = rowId; }
-        inline void setColId(unsigned int colId) { m_uiColId = colId; }
-        inline void setVal(unsigned int val) { m_dtVal = val; }
+        inline void setRank(  unsigned int rank ) {  m_uiRank = rank; }
+        inline void setRowId( unsigned int rowId ) { m_uiRowId = rowId; }
+        inline void setColId( unsigned int colId ) { m_uiColId = colId; }
+        inline void setVal(   unsigned int val ) {   m_dtVal = val; }
 
         bool operator == (MatRecord const &other) const {
             return ((m_uiRank == other.getRank())&&(m_uiRowId == other.getRowId())&&(m_uiColId == other.getColId()));
@@ -148,31 +158,39 @@ namespace par {
         bool operator < (MatRecord const &other) const {
             if (m_uiRank < other.getRank()) {
                 return true;
-            } else if (m_uiRank == other.getRank()) {
+            }
+            else if (m_uiRank == other.getRank()) {
                 if (m_uiRowId < other.getRowId()) {
                     return true;
-                } else if (m_uiRowId == other.getRowId()) {
+                }
+                else if (m_uiRowId == other.getRowId()) {
                     if (m_uiColId < other.getColId()) {
                         return true;
-                    } else {
+                    }
+                    else {
                         return false;
                     }
-                } else {
+                }
+                else {
                     return false;
                 }
-            } else {
+            }
+            else {
                 return false;
             }
         }
 
-        bool operator <= (MatRecord const &other) const {
-            return (((*this) < other) || (*this) == other);
-        }
+        bool operator <= (MatRecord const &other) const { return (((*this) < other) || (*this) == other); }
 
-        ~MatRecord(){ }
+        ~MatRecord() {}
+
     }; // class MatRecord
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////
+    //
+    // DT => type of data stored in matrix (eg: double). LI => size of local index.
     // class is used to define MPI_Datatype for MatRecord
+
     template <typename dt, typename li>
     class MPI_datatype_matrecord{
     public:
@@ -188,12 +206,15 @@ namespace par {
         }
     }; // class MPI_datatype_matrecord
 
-
-
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // 
+    // Class aMat
+    // 
     // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
+
     template <typename DT, typename GI, typename LI>
     class aMat {
-    typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
+        typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
 
     protected:
         /**@brief Flag to use matrix-free or matrix-based method*/
@@ -317,7 +338,8 @@ namespace par {
     public:
 
         /**@brief constructor to initialize variables of aMat */
-        aMat(AMAT_TYPE matType);
+        aMat( AMAT_TYPE matType );
+
         /**@brief destructor of aMat */
         ~aMat();
 
@@ -329,10 +351,14 @@ namespace par {
         }
 
         /**@brief set mapping from element local node to global node */
-        par::Error set_map(const LI n_elements_on_rank, const LI* const * element_to_rank_map, const LI * dofs_per_element,
-                                  const LI n_all_dofs_on_rank, const GI* rank_to_global_map,
-                                  const GI owned_global_dof_range_begin, const GI owned_global_dof_range_end,
-                                  const GI n_global_dofs);
+        par::Error set_map( const LI          n_elements_on_rank,
+                            const LI* const * element_to_rank_map,
+                            const LI        * dofs_per_element,
+                            const LI          n_all_dofs_on_rank,
+                            const GI        * rank_to_global_map,
+                            const GI          owned_global_dof_range_begin,
+                            const GI          owned_global_dof_range_end,
+                            const GI          n_global_dofs );
 
         /**@brief update map when cracks created */
         par::Error update_map( unsigned int n_elems, unsigned int n_nodes, unsigned long n_global_nodes );
@@ -397,10 +423,12 @@ namespace par {
         /**@brief return true if DoF "enid" of element "eid" is owned by this rank, false otherwise */
         inline bool is_local_node(unsigned int eid, unsigned int enid) const {
             const unsigned int nid = (const unsigned int)m_uipLocalMap[eid][enid];
-            if (nid >= m_uiNodeLocalBegin && nid < m_uiNodeLocalEnd)
+            if( nid >= m_uiNodeLocalBegin && nid < m_uiNodeLocalEnd ) {
                 return true;
-            else
+            }
+            else {
                 return false;
+            }
         }
 
         /**@brief begin assembling the matrix "m_pMat", called after MatSetValues */
@@ -426,51 +454,73 @@ namespace par {
         /**@brief allocate memory for a PETSc vector "vec", initialized by alpha */
         par::Error petsc_create_vec(Vec &vec, PetscScalar alpha = 0.0) const;
         /**@brief assembly global load vector */
-        par::Error petsc_set_element_vec(Vec vec, LI eid, DT* e_vec, InsertMode mode = ADD_VALUES);
+        par::Error petsc_set_element_vec( Vec vec, LI eid, DT* e_vec, InsertMode mode = ADD_VALUES );
+
         /**@brief assembly element matrix to structural matrix (for matrix-based method) */
-        par::Error petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, InsertMode = ADD_VALUES);
-        /**@brief: write PETSc matrix "m_pMat" to filename "fmat" */
-        par::Error dump_mat(const char* fmat) const;
-        /**@brief: write PETSc vector "vec" to filename "fvec" */
-        par::Error dump_vec(const char* fvec, Vec vec) const;
+        par::Error petsc_set_element_matrix( LI eid, EigenMat e_mat, InsertMode = ADD_VALUES);
+
+        /**@brief: write PETSc matrix "m_pMat" to "filename" 
+         * @param[in] filename: name of file to write matrix to.  If nullptr, then write to stdout.
+         */
+        par::Error dump_mat( const char* filename = nullptr ) const;
+
+        /**@brief: write PETSc vector "vec" to filename "fvec"
+         * @param[in] vec      : petsc vector to write to file
+         * @param[in] filename : name of file to write vector to.  If nullptr, then dump to std out.
+         */
+        par::Error dump_vec( Vec vec, const char* filename = nullptr ) const;
+
         /**@brief get diagonal of m_pMat and put to vec */
         par::Error petsc_get_diagonal(Vec vec) const;
+
         /**@brief free memory allocated for PETSc vector*/
         par::Error petsc_destroy_vec(Vec &vec) const;
 
         /**@brief allocate memory for "vec", size includes ghost DoFs if isGhosted=true, initialized by alpha */
         par::Error create_vec(DT* &vec, bool isGhosted = false, DT alpha = (DT)0);
+
         /**@brief allocate memory for "mat", size includes ghost DoFs if isGhosted=true, initialized by alpha */
         par::Error create_mat(DT** &mat, bool isGhosted = false, DT alpha = (DT)0);
+
         /**@brief copy local to corresponding positions of gVec (size including ghost DoFs) */
         par::Error local_to_ghost(DT*  gVec, const DT* local);
+
         /**@brief copy gVec (size including ghost DoFs) to local (size of local DoFs) */
         par::Error ghost_to_local(DT* local, const DT* gVec);
+
         /**@brief copy element matrix and store in m_mats, used for matrix-free method */
         par::Error copy_element_matrix(unsigned int eid, EigenMat e_mat);
+
         /**@brief get diagonal terms of structure matrix by accumulating diagonal of element matrices */
         par::Error mat_get_diagonal(DT* diag, bool isGhosted = false);
+
         /**@brief get diagonal terms with ghosted vector diag */
         par::Error mat_get_diagonal_ghosted(DT* diag);
 
         /**@brief compute the rank who owns gId */
         unsigned int globalId_2_rank(GI gId) const;
+
         /**@brief get diagonal block matrix */
         par::Error mat_get_diagonal_block(DT **diag_blk);
 
         /**@brief get max number of DoF per element*/
         par::Error get_max_dof_per_elem();
+
         /**@brief free memory allocated for vec and set vec to null */
         par::Error destroy_vec(DT* &vec);
+
         /**@brief free memory allocated for matrix mat and set mat to null */
         par::Error destroy_mat(DT** &mat, const unsigned int nrow);
 
         /**@brief begin: owned DoFs send, ghost DoFs receive, called before matvec() */
         par::Error ghost_receive_begin(DT* vec);
+
         /**@brief end: ghost DoFs receive, called before matvec() */
         par::Error ghost_receive_end(DT* vec);
+
         /**@brief begin: ghost DoFs send, owned DoFs receive and accumulate to current data, called after matvec() */
         par::Error ghost_send_begin(DT* vec);
+
         /**@brief end: ghost DoFs send, owned DoFs receive and accumulate to current data, called after matvec() */
         par::Error ghost_send_end(DT* vec);
 
@@ -479,6 +529,7 @@ namespace par {
          * @param[in] isGhosted = false, if v and u are of size NOT including ghost DoFs
          * */
         par::Error matvec(DT* v, const DT* u, bool isGhosted = false);
+
         /**@brief v = K * u; v and u are of size including ghost DoFs*/
         par::Error matvec_ghosted(DT* v, DT* u);
 
@@ -563,7 +614,7 @@ namespace par {
         par::Error petsc_create_matrix_matvec();
 
         /**@brief assemble matrix term by term so that we can control not to assemble "almost zero" terms*/
-        par::Error set_element_matrix_term_by_term(unsigned int eid, EigenMat e_mat, InsertMode mode = ADD_VALUES);
+        par::Error set_element_matrix_term_by_term( LI eid, EigenMat e_mat, InsertMode mode = ADD_VALUES);
 
         /**@brief compare 2 matrices */
         par::Error petsc_compare_matrix();
@@ -573,8 +624,9 @@ namespace par {
 
         /**@brief print out to file matrix "m_pMat_matvec" (matrix created by using matvec() to multiply
          * m_pMat with series of vectors [1 0 0...]
+         * @param[in] filename : name of file to write vector to.  If nullptr, then dump to std out.
          */
-        par::Error dump_mat_matvec(const char* fmat) const;
+        par::Error dump_mat_matvec( const char* filename = nullptr ) const;
 
         /**@brief y = m_pMat * x */
         par::Error petsc_matmult(Vec x, Vec y);
@@ -601,7 +653,7 @@ namespace par {
         par::Error ghost_to_local_mat(DT**  lMat, DT** gMat);
 
         /**@brief assemble element matrix to global matrix for matrix-based, not using Eigen */
-        par::Error petsc_set_element_matrix(unsigned int eid, DT *e_mat, InsertMode mode = ADD_VALUES);
+        par::Error petsc_set_element_matrix( LI eid, DT *e_mat, InsertMode mode = ADD_VALUES );
 
 
 
@@ -610,8 +662,8 @@ namespace par {
          * @param[in] e_mat : element stiffness matrices (pointer)
          * @param[in] twin_level: level of twinning (0 no crack, 1 one crack, 2 two cracks, 3 three cracks)
          * */
-        par::Error set_element_matrices(unsigned int eid, EigenMat* e_mat, unsigned int twin_level, InsertMode mode=ADD_VALUES);
-        par::Error petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, unsigned int e_mat_id, InsertMode mode=ADD_VALUES);
+        par::Error set_element_matrices( LI eid, const EigenMat* e_mat, unsigned int twin_level, InsertMode mode = ADD_VALUES);
+        par::Error petsc_set_element_matrix( LI eid, const EigenMat & e_mat, LI e_mat_id, InsertMode mode = ADD_VALUES );
 
     }; // end of class aMat
 
@@ -677,7 +729,7 @@ namespace par {
         m_epMat = nullptr;          // element matrices (Eigen matrix), used in matrix-free
         m_pMat = nullptr;           // structure matrix, used in matrix-based
         m_comm = MPI_COMM_NULL;     // communication of aMat
-        if (matType == AMAT_TYPE::MAT_FREE){
+        if( matType == AMAT_TYPE::MAT_FREE ){
             m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
         }
     }// constructor
@@ -686,26 +738,29 @@ namespace par {
     aMat<DT,GI,LI>::~aMat()
     {
         delete [] m_epMat;
-        if (m_MatType == AMAT_TYPE::MAT_FREE){
+        if( m_MatType == AMAT_TYPE::MAT_FREE ){
             for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
                 delete [] m_ulpMap[eid]; //delete array
             }
             delete [] m_ulpMap;
-        } else if (m_MatType == AMAT_TYPE::PETSC_SPARSE){
+        }
+        else if( m_MatType == AMAT_TYPE::PETSC_SPARSE ) {
             //MatDestroy(&m_pMat);
         }
 
     } // ~aMat
 
-
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_map(const LI n_elements_on_rank, const LI* const * element_to_rank_map, const LI * dofs_per_element,
-                              const LI n_all_dofs_on_rank, const GI* rank_to_global_map,
-                              const GI owned_global_dof_range_begin, const GI owned_global_dof_range_end,
-                              const GI n_global_dofs){
-
-        // This is number of owned element
-        m_uiNumElems = n_elements_on_rank;
+    par::Error aMat<DT,GI,LI>::set_map( const LI           n_elements_on_rank,
+                                        const LI * const * element_to_rank_map,
+                                        const LI         * dofs_per_element,
+                                        const LI           n_all_dofs_on_rank,
+                                        const GI         * rank_to_global_map,
+                                        const GI           owned_global_dof_range_begin,
+                                        const GI           owned_global_dof_range_end,
+                                        const GI           n_global_dofs ){
+        
+        m_uiNumElems = n_elements_on_rank; // This is number of owned element
         m_uiNumNodes = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
         m_ulNumNodesGlobal = n_global_dofs; // curently this is not used
@@ -716,30 +771,32 @@ namespace par {
         m_uiDofsPerElem = dofs_per_element; // pointing to
 
         m_ulpMap = new GI* [m_uiNumElems];
-        for (LI eid = 0; eid < m_uiNumElems; eid++){
+        for( LI eid = 0; eid < m_uiNumElems; eid++ ){
             m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
         }
-        for (LI eid = 0; eid < m_uiNumElems; eid++){
+        for( LI eid = 0; eid < m_uiNumElems; eid++ ){
             for (unsigned int nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
                 m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
             }
         }
 
-        if (m_MatType == AMAT_TYPE::PETSC_SPARSE){
+        if( m_MatType == AMAT_TYPE::PETSC_SPARSE ){
             MatCreate(m_comm, &m_pMat);
             MatSetSizes(m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE);
             if(m_uiSize > 1) {
                 MatSetType(m_pMat, MATMPIAIJ);
                 MatMPIAIJSetPreallocation(m_pMat, 30 , PETSC_NULL, 30 , PETSC_NULL);
-            } else {
+            }
+            else {
                 MatSetType(m_pMat, MATSEQAIJ);
                 MatSeqAIJSetPreallocation(m_pMat, 30, PETSC_NULL);
             }
             // this will disable on preallocation errors (but not good for performance)
             MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
 
-        } else if (m_MatType == AMAT_TYPE::MAT_FREE){
-            if (m_epMat != nullptr){
+        }
+        else if( m_MatType == AMAT_TYPE::MAT_FREE ){
+            if( m_epMat != nullptr) {
                 delete [] m_epMat;
                 m_epMat = nullptr;
             }
@@ -751,7 +808,8 @@ namespace par {
 
             get_max_dof_per_elem();
 
-        } else {
+        }
+        else {
             std::cout << "ERROR: mat type is unknown: " << (int)m_MatType << "\n";
             return Error::UNKNOWN_MAT_TYPE;
         }
@@ -775,15 +833,14 @@ namespace par {
         // allocate matrix
         if( m_MatType == AMAT_TYPE::PETSC_SPARSE ){
 
-            if( m_pMat != nullptr )
-            {
+            if( m_pMat != nullptr ) {
                 MatDestroy( &m_pMat );
                 m_pMat = nullptr;
             }
 
             MatCreate( m_comm, &m_pMat );
             MatSetSizes( m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE );
-            if (m_uiSize > 1) {
+            if( m_uiSize > 1 ) {
                 // initialize matrix
                 MatSetType(m_pMat, MATMPIAIJ);
                 MatMPIAIJSetPreallocation(m_pMat, 30 , PETSC_NULL, 30 , PETSC_NULL);
@@ -797,10 +854,10 @@ namespace par {
             // copies of element matrices
 
             if(m_epMat != nullptr)
-            {
-                delete [] m_epMat;
-                m_epMat = nullptr;
-            }
+                {
+                    delete [] m_epMat;
+                    m_epMat = nullptr;
+                }
 
             m_epMat = new EigenMat[ m_uiNumElems ];
             // element-to-structure map including ghost dofs
@@ -930,22 +987,22 @@ namespace par {
         pcount = m_uiRank; // start from my rank
         gcount = 0;
         while(gcount < m_uiNumPostGhostNodes)
-        {
-            // global ID of post-ghost dof gcount
-            unsigned int nid = postGhostGIds[gcount];
-            while ((pcount < m_uiSize) &&
-                   (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount]))))){
-                // nid is not the range of global ID of dofs owned by pcount
-                pcount++;
+            {
+                // global ID of post-ghost dof gcount
+                unsigned int nid = postGhostGIds[gcount];
+                while ((pcount < m_uiSize) &&
+                       (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount]))))){
+                    // nid is not the range of global ID of dofs owned by pcount
+                    pcount++;
+                }
+                // check if nid is really in the range of global ID of dofs owned by pcount
+                if (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount])))) {
+                    std::cout << "m_uiRank: " << m_uiRank << " post ghost gid : " << nid << " was not found in any processor" << std::endl;
+                    return Error::GHOST_NODE_NOT_FOUND;
+                }
+                postGhostOwner[gcount] = pcount;
+                gcount++;
             }
-            // check if nid is really in the range of global ID of dofs owned by pcount
-            if (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount])))) {
-                std::cout << "m_uiRank: " << m_uiRank << " post ghost gid : " << nid << " was not found in any processor" << std::endl;
-                return Error::GHOST_NODE_NOT_FOUND;
-            }
-            postGhostOwner[gcount] = pcount;
-            gcount++;
-        }
 
         unsigned int * sendCounts = new unsigned int[m_uiSize];
         unsigned int * recvCounts = new unsigned int[m_uiSize];
@@ -1106,7 +1163,7 @@ namespace par {
     } // petsc_set_element_vec
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(unsigned int eid, DT* e_mat, InsertMode mode){
+    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix( LI eid, DT* e_mat, InsertMode mode /* = ADD_VALUES */ ) {
         unsigned int num_nodes = m_uiDofsPerElem[eid];
 
         // now set values ...
@@ -1134,8 +1191,8 @@ namespace par {
 
 
     // use with Eigen, matrix-based, set every row of the matrix (faster than set every term of the matrix)
-    template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, InsertMode mode) {
+    template <typename DT, typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix( LI eid, EigenMat e_mat, InsertMode mode /* = ADD_VALUES */ ) {
 
         assert(e_mat.rows()==e_mat.cols());
         unsigned int num_rows = e_mat.rows();
@@ -1159,24 +1216,47 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::dump_mat(const char* fmat) const {
-        PetscViewer viewer;
-        PetscViewerASCIIOpen(m_comm, fmat, &viewer);
-        // write to file readable by Matlab (filename must be filename.m in order to execute in Matlab)
-        PetscViewerPushFormat(viewer, PETSC_VIEWER_ASCII_MATLAB);
-        MatView(m_pMat,viewer);
-        PetscViewerDestroy(&viewer);
+    par::Error aMat<DT,GI,LI>::dump_mat( const char* filename /* = nullptr */ ) const {
+
+        if( m_pMat == nullptr ) {
+            std::cout << "Matrix has not yet been allocated, can't display...\n";
+            return Error::SUCCESS;
+        }
+
+        PetscBool assembled = PETSC_FALSE;
+        MatAssembled( m_pMat, &assembled );
+        if( !assembled ) {
+            std::cout << "Matrix has not yet been assembled, can't display...\n";
+            return Error::SUCCESS;
+        }
+
+        if( filename == nullptr ) {
+            MatView( m_pMat, PETSC_VIEWER_STDOUT_WORLD );
+        }
+        else {
+            PetscViewer viewer;
+            PetscViewerASCIIOpen( m_comm, filename, &viewer );
+            // write to file readable by Matlab (filename must be filename.m in order to execute in Matlab)
+            PetscViewerPushFormat( viewer, PETSC_VIEWER_ASCII_MATLAB );
+            MatView( m_pMat, viewer );
+            PetscViewerDestroy( &viewer );
+        }
         return Error::SUCCESS;
     } // dump_mat
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::dump_vec(const char* fvec, Vec vec) const {
-        PetscViewer viewer;
-        // write to ASCII file
-        PetscViewerASCIIOpen(m_comm, fvec, &viewer);
-        VecView(vec,viewer);
-        PetscViewerDestroy(&viewer);
+    par::Error aMat<DT,GI,LI>::dump_vec( Vec vec, const char* filename ) const {
+        if( filename == nullptr ) {
+            VecView( vec, PETSC_VIEWER_STDOUT_WORLD );
+        }
+        else {
+            PetscViewer viewer;
+            // write to ASCII file
+            PetscViewerASCIIOpen( m_comm, filename, &viewer );
+            VecView( vec, viewer );
+            PetscViewerDestroy( &viewer );
+        }
         return Error::SUCCESS;
     } // dump_vec
 
@@ -1645,9 +1725,9 @@ namespace par {
 
         MPI_Status sts;
         for(unsigned int i=0;i<num_req;i++)
-        {
-            MPI_Wait(ctx.getRequestList()[i],&sts);
-        }
+            {
+                MPI_Wait(ctx.getRequestList()[i],&sts);
+            }
 
         //const unsigned  int total_recv = m_uivSendNodeOffset[m_uiSize-1] + m_uivSendNodeCounts[m_uiSize-1];
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
@@ -2036,9 +2116,9 @@ namespace par {
     } // petsc_create_matrix_matvec
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_element_matrix_term_by_term(unsigned int eid, EigenMat e_mat, InsertMode mode) {
+    par::Error aMat<DT,GI,LI>::set_element_matrix_term_by_term( LI eid, EigenMat e_mat, InsertMode mode /* = ADD_VALUES*/ ) {
 
-        assert(e_mat.rows()== e_mat.cols());
+        assert( e_mat.rows()== e_mat.cols() );
         unsigned int num_rows = e_mat.rows();
 
         // assemble global matrix (petsc matrix)
@@ -2088,17 +2168,23 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::dump_mat_matvec(const char* fmat) const {
+    par::Error aMat<DT,GI,LI>::dump_mat_matvec( const char* filename /* = nullptr */ ) const {
 
-        // write matrix m_pMat_matvec to file
-        PetscViewer viewer;
-        PetscViewerASCIIOpen(m_comm, fmat, &viewer);
+        if( filename == nullptr ) {
+            MatView( m_pMat_matvec, PETSC_VIEWER_STDOUT_WORLD );
+        }
+        else {
 
-        // write to file readable by Matlab
-        PetscViewerPushFormat(viewer, PETSC_VIEWER_ASCII_MATLAB);
+            // write matrix m_pMat_matvec to file
+            PetscViewer viewer;
+            PetscViewerASCIIOpen( m_comm, filename, &viewer );
 
-        MatView(m_pMat_matvec,viewer);
-        PetscViewerDestroy(&viewer);
+            // write to file readable by Matlab
+            PetscViewerPushFormat(viewer, PETSC_VIEWER_ASCII_MATLAB);
+
+            MatView( m_pMat_matvec, viewer );
+            PetscViewerDestroy( &viewer );
+        }
 
         return Error::SUCCESS; // fixme
     } // dump_mat_matvec
@@ -2246,7 +2332,7 @@ namespace par {
     /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
     // e_mat is an array of EigenMat with the size dictated by twin_level (e.g. twin_level = 1, then size of e_mat is 2)
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_element_matrices(unsigned int eid, EigenMat* e_mat, unsigned int twin_level, InsertMode mode) {
+    par::Error aMat<DT,GI,LI>::set_element_matrices( LI eid, const EigenMat* e_mat, unsigned int twin_level, InsertMode mode /* = ADD_VALUES */ ) {
 
         unsigned int num_nodes = m_uiDofsPerElem[eid];
 
@@ -2254,7 +2340,7 @@ namespace par {
         unsigned int numEMat = (1u<<twin_level);
 
         // since e_mat is dynamic, then first casting it to void* so that we can move for each element of e_mat
-        void* eMat= (void*)e_mat;
+        const void* eMat= (const void*)e_mat;
         for (unsigned int i=0; i<numEMat; i++) {
             size_t bytes=0;
             if (num_nodes==4){
@@ -2277,7 +2363,7 @@ namespace par {
 
     // used with set_element_matrices for the case of one eid but multiple matrices
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, unsigned int e_mat_id, InsertMode mode) {
+    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix( LI eid, const EigenMat & e_mat, LI e_mat_id, InsertMode mode /* = ADD_VALUES */ ) {
 
         unsigned int num_nodes = m_uiDofsPerElem[eid];
 

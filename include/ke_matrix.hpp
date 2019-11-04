@@ -11,7 +11,7 @@
 #ifndef ADAPTIVEMATRIX_KE_MATRIX_H
 #define ADAPTIVEMATRIX_KE_MATRIX_H
 
-#include "Dense"
+#include <Eigen/Dense>
 
 /**
 * @brief: element stiffness matrix of hex 8-node element of potential problem

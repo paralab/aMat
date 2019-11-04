@@ -42,7 +42,7 @@ if(BUILD_WITH_PETSC)
 endif(BUILD_WITH_PETSC)
 
 
-set(EIGEN_HEADER_DIR Eigen)
+set( EIGEN_HEADER_DIR . )
 
 add_executable(fem3d src/fem3d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(fem3d PUBLIC include)
