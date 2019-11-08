@@ -199,53 +199,46 @@ namespace par {
         /**@brief Flag to use matrix-free or matrix-based method*/
         AMAT_TYPE m_MatType;
 
+
         /**@brief communicator used within aMat */
         MPI_Comm m_comm;
-
         /**@brief my rank */
         unsigned int m_uiRank;
-
         /**@brief total number of ranks */
         unsigned int m_uiSize;
 
+
         /**@brief (local) number of DoFs owned by rank */
         LI m_uiNumNodes;
-
         /**@brief (global) number of DoFs owned by all ranks */
         GI m_ulNumNodesGlobal;
-
         /**@brief start of global ID of owned dofs, just for assertion */
-        GI m_ulGlobalDofStart_assert;
-
+        GI m_ulGlobalNodeStart_assert;
         /**@brief end of global ID of owned dofs, just for assertion */
-        GI m_ulGlobalDofEnd_assert;
-
+        GI m_ulGlobalNodeEnd_assert;
         /**@brief total dofs inclulding ghost, just for assertion */
-        LI m_uiTotalDofs_assert;
-
+        LI m_uiTotalNodes_assert;
         /**@brief (local) number of elements owned by rank */
         LI m_uiNumElems;
-
         /**@brief max number of DoFs per element*/
         LI m_uiMaxNodesPerElem;
 
+
         /**@brief assembled stiffness matrix */
         Mat m_pMat;
-
         /**@brief storage of element matrices */
-        EigenMat* m_epMat;
+        std::vector<EigenMat>* m_epMat;
+
 
         /**@brief map from local DoF of element to global DoF: m_ulpMap[eid][local_id]  = global_id */
         GI** m_ulpMap;
-
         /**@brief number of dofs per element */
-        const LI * m_uiDofsPerElem;
-
+        const LI* m_uiNodesPerElem;
         /**@brief map from local DoF of element to local DoF: m_uiMap[eid][element_node]  = local node-ID */
-        const LI * const*  m_uipLocalMap;
-
+        const LI* const*  m_uipLocalMap;
         /**@brief map from local DoF of element to boundary flag: 0 = interior dof; 1 = boundary dof */
         LI** m_uipBdrMap;
+
 
         /**@brief number of DoFs owned by each rank, NOT include ghost DoFs */
         std::vector<LI> m_uivLocalNodeCounts;
@@ -335,7 +328,10 @@ namespace par {
                                   const GI n_global_dofs);
 
         /**@brief update map when cracks created */
-        par::Error update_map( unsigned int n_elems, unsigned int n_nodes, unsigned long n_global_nodes );
+        par::Error update_map(const LI* new_to_old_rank_map, const LI old_n_all_dofs_on_rank, const LI* old_rank_to_global_map,
+                              const LI n_elements_on_rank, const GI* const * element_to_rank_map, const LI* dofs_per_element,
+                              const LI n_all_dofs_on_rank, const LI* rank_to_global_map, const GI owned_global_dof_range_begin,
+                              const GI owned_global_dof_range_end, const GI n_global_dofs);
 
         /**@brief build scatter-gather map (used for communication) and local-to-local map (used for matvec) */
         par::Error buildScatterMap();
@@ -360,7 +356,7 @@ namespace par {
         }
         /**@brief return number of nodes of element eid */
         inline unsigned int get_nodes_per_element (unsigned int eid) const {
-            return m_uiDofsPerElem[eid];
+            return m_uiNodesPerElem[eid];
         }
         /**@brief return the map from DoF of element to local ID of vector (included ghost DoFs) */
         inline const LI * const * get_e2local_map() const {
@@ -428,7 +424,7 @@ namespace par {
         /**@brief assembly global load vector */
         par::Error petsc_set_element_vec(Vec vec, LI eid, DT* e_vec, InsertMode mode = ADD_VALUES);
         /**@brief assembly element matrix to structural matrix (for matrix-based method) */
-        par::Error petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, InsertMode = ADD_VALUES);
+        par::Error petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, LI block_i, LI block_j, InsertMode = ADD_VALUES);
         /**@brief: write PETSc matrix "m_pMat" to filename "fmat" */
         par::Error dump_mat(const char* fmat) const;
         /**@brief: write PETSc vector "vec" to filename "fvec" */
@@ -447,7 +443,7 @@ namespace par {
         /**@brief copy gVec (size including ghost DoFs) to local (size of local DoFs) */
         par::Error ghost_to_local(DT* local, const DT* gVec);
         /**@brief copy element matrix and store in m_mats, used for matrix-free method */
-        par::Error copy_element_matrix(unsigned int eid, EigenMat e_mat);
+        par::Error copy_element_matrix(unsigned int eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim);
         /**@brief get diagonal terms of structure matrix by accumulating diagonal of element matrices */
         par::Error mat_get_diagonal(DT* diag, bool isGhosted = false);
         /**@brief get diagonal terms with ghosted vector diag */
@@ -673,7 +669,7 @@ namespace par {
         m_ulNumNodesGlobal = 0;     // number of global dofs
         m_uiNumElems = 0;           // number of local elements
         m_ulpMap = nullptr;         // local-to-global map
-        m_uiDofsPerElem = nullptr;  // number of dofs per element
+        m_uiNodesPerElem = nullptr;  // number of dofs per element
         m_epMat = nullptr;          // element matrices (Eigen matrix), used in matrix-free
         m_pMat = nullptr;           // structure matrix, used in matrix-based
         m_comm = MPI_COMM_NULL;     // communication of aMat
@@ -708,19 +704,20 @@ namespace par {
         m_uiNumElems = n_elements_on_rank;
         m_uiNumNodes = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
-        m_ulNumNodesGlobal = n_global_dofs; // curently this is not used
-        m_ulGlobalDofStart_assert = owned_global_dof_range_begin; // this will be used for assertion in buildScatterMap
-        m_ulGlobalDofEnd_assert = owned_global_dof_range_end; // this will be used for assertion in buildScatterMap
-        m_uiTotalDofs_assert = n_all_dofs_on_rank; // this will be used for assertion in buildScatterMap
+        m_ulNumNodesGlobal = n_global_dofs; // currently this is not used
+        m_ulGlobalNodeStart_assert = owned_global_dof_range_begin; // this will be used for assertion in buildScatterMap
+        m_ulGlobalNodeEnd_assert = owned_global_dof_range_end; // this will be used for assertion in buildScatterMap
+        m_uiTotalNodes_assert = n_all_dofs_on_rank; // this will be used for assertion in buildScatterMap
 
-        m_uiDofsPerElem = dofs_per_element; // pointing to
+        // point to provided local map
+        m_uiNodesPerElem = dofs_per_element;
 
         m_ulpMap = new GI* [m_uiNumElems];
         for (LI eid = 0; eid < m_uiNumElems; eid++){
-            m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
+            m_ulpMap[eid] = new GI [m_uiNodesPerElem[eid]];
         }
         for (LI eid = 0; eid < m_uiNumElems; eid++){
-            for (unsigned int nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
+            for (unsigned int nid = 0; nid < m_uiNodesPerElem[eid]; nid++){
                 m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
             }
         }
@@ -730,7 +727,7 @@ namespace par {
             MatSetSizes(m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE);
             if(m_uiSize > 1) {
                 MatSetType(m_pMat, MATMPIAIJ);
-                MatMPIAIJSetPreallocation(m_pMat, 30 , PETSC_NULL, 30 , PETSC_NULL);
+                MatMPIAIJSetPreallocation(m_pMat, 30, PETSC_NULL, 30, PETSC_NULL);
             } else {
                 MatSetType(m_pMat, MATSEQAIJ);
                 MatSeqAIJSetPreallocation(m_pMat, 30, PETSC_NULL);
@@ -743,8 +740,9 @@ namespace par {
                 delete [] m_epMat;
                 m_epMat = nullptr;
             }
-            m_epMat = new EigenMat[m_uiNumElems];
+            m_epMat = new std::vector<EigenMat>[m_uiNumElems];
 
+            // point to provided local Map
             m_uipLocalMap = element_to_rank_map;
 
             buildScatterMap();
@@ -761,32 +759,63 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::update_map( unsigned int n_elems, unsigned int n_nodes, unsigned long n_global_nodes ) {
+    par::Error aMat<DT,GI,LI>::update_map(const LI* new_to_old_rank_map, const LI old_n_all_dofs_on_rank,
+                          const LI* old_rank_to_global_map, const LI n_elements_on_rank,
+                          const GI* const * element_to_rank_map, const LI* dofs_per_element,
+                          const LI n_all_dofs_on_rank, const LI* rank_to_global_map,
+                          const GI owned_global_dof_range_begin, const GI owned_global_dof_range_end, const GI n_global_dofs) {
 
-        m_uiNumElems = n_elems;
-        m_uiNumNodes = n_nodes;
-        m_ulNumNodesGlobal = n_global_nodes;
+        // It is assumed that total number of owned elements is unchanged
+        assert(m_uiNumElems == n_elements_on_rank);
 
-        unsigned long nl = m_uiNumNodes;
+        // delete old global map m_ulpMap[eid][:], keep [eid] since number of total elements does not change
+        if (m_ulpMap != nullptr){
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                delete[] m_ulpMap[eid];
+            }
+        }
+
+        // point to new dofs_per_element map
+        m_uiNodesPerElem = dofs_per_element;
+
+        // allocate with new dofs per element, and update new global map
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            m_ulpMap[eid] = new GI[m_uiNodesPerElem[eid]];
+        }
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (LI nid = 0; nid < m_uiNodesPerElem[eid]; nid++){
+                m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
+            }
+        }
+
+        // update total number of owned dofs
+        m_uiNumNodes = owned_global_dof_range_end - owned_global_dof_range_begin;
+
+        // update total number of dofs on all ranks, currently not in use
+        m_ulNumNodesGlobal = n_global_dofs;
+
+        /*unsigned long nl = m_uiNumNodes;
         unsigned long ng;
         MPI_Allreduce( &nl, &ng, 1, MPI_LONG, MPI_SUM, m_comm );
-        assert( n_global_nodes == ng );
+        assert( n_global_dofs == ng );*/
 
-        // allocate matrix
-        if( m_MatType == AMAT_TYPE::PETSC_SPARSE ){
+        // update variables for assertion in buildScatterMap
+        m_ulGlobalNodeStart_assert = owned_global_dof_range_begin;
+        m_ulGlobalNodeEnd_assert = owned_global_dof_range_end;
+        m_uiTotalNodes_assert = n_all_dofs_on_rank;
 
-            if( m_pMat != nullptr )
-            {
+        // allocate new (larger) matrix of size m_uiNumNodes
+        if (m_MatType == AMAT_TYPE::PETSC_SPARSE) {
+            if (m_pMat != nullptr){
                 MatDestroy( &m_pMat );
                 m_pMat = nullptr;
             }
-
-            MatCreate( m_comm, &m_pMat );
-            MatSetSizes( m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE );
+            MatCreate(m_comm, &m_pMat);
+            MatSetSizes(m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE);
             if (m_uiSize > 1) {
                 // initialize matrix
                 MatSetType(m_pMat, MATMPIAIJ);
-                MatMPIAIJSetPreallocation(m_pMat, 30 , PETSC_NULL, 30 , PETSC_NULL);
+                MatMPIAIJSetPreallocation(m_pMat, 30, PETSC_NULL, 30, PETSC_NULL);
             }
             else {
                 MatSetType(m_pMat, MATSEQAIJ);
@@ -794,20 +823,15 @@ namespace par {
             }
         }
         else if (m_MatType == AMAT_TYPE::MAT_FREE){
-            // copies of element matrices
-
-            if(m_epMat != nullptr)
-            {
-                delete [] m_epMat;
-                m_epMat = nullptr;
+            // Note: currently we delete all old element matrices and need to add new element matrices again
+            // Todo: only add newly formed blocks?
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                m_epMat[eid].clear();
             }
 
-            m_epMat = new EigenMat[ m_uiNumElems ];
-            // element-to-structure map including ghost dofs
-            m_uipLocalMap = new unsigned int*[m_uiNumElems];
-            for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-                m_uipLocalMap[eid] = new unsigned int[ m_uiDofsPerElem[eid] ];
-            }
+            // point to new local map
+            m_uipLocalMap = element_to_rank_map;
+
             // build scatter map
             buildScatterMap();
         }
@@ -853,21 +877,21 @@ namespace par {
         std::vector<GI> preGhostGIds;
         std::vector<GI> postGhostGIds;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++) {
-            unsigned int num_nodes = m_uiDofsPerElem[eid];
+            unsigned int num_nodes = m_uiNodesPerElem[eid];
             for (unsigned int i = 0; i < num_nodes; i++) {
                 // global ID
                 const unsigned int nid = m_ulpMap[eid][i];
                 if (nid < m_uivLocalNodeScan[m_uiRank]) {
                     // dofs with global ID < owned-range --> pre-ghost dofs
-                    assert( nid < m_ulGlobalDofStart_assert);
+                    assert( nid < m_ulGlobalNodeStart_assert);
                     preGhostGIds.push_back(nid);
                 } else if (nid >= (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)){
                     // dofs with global ID > owned-range --> post-ghost dofs
-                    assert( nid > m_ulGlobalDofEnd_assert);
+                    assert( nid > m_ulGlobalNodeEnd_assert);
                     postGhostGIds.push_back(nid);
                 } else {
                     assert ((nid >= m_uivLocalNodeScan[m_uiRank])  && (nid< (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)));
-                    assert((nid >= m_ulGlobalDofStart_assert) && (nid <= m_ulGlobalDofEnd_assert));
+                    assert((nid >= m_ulGlobalNodeStart_assert) && (nid <= m_ulGlobalNodeEnd_assert));
                 }
             }
         }
@@ -898,7 +922,7 @@ namespace par {
 
         // total number of dofs including ghost dofs
         m_uiNumNodesTotal = m_uiNumNodes + m_uiNumPreGhostNodes + m_uiNumPostGhostNodes;
-        assert( m_uiNumNodesTotal == m_uiTotalDofs_assert);
+        assert(m_uiNumNodesTotal == m_uiTotalNodes_assert);
 
         // determine owners of pre- and post-ghost dofs
         std::vector<unsigned int> preGhostOwner;
@@ -1022,7 +1046,7 @@ namespace par {
                 std::cout<<" m_uiRank: "<<m_uiRank<< "scatter map error : "<<__func__<<std::endl;
                 par::Error::GHOST_NODE_NOT_FOUND;
             }
-            assert((gid >= m_ulGlobalDofStart_assert) && (gid <= m_ulGlobalDofEnd_assert));
+            assert((gid >= m_ulGlobalNodeStart_assert) && (gid <= m_ulGlobalNodeEnd_assert));
             // local ID
             m_uivSendNodeIds[i] = m_uiNumPreGhostNodes + (gid - m_uivLocalNodeScan[m_uiRank]);
         }
@@ -1044,7 +1068,7 @@ namespace par {
         //    m_uiNumPreGhostNodes, ..., (m_uiNumPreGhostNodes + m_uiNumNodes - 1), --> nodes owned by me
         //    (m_uiNumPreGhostNodes + m_uiNumNodes), ..., (m_uiNumPreGhostNodes + m_uiNumNodes + m_uiNumPostGhostNodes - 1)] --> nodes owned by someone after me
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            unsigned int num_nodes = m_uiDofsPerElem[eid];
+            unsigned int num_nodes = m_uiNodesPerElem[eid];
 
             for (unsigned int i = 0; i < num_nodes; i++){
                 const unsigned int nid = m_ulpMap[eid][i];
@@ -1088,7 +1112,7 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, LI eid, DT *e_vec, InsertMode mode){
-        unsigned int num_nodes = m_uiDofsPerElem[eid];
+        unsigned int num_nodes = m_uiNodesPerElem[eid];
         PetscScalar value;
         PetscInt rowId;
         //unsigned int index = 0;
@@ -1105,40 +1129,13 @@ namespace par {
         return Error::SUCCESS;
     } // petsc_set_element_vec
 
-    template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(unsigned int eid, DT* e_mat, InsertMode mode){
-        unsigned int num_nodes = m_uiDofsPerElem[eid];
-
-        // now set values ...
-        //std::vector<PetscScalar> values(num_nodes * dof);
-        std::vector<PetscScalar> values(num_nodes);
-        //std::vector<PetscInt> colIndices(num_nodes * dof);
-        std::vector<PetscInt> colIndices(num_nodes);
-        PetscInt rowId;
-
-        unsigned int index = 0;
-        for (unsigned int r = 0; r < num_nodes; ++r) {
-            rowId = m_ulpMap[eid][r];
-            for (unsigned int c = 0; c < num_nodes; ++c) {
-                colIndices[c] = m_ulpMap[eid][c];
-                values[c] = e_mat[index];
-                index++;
-            } // c
-            MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
-            // values.clear();
-            // colIndices.clear();
-        } // r
-
-        return Error::SUCCESS;
-    } // petsc_set_element_matrix
-
 
     // use with Eigen, matrix-based, set every row of the matrix (faster than set every term of the matrix)
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, InsertMode mode) {
+    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, LI block_i, LI block_j, InsertMode mode) {
 
-        assert(e_mat.rows()==e_mat.cols());
         unsigned int num_rows = e_mat.rows();
+        assert(num_rows == e_mat.cols());
 
         // assemble global matrix (petsc matrix)
         // now set values ...
@@ -1146,9 +1143,9 @@ namespace par {
         std::vector<PetscInt> colIndices(num_rows);
         PetscInt rowId;
         for (unsigned int r = 0; r < num_rows; ++r) {
-            rowId = m_ulpMap[eid][r];
+            rowId = m_ulpMap[eid][block_i * num_rows + r];
             for (unsigned int c = 0; c < num_rows; ++c) {
-                colIndices[c] = m_ulpMap[eid][c];
+                colIndices[c] = m_ulpMap[eid][block_j * num_rows + c];
                 values[c] = e_mat(r,c);
             } // c
             MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
@@ -1263,9 +1260,16 @@ namespace par {
 
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::copy_element_matrix(unsigned int eid, EigenMat e_mat) {
-        // store element matrix, will be used for matrix free
-        m_epMat[eid] = e_mat;
+    par::Error aMat<DT,GI,LI>::copy_element_matrix(unsigned int eid, EigenMat emat, LI block_i, LI block_j, LI blocks_dim) {
+        // resize the vector of blocks for element eid
+        m_epMat[eid].resize(blocks_dim*blocks_dim);
+
+        // index of block corresponding to block_i and block_j
+        LI index = block_i*blocks_dim + block_j;
+
+        // copy e_mat to the location of index
+        m_epMat[eid][index] = emat;
+
         return Error::SUCCESS;
     }// copy_element_matrix
 
@@ -1285,18 +1289,42 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
-        unsigned int num_nodes;
+
         EigenMat e_mat;
         LI rowID;
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiDofsPerElem[eid];
-            e_mat = m_epMat[eid];
-            assert(e_mat.rows() == e_mat.cols());
-            assert(e_mat.rows() == num_nodes);
-            for (unsigned int r = 0; r < num_nodes; r++){
-                rowID = m_uipLocalMap[eid][r];
-                diag[rowID] += e_mat(r,r);
+
+            // number of blocks in each direction
+            LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            assert((blocks_dim*blocks_dim) == m_epMat[eid].size());
+
+            LI block_row_offset = 0;
+
+            for (LI block_i = 0; block_i < blocks_dim; block_i++) {
+
+                // only get diagonals of diagonal blocks
+                LI index = block_i * blocks_dim + block_i;
+
+                // diagonal block must not be null
+                assert (m_epMat[eid][index].size() != 0);
+
+                e_mat = m_epMat[eid][index];
+                assert(e_mat.rows() == e_mat.cols());
+
+                // number of dofs per block
+                const LI num_dofs_per_block = e_mat.rows();
+                assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
+
+                for (LI r = 0; r < num_dofs_per_block; r++){
+
+                    // local (rank) row ID
+                    rowID = m_uipLocalMap[eid][block_row_offset + r];
+
+                    // accumulate the diagonal term
+                    diag[rowID] += e_mat(r,r);
+                }
+                block_row_offset += num_dofs_per_block;
             }
         }
 
@@ -1327,7 +1355,7 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT, GI, LI>::mat_get_diagonal_block(DT **diag_blk){
-        unsigned int num_nodes;
+        LI blocks_dim;
         EigenMat e_mat;
         GI glo_RowId, glo_ColId;
         LI loc_RowId, loc_ColId;
@@ -1340,36 +1368,84 @@ namespace par {
         m_vMatRec.clear();
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiDofsPerElem[eid];
-            e_mat = m_epMat[eid];
-            for (unsigned int r = 0; r < num_nodes; r++){
-                rowID = m_uipLocalMap[eid][r]; // local row Id (include ghost nodes)
-                glo_RowId = m_ulpMap[eid][r];  // global row Id
-                rank_r = globalId_2_rank(glo_RowId); //rank who owns global row Id
-                loc_RowId = (glo_RowId - m_uivLocalNodeScan[rank_r]); //local ID in that rank (not include ghost nodes)
 
-                for (unsigned int c = 0; c < num_nodes; c++){
-                    colID = m_uipLocalMap[eid][c]; // local column Id (include ghost nodes)
-                    glo_ColId = m_ulpMap[eid][c];  // global column Id
-                    rank_c = globalId_2_rank(glo_ColId); // rank who owns global column Id
-                    loc_ColId = (glo_ColId - m_uivLocalNodeScan[rank_c]); // local column Id in that rank (not include ghost nodes)
+            // number of blocks in row (or column)
+            blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            assert (blocks_dim * blocks_dim == m_epMat[eid].size());
 
-                    // assemble to block diagonal matrix if both i and j belong to my rank
-                    if ((rowID >= m_uiNodeLocalBegin) && (rowID < m_uiNodeLocalEnd) && (colID >= m_uiNodeLocalBegin) && (colID < m_uiNodeLocalEnd)){
-                        diag_blk[rowID - m_uiNumPreGhostNodes][colID - m_uiNumPreGhostNodes] += e_mat(r,c);
-                    }
+            LI block_row_offset = 0;
+            LI block_col_offset = 0;
+            LI num_dofs_per_block;
 
-                    // set to matrix record when both i and j belong to the same rank
-                    if ((rank_r == rank_c)&&(rank_r != m_uiRank)){
-                        matr.setRank(rank_r);
-                        matr.setRowId(loc_RowId);
-                        matr.setColId(loc_ColId);
-                        matr.setVal(e_mat(r,c));
-                        matRec.push_back(matr);
-                    }
-                }
-            }
-        }
+            for (LI block_i = 0; block_i < blocks_dim; block_i++){
+
+                for (LI block_j = 0; block_j < blocks_dim; block_j++){
+
+                    LI index = block_i * blocks_dim + block_j;
+
+                    if (m_epMat[eid][index].size() != 0){
+
+                        e_mat = m_epMat[eid][index];
+                        assert(e_mat.rows() == e_mat.cols());
+
+                        // number of dofs per block
+                        num_dofs_per_block = e_mat.rows();
+                        assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
+
+                        for (LI r = 0; r < num_dofs_per_block; r++){
+
+                            // local row Id (include ghost nodes)
+                            rowID = m_uipLocalMap[eid][block_row_offset + r];
+
+                            // global row Id
+                            glo_RowId = m_ulpMap[eid][block_row_offset + r];
+
+                            //rank who owns global row Id
+                            rank_r = globalId_2_rank(glo_RowId);
+
+                            //local ID in that rank (not include ghost nodes)
+                            loc_RowId = (glo_RowId - m_uivLocalNodeScan[rank_r]);
+
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                // local column Id (include ghost nodes)
+                                colID = m_uipLocalMap[eid][block_col_offset + c];
+
+                                // global column Id
+                                glo_ColId = m_ulpMap[eid][block_col_offset + c];
+
+                                // rank who owns global column Id
+                                rank_c = globalId_2_rank(glo_ColId);
+
+                                // local column Id in that rank (not include ghost nodes)
+                                loc_ColId = (glo_ColId - m_uivLocalNodeScan[rank_c]);
+
+                                // assemble to block diagonal matrix if both i and j belong to my rank
+                                if ((rowID >= m_uiNodeLocalBegin) && (rowID < m_uiNodeLocalEnd) && (colID >= m_uiNodeLocalBegin) && (colID < m_uiNodeLocalEnd)){
+                                    diag_blk[rowID - m_uiNumPreGhostNodes][colID - m_uiNumPreGhostNodes] += e_mat(r,c);
+                                }
+
+                                // set to matrix record when both i and j belong to the same rank
+                                if ((rank_r == rank_c)&&(rank_r != m_uiRank)){
+                                    matr.setRank(rank_r);
+                                    matr.setRowId(loc_RowId);
+                                    matr.setColId(loc_ColId);
+                                    matr.setVal(e_mat(r,c));
+                                    matRec.push_back(matr);
+                                }
+                            }
+                        }
+                    } // if block is not null
+
+                    block_col_offset += num_dofs_per_block;
+
+                } // for block_j
+
+                block_row_offset += num_dofs_per_block;
+
+            } // for block_i
+
+        } // for (eid = 0:m_uiNumElems)
+
         std::sort(matRec.begin(), matRec.end());
 
         // accumulate value if 2 components of matRec are equal, then reduce the size of matRec
@@ -1380,13 +1456,19 @@ namespace par {
             matr.setColId(matRec[i].getColId());
 
             DT val = matRec[i].getVal();
+            // since matRec is sorted, we keep increasing i for all members that are equal
             while (((i + 1) < matRec.size()) && (matRec[i] == matRec[i + 1])) {
+                // accumulate value
                 val += matRec[i + 1].getVal();
+                // move i to the next member
                 i++;
             }
             matr.setVal(val);
 
+            // append the matr (with accumulated value) to m_vMatRec
             m_vMatRec.push_back(matr);
+
+            // move i to the next member
             i++;
         }
 
@@ -1454,14 +1536,14 @@ namespace par {
         delete [] recvOffset;
 
         return Error::SUCCESS;
-    }
+    } //mat_get_diagonal_block
 
     template <typename DT, typename  GI, typename LI>
     par::Error aMat<DT,GI,LI>::get_max_dof_per_elem(){
         unsigned int num_nodes;
         unsigned int max_dpe = 0;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiDofsPerElem[eid];
+            num_nodes = m_uiNodesPerElem[eid];
             if (max_dpe < num_nodes) max_dpe = num_nodes;
         }
         m_uiMaxNodesPerElem = max_dpe;
@@ -1691,7 +1773,7 @@ namespace par {
 
     template <typename  DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::matvec_ghosted(DT* v, DT* u){
-        unsigned int num_nodes;
+        LI num_dofs, blocks_dim, num_dofs_per_bolck;
         DT* ue;
         DT* ve;
         EigenMat emat;
@@ -1712,29 +1794,44 @@ namespace par {
         ghost_receive_end(u);
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiDofsPerElem[eid];
+            num_dofs = m_uiNodesPerElem[eid];
+            blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            LI active_block = 0;
 
-            // extract element vector ue from structure vector u
-            for (unsigned int r = 0; r < num_nodes; ++r) {
-                rowID = m_uipLocalMap[eid][r];
-                ue[r] = u[rowID];
-            }
 
-            // get element matrix from storage
-            emat = m_epMat[eid];
-            assert(emat.rows() == emat.cols());
-            assert(emat.rows() == num_nodes);
-            for (unsigned int i = 0; i < emat.rows(); i++){
-                ve[i] = 0.0;
-                for (unsigned int j = 0; j < emat.cols(); j ++){
-                    ve[i] += emat(i,j) * ue[j];
+            for (LI block_i = 0; block_i < blocks_dim; block_i++){
+                for (LI block_j = 0; block_j < blocks_dim; block_j++){
+                    LI index = block_i * blocks_dim + block_j;
+
+                    if (m_epMat[eid][index].size() != 0){
+
+                        // get block-element matrix from storage
+                        emat = m_epMat[eid][index];
+                        assert(emat.rows() == emat.cols());
+                        const LI num_dofs_per_block = emat.rows();
+
+                        // extract block-element vector ue from structure vector u
+                        for (LI r = 0; r < num_dofs_per_block; ++r) {
+                            rowID = m_uipLocalMap[eid][active_block * num_dofs_per_block + r];
+                            ue[r] = u[rowID];
+                        }
+
+                        // multiply block-element matrix with block-element vector
+                        for (LI i = 0; i < num_dofs_per_block; i++){
+                            ve[i] = 0.0;
+                            for (unsigned int j = 0; j < num_dofs_per_block; j ++){
+                                ve[i] += emat(i,j) * ue[j];
+                            }
+                        }
+                        // accumulate element vector ve to structure vector v
+                        for (unsigned int r = 0; r < num_dofs_per_block; r++){
+                            rowID = m_uipLocalMap[eid][active_block * num_dofs_per_block + r];
+                            v[rowID] += ve[r];
+                        }
+
+                        active_block++;
+                    }
                 }
-            }
-
-            // accumulate element vector ve to structure vector v
-            for (unsigned int r = 0; r < num_nodes; r++){
-                rowID = m_uipLocalMap[eid][r];
-                v[rowID] += ve[r];
             }
         }
 
@@ -1887,7 +1984,7 @@ namespace par {
 
         PetscInt rowId, colId, boundcol;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid ++) {
-            num_nodes = m_uiDofsPerElem[eid];
+            num_nodes = m_uiNodesPerElem[eid];
             for (unsigned int r = 0; r < num_nodes; r++) {
                 rowId = m_ulpMap[eid][r];
                 if (m_uipBdrMap[eid][r] == 1) {
@@ -1921,7 +2018,7 @@ namespace par {
         PetscInt rowId;
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiDofsPerElem[eid];
+            num_nodes = m_uiNodesPerElem[eid];
             for (unsigned int r = 0; r < num_nodes; r++){
                 if (m_uipBdrMap[eid][r] == 1){
                     // boundary node, set rhs = 0
@@ -2167,7 +2264,7 @@ namespace par {
     par::Error aMat<DT,GI,LI>::transform_to_petsc_vector(const DT* vec, Vec petsc_vec, bool ghosted) {
         PetscScalar value;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            unsigned int num_nodes = m_uiDofsPerElem[eid];
+            unsigned int num_nodes = m_uiNodesPerElem[eid];
 
             for (unsigned int i = 0; i < num_nodes; i++){
                 const unsigned int nidG = m_ulpMap[eid][i]; // global node
@@ -2190,7 +2287,7 @@ namespace par {
     // explicitly apply Dirichlet boundary conditions on structure vector
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::set_vector_bc(DT* vec, unsigned int eid, const GI **dirichletBMap){
-        unsigned int num_nodes = m_uiDofsPerElem[eid];
+        unsigned int num_nodes = m_uiNodesPerElem[eid];
         unsigned int rowId, boundrow;
         //for (unsigned int r = 0; r < num_nodes * dof; r++){
         for (unsigned int r = 0; r < num_nodes; r++){
@@ -2213,7 +2310,7 @@ namespace par {
         LI rowID, colID;
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiDofsPerElem[eid];
+            num_nodes = m_uiNodesPerElem[eid];
             // get element matrix
             e_mat = m_epMat[eid];
             for (unsigned int r = 0; r < num_nodes; r++){
@@ -2243,12 +2340,43 @@ namespace par {
         return Error::SUCCESS;
     }// ghost_to_local_mat
 
+
+
+    template <typename DT,typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(unsigned int eid, DT* e_mat, InsertMode mode){
+        unsigned int num_nodes = m_uiNodesPerElem[eid];
+
+        // now set values ...
+        //std::vector<PetscScalar> values(num_nodes * dof);
+        std::vector<PetscScalar> values(num_nodes);
+        //std::vector<PetscInt> colIndices(num_nodes * dof);
+        std::vector<PetscInt> colIndices(num_nodes);
+        PetscInt rowId;
+
+        unsigned int index = 0;
+        for (unsigned int r = 0; r < num_nodes; ++r) {
+            rowId = m_ulpMap[eid][r];
+            for (unsigned int c = 0; c < num_nodes; ++c) {
+                colIndices[c] = m_ulpMap[eid][c];
+                values[c] = e_mat[index];
+                index++;
+            } // c
+            MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
+            // values.clear();
+            // colIndices.clear();
+        } // r
+
+        return Error::SUCCESS;
+    } // petsc_set_element_matrix
+
+
+
     /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
     // e_mat is an array of EigenMat with the size dictated by twin_level (e.g. twin_level = 1, then size of e_mat is 2)
     template <typename DT,typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::set_element_matrices(unsigned int eid, EigenMat* e_mat, unsigned int twin_level, InsertMode mode) {
 
-        unsigned int num_nodes = m_uiDofsPerElem[eid];
+        unsigned int num_nodes = m_uiNodesPerElem[eid];
 
         // number of twinning matrices (e.g. twin_level = 2 then numEMat = 4)
         unsigned int numEMat = (1u<<twin_level);
@@ -2279,7 +2407,7 @@ namespace par {
     template <typename DT,typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(unsigned int eid, EigenMat e_mat, unsigned int e_mat_id, InsertMode mode) {
 
-        unsigned int num_nodes = m_uiDofsPerElem[eid];
+        unsigned int num_nodes = m_uiNodesPerElem[eid];
 
         assert(e_mat.rows()==e_mat.cols());
         unsigned int num_rows = e_mat.rows(); // num_rows = num_nodes * dof
