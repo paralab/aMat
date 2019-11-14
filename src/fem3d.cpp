@@ -90,8 +90,10 @@ int main( int argc, char *argv[] ) {
     const bool useEigen = atoi(argv[4]); // use Eigen matrix
     const bool matFree = atoi(argv[5]);
 
-    Matrix<double,8,8>* kee;
-    kee = new Matrix<double,8,8>[AMAT_MAX_EMAT_PER_ELEMENT];
+    //Matrix<double,8,8>* kee;
+    //kee = new Matrix<double,8,8>[AMAT_MAX_EMAT_PER_ELEMENT];
+    std::vector<Matrix<double,8,8>> kee;
+    kee.resize(AMAT_MAX_EMAT_PER_ELEMENT);
 
     double* xe = new double[nDim * nNodePerElem];
     double* ke = new double[(nDofPerNode * nNodePerElem) * (nDofPerNode * nNodePerElem)];
@@ -301,13 +303,11 @@ int main( int argc, char *argv[] ) {
     stMat.set_map(nelem, localMap, nodes_per_element, numLocalNodes, local2GlobalMap, start_global_node,
                   end_global_node, nnode_total);
 
-
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact;
     stMat.petsc_create_vec(rhs);
     stMat.petsc_create_vec(out);
     stMat.petsc_create_vec(sol_exact);
-
 
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -347,9 +347,10 @@ int main( int argc, char *argv[] ) {
         if (useEigen){
             if (matFree) {
                 // copy element matrix to store in m_epMat[eid]
-                stMat.copy_element_matrix(eid, kee[0]);
+                stMat.copy_element_matrix(eid, kee[0], 0, 0, 1);
+
             } else {
-                stMat.petsc_set_element_matrix(eid, kee[0], ADD_VALUES);
+                stMat.petsc_set_element_matrix(eid, kee[0], 0, 0, ADD_VALUES);
             }
         } else {
             if (matFree){
@@ -361,6 +362,7 @@ int main( int argc, char *argv[] ) {
         // assemble element load vector to global F
         stMat.petsc_set_element_vec(rhs, eid, fe, ADD_VALUES);
     }
+
 
     // set boundary globalMap
     stMat.set_bdr_map(bound_nodes);
@@ -561,7 +563,7 @@ int main( int argc, char *argv[] ) {
     delete [] nnodeOffset;
 
     //delete [] etype;
-    delete [] kee;
+    //delete [] kee;
     delete [] local2GlobalMap;
     delete [] nodes_per_element;
 
