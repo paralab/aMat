@@ -141,15 +141,15 @@ namespace par {
             m_dtVal = val;
         }
 
-        inline unsigned int getRank()  const { return m_uiRank; }
-        inline unsigned int getRowId() const { return m_uiRowId; }
-        inline unsigned int getColId() const { return m_uiColId; }
-        inline unsigned int getVal()   const { return m_dtVal; }
+        inline unsigned int getRank() const { return m_uiRank; }
+        inline Li getRowId() const { return m_uiRowId; }
+        inline Li getColId() const { return m_uiColId; }
+        inline Dt getVal()   const { return m_dtVal; }
 
-        inline void setRank(  unsigned int rank ) {  m_uiRank = rank; }
-        inline void setRowId( unsigned int rowId ) { m_uiRowId = rowId; }
-        inline void setColId( unsigned int colId ) { m_uiColId = colId; }
-        inline void setVal(   unsigned int val ) {   m_dtVal = val; }
+        inline void setRank(  unsigned int rank ) { m_uiRank = rank; }
+        inline void setRowId( Li rowId ) { m_uiRowId = rowId; }
+        inline void setColId( Li colId ) { m_uiColId = colId; }
+        inline void setVal(   Dt val ) {   m_dtVal = val; }
 
         bool operator == (MatRecord const &other) const {
             return ((m_uiRank == other.getRank())&&(m_uiRowId == other.getRowId())&&(m_uiColId == other.getColId()));
@@ -207,9 +207,9 @@ namespace par {
     }; // class MPI_datatype_matrecord
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // 
+    //
     // Class aMat
-    // 
+    //
     // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
 
     template <typename DT, typename GI, typename LI>
@@ -274,10 +274,10 @@ namespace par {
         std::vector<GI> m_uivLocalElementScan;
 
         /**@brief number of ghost DoFs owned by "pre" processes (whose ranks are smaller than m_uiRank) */
-        unsigned int m_uiNumPreGhostNodes;
+        LI m_uiNumPreGhostNodes;
 
         /**@brief total number of ghost DoFs owned by "post" processes (whose ranks are larger than m_uiRank) */
-        unsigned int m_uiNumPostGhostNodes;
+        LI m_uiNumPostGhostNodes;
 
         /**@brief number of DoFs sent to each process (size = m_uiSize) */
         std::vector<LI> m_uivSendNodeCounts;
@@ -659,7 +659,7 @@ namespace par {
          * @param[in] twin_level: level of twinning (0 no crack, 1 one crack, 2 two cracks, 3 three cracks)
          * */
         par::Error set_element_matrices( LI eid, const EigenMat* e_mat, unsigned int twin_level, InsertMode mode = ADD_VALUES);
-        par::Error petsc_set_element_matrix( LI eid, const EigenMat & e_mat, LI e_mat_id, InsertMode mode = ADD_VALUES );
+        par::Error petsc_set_element_matrix( LI eid, const EigenMat e_mat, LI e_mat_id, InsertMode mode = ADD_VALUES );
 
     }; // end of class aMat
 
@@ -755,7 +755,7 @@ namespace par {
                                         const GI           owned_global_dof_range_begin,
                                         const GI           owned_global_dof_range_end,
                                         const GI           n_global_dofs ){
-        
+
         m_uiNumElems = n_elements_on_rank; // This is number of owned element
         m_uiNumNodes = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
@@ -2491,7 +2491,7 @@ namespace par {
 
     // used with set_element_matrices for the case of one eid but multiple matrices
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix( LI eid, const EigenMat & e_mat, LI e_mat_id, InsertMode mode /* = ADD_VALUES */ ) {
+    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(LI eid, const EigenMat e_mat, LI e_mat_id, InsertMode mode) {
 
         unsigned int num_nodes = m_uiNodesPerElem[eid];
 
