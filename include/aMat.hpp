@@ -114,7 +114,7 @@ namespace par {
               }
               m_uiRequests.clear();*/
         }
-    };
+    }; // class AsyncExchangeCtx
 
     //////////////////////////////////////////////////////////////////////////////////////////////
     // Class MatRecord
@@ -214,12 +214,12 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     class aMat {
+
         typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
 
     protected:
         /**@brief Flag to use matrix-free or matrix-based method*/
         AMAT_TYPE m_MatType;
-
 
         /**@brief communicator used within aMat */
         MPI_Comm m_comm;
@@ -227,7 +227,6 @@ namespace par {
         unsigned int m_uiRank;
         /**@brief total number of ranks */
         unsigned int m_uiSize;
-
 
         /**@brief (local) number of DoFs owned by rank */
         LI m_uiNumNodes;
@@ -428,27 +427,29 @@ namespace par {
         }
 
         /**@brief begin assembling the matrix "m_pMat", called after MatSetValues */
-        inline par::Error petsc_init_mat(MatAssemblyType mode) const {
-            MatAssemblyBegin(m_pMat, mode);
+        inline par::Error petsc_init_mat( MatAssemblyType mode ) const {
+            MatAssemblyBegin( m_pMat, mode );
             return Error::SUCCESS;
         }
         /**@brief complete assembling the matrix "m_pMat", called before using the matrix */
-        inline par::Error petsc_finalize_mat(MatAssemblyType mode) const {
-            MatAssemblyEnd(m_pMat,mode);
+        inline par::Error petsc_finalize_mat( MatAssemblyType mode ) const {
+            MatAssemblyEnd( m_pMat, mode );
             return Error::SUCCESS;
         }
         /**@brief begin assembling the petsc vec (defined outside aMat) */
-        inline par::Error petsc_init_vec(Vec vec) const {
-            VecAssemblyBegin(vec);
+        inline par::Error petsc_init_vec( Vec vec ) const {
+            VecAssemblyBegin( vec );
             return Error::SUCCESS;
         }
         /**@brief end assembling the petsc vec (defined outside aMat) */
-        inline par::Error petsc_finalize_vec(Vec vec) const {
-            VecAssemblyEnd(vec);
+        inline par::Error petsc_finalize_vec( Vec vec ) const {
+            VecAssemblyEnd( vec );
             return Error::SUCCESS;
         }
+
         /**@brief allocate memory for a PETSc vector "vec", initialized by alpha */
-        par::Error petsc_create_vec(Vec &vec, PetscScalar alpha = 0.0) const;
+        par::Error petsc_create_vec( Vec &vec, PetscScalar alpha = 0.0 ) const;
+
         /**@brief assembly global load vector */
         par::Error petsc_set_element_vec( Vec vec, LI eid, DT* e_vec, InsertMode mode = ADD_VALUES );
 
@@ -467,16 +468,16 @@ namespace par {
         par::Error dump_vec( Vec vec, const char* filename = nullptr ) const;
 
         /**@brief get diagonal of m_pMat and put to vec */
-        par::Error petsc_get_diagonal(Vec vec) const;
+        par::Error petsc_get_diagonal( const Vec & vec ) const;
 
         /**@brief free memory allocated for PETSc vector*/
-        par::Error petsc_destroy_vec(Vec &vec) const;
+        par::Error petsc_destroy_vec( Vec & vec ) const;
 
         /**@brief allocate memory for "vec", size includes ghost DoFs if isGhosted=true, initialized by alpha */
-        par::Error create_vec(DT* &vec, bool isGhosted = false, DT alpha = (DT)0);
+        par::Error create_vec( DT* &vec, bool isGhosted = false, DT alpha = (DT)0.0 );
 
         /**@brief allocate memory for "mat", size includes ghost DoFs if isGhosted=true, initialized by alpha */
-        par::Error create_mat(DT** &mat, bool isGhosted = false, DT alpha = (DT)0);
+        par::Error create_mat( DT** &mat, bool isGhosted = false, DT alpha = (DT)0.0 );
 
         /**@brief copy local to corresponding positions of gVec (size including ghost DoFs) */
         par::Error local_to_ghost(DT*  gVec, const DT* local);
@@ -580,10 +581,10 @@ namespace par {
 
         /**@brief apply Dirichlet BCs by modifying the rhs vector
          * */
-        par::Error apply_bc_rhs(Vec rhs);
+        par::Error apply_bc_rhs( const Vec & rhs );
 
         /**@brief: invoke basic PETSc solver, "out" is solution vector */
-        par::Error petsc_solve(const Vec rhs,Vec out) const;
+        par::Error petsc_solve( const Vec & rhs, Vec out ) const;
 
 
         /**@brief ********* FUNCTIONS FOR DEBUGGING **************************************************/
@@ -591,17 +592,17 @@ namespace par {
             printf("echo from rank= %d\n", m_uiRank);
         }
 
-        inline par::Error petsc_init_mat_matvec(MatAssemblyType mode) const {
-            MatAssemblyBegin(m_pMat_matvec, mode);
+        inline par::Error petsc_init_mat_matvec( MatAssemblyType mode ) const {
+            MatAssemblyBegin( m_pMat_matvec, mode );
             return Error::SUCCESS;
         }
 
-        inline par::Error petsc_finalize_mat_matvec(MatAssemblyType mode) const{
-            MatAssemblyEnd(m_pMat_matvec,mode);
+        inline par::Error petsc_finalize_mat_matvec( MatAssemblyType mode ) const{
+            MatAssemblyEnd( m_pMat_matvec, mode );
             return Error::SUCCESS;
         }
 
-        inline par::Error set_Local2Global(GI* local_to_global){
+        inline par::Error set_Local2Global( GI* local_to_global ){
             m_ulpLocal2Global = local_to_global;
             return Error::SUCCESS;
         }
@@ -610,7 +611,7 @@ namespace par {
         par::Error petsc_create_matrix_matvec();
 
         /**@brief assemble matrix term by term so that we can control not to assemble "almost zero" terms*/
-        par::Error set_element_matrix_term_by_term( LI eid, EigenMat e_mat, InsertMode mode = ADD_VALUES);
+        par::Error set_element_matrix_term_by_term( LI eid, EigenMat e_mat, InsertMode mode = ADD_VALUES );
 
         /**@brief compare 2 matrices */
         par::Error petsc_compare_matrix();
@@ -625,13 +626,13 @@ namespace par {
         par::Error dump_mat_matvec( const char* filename = nullptr ) const;
 
         /**@brief y = m_pMat * x */
-        par::Error petsc_matmult(Vec x, Vec y);
+        par::Error petsc_matmult( Vec x, Vec result );
 
         /**@brief set entire vector "vec" to the column "nonzero_row" of matrix m_pMat_matvec, to compare with m_pMat*/
-        par::Error petsc_set_matrix_matvec(DT* vec, unsigned int nonzero_row, InsertMode mode = ADD_VALUES);
+        par::Error petsc_set_matrix_matvec( DT* vec, unsigned int nonzero_row, InsertMode mode = ADD_VALUES );
 
         /**@brief: test only: display all components of vector on screen */
-        par::Error print_vector(const DT* vec, bool ghosted = false);
+        par::Error print_vector( const DT* vec, bool ghosted = false );
 
         /**@brief: test only: display all element matrices (for purpose of debugging) */
         par::Error print_matrix();
@@ -651,8 +652,6 @@ namespace par {
         /**@brief assemble element matrix to global matrix for matrix-based, not using Eigen */
         par::Error petsc_set_element_matrix( LI eid, DT *e_mat, InsertMode mode = ADD_VALUES );
 
-
-
         /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
         /**@brief assembly element matrix to structure matrix, multiple levels of twining
          * @param[in] e_mat : element stiffness matrices (pointer)
@@ -661,32 +660,36 @@ namespace par {
         par::Error set_element_matrices( LI eid, const EigenMat* e_mat, unsigned int twin_level, InsertMode mode = ADD_VALUES);
         par::Error petsc_set_element_matrix( LI eid, const EigenMat e_mat, LI e_mat_id, InsertMode mode = ADD_VALUES );
 
-    }; // end of class aMat
+    }; // end class aMat
 
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////
     // context for aMat
+
     template <typename DT, typename GI, typename LI>
     struct aMatCTX {
         par::aMat<DT,GI,LI> * aMatPtr;
     };
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////
+
     // matrix shell to use aMat::MatMult_mf
     template<typename DT,typename GI, typename LI>
-    PetscErrorCode aMat_matvec(Mat A, Vec u, Vec v)
+    PetscErrorCode aMat_matvec( Mat A, Vec u, Vec v )
     {
         aMatCTX<DT,GI, LI> * pCtx;
-        MatShellGetContext(A, &pCtx);
+        MatShellGetContext( A, &pCtx );
 
         par::aMat<DT, GI, LI> * pLap = pCtx->aMatPtr;
-        std::function<PetscErrorCode(Mat, Vec, Vec)>* f = pLap->get_MatMult_func();
-        (*f)(A, u , v);
+        std::function<PetscErrorCode( Mat, Vec, Vec )>* f = pLap->get_MatMult_func();
+        (*f)( A, u , v );
         delete f;
         return 0;
     }
 
     // matrix shell to use aMat::MatGetDiagonal_mf
     template<typename DT,typename GI, typename LI>
-    PetscErrorCode aMat_matgetdiagonal(Mat A, Vec d)
+    PetscErrorCode aMat_matgetdiagonal( Mat A, Vec d )
     {
         aMatCTX<DT,GI,LI> * pCtx;
         MatShellGetContext(A, &pCtx);
@@ -700,7 +703,7 @@ namespace par {
 
     // matrix shell to use aMat::MatGetDiagonalBlock_mf
     template<typename DT,typename GI, typename LI>
-    PetscErrorCode aMat_matgetdiagonalblock(Mat A, Mat* a)
+    PetscErrorCode aMat_matgetdiagonalblock( Mat A, Mat* a )
     {
         aMatCTX<DT,GI,LI> * pCtx;
         MatShellGetContext(A, &pCtx);
@@ -712,19 +715,18 @@ namespace par {
         return 0;
     }
 
-
     // aMat constructor
     template <typename DT,typename GI, typename LI>
-    aMat<DT,GI,LI>::aMat(AMAT_TYPE matType){
-        m_MatType = matType;        // set type of matrix (matrix-based or matrix-free)
-        m_uiNumNodes = 0;           // number of local dofs
-        m_ulNumNodesGlobal = 0;     // number of global dofs
-        m_uiNumElems = 0;           // number of local elements
-        m_ulpMap = nullptr;         // local-to-global map
-        m_uiNodesPerElem = nullptr;  // number of dofs per element
-        m_epMat = nullptr;          // element matrices (Eigen matrix), used in matrix-free
-        m_pMat = nullptr;           // structure matrix, used in matrix-based
-        m_comm = MPI_COMM_NULL;     // communication of aMat
+    aMat<DT,GI,LI>::aMat( AMAT_TYPE matType ){
+        m_MatType          = matType;       // set type of matrix (matrix-based or matrix-free)
+        m_uiNumNodes       = 0;             // umber of local dofs
+        m_ulNumNodesGlobal = 0;             // number of global dofs
+        m_uiNumElems       = 0;             // number of local elements
+        m_ulpMap           = nullptr;       // local-to-global map
+        m_uiNodesPerElem   = nullptr;       // number of dofs per element
+        m_epMat            = nullptr;       // element matrices (Eigen matrix), used in matrix-free
+        m_pMat             = nullptr;       // structure matrix, used in matrix-based
+        m_comm             = MPI_COMM_NULL; // communication of aMat
         if( matType == AMAT_TYPE::MAT_FREE ){
             m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
         }
@@ -896,7 +898,7 @@ namespace par {
 
         return Error::SUCCESS;
 
-    }// update_map
+    } // update_map()
 
 
     // build scatter map
@@ -1150,7 +1152,7 @@ namespace par {
         delete [] sendOffset;
         delete [] recvOffset;
         return Error::SUCCESS;
-    } // buildScatterMap
+    } // buildScatterMap()
 
 
     template <typename DT,typename GI, typename LI>
@@ -1190,6 +1192,8 @@ namespace par {
     // use with Eigen, matrix-based, set every row of the matrix (faster than set every term of the matrix)
     template <typename DT,typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, InsertMode mode ) {
+
+        /** FYI: ********** FUNCTION NO LONGER IN USE, JUST FOR REFERENCE *********************/
 
         unsigned int num_rows = e_mat.rows();
         assert(num_rows == e_mat.cols());
@@ -1259,21 +1263,21 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_get_diagonal(Vec vec) const {
-        MatGetDiagonal(m_pMat, vec);
+    par::Error aMat<DT,GI,LI>::petsc_get_diagonal( const Vec & vec ) const {
+        MatGetDiagonal( m_pMat, vec );
         return Error::SUCCESS;
     } //petsc_get_diagonal
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_destroy_vec(Vec &vec) const {
-        VecDestroy(&vec);
+    par::Error aMat<DT,GI,LI>::petsc_destroy_vec( Vec & vec ) const {
+        VecDestroy( &vec );
         return Error::SUCCESS;
     }
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::create_vec(DT* &vec, bool isGhosted, DT alpha){
+    par::Error aMat<DT,GI,LI>::create_vec( DT* &vec, bool isGhosted, DT alpha /* = 0.0 */ ){
         if (isGhosted){
             vec = new DT[m_uiNumNodesTotal];
         } else {
@@ -1293,8 +1297,8 @@ namespace par {
     } // create_vec
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::create_mat(DT** &mat, bool isGhosted, DT alpha){
-        if (isGhosted){
+    par::Error aMat<DT,GI,LI>::create_mat( DT** &mat, bool isGhosted /* = false */, DT alpha /* = 0.0 */ ){
+        if( isGhosted ){
             mat = new DT*[m_uiNumNodesTotal];
             for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
                 mat[i] = new DT[m_uiNumNodesTotal];
@@ -1304,7 +1308,8 @@ namespace par {
                     mat[i][j] = alpha;
                 }
             }
-        } else {
+        }
+        else {
             mat = new DT *[m_uiNumNodes];
             for (unsigned int i = 0; i < m_uiNumNodes; i++) {
                 mat[i] = new DT[m_uiNumNodes];
@@ -1319,11 +1324,12 @@ namespace par {
     }
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::local_to_ghost(DT*  gVec, const DT* local){
+    par::Error aMat<DT,GI,LI>::local_to_ghost( DT*  gVec, const DT* local ){
         for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
             if ((i >= m_uiNumPreGhostNodes) && (i < m_uiNumPreGhostNodes + m_uiNumNodes)) {
                 gVec[i] = local[i - m_uiNumPreGhostNodes];
-            } else {
+            }
+            else {
                 gVec[i] = 0.0;
             }
         }
@@ -2093,7 +2099,7 @@ namespace par {
 
     // apply Dirichlet bc by modifying rhs
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::apply_bc_rhs(Vec rhs){
+    par::Error aMat<DT,GI,LI>::apply_bc_rhs( const Vec & rhs ){
         unsigned int num_nodes;
         PetscInt rowId;
 
@@ -2111,9 +2117,9 @@ namespace par {
     } // apply_bc_rhs
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_solve(const Vec rhs, Vec out) const {
+    par::Error aMat<DT,GI,LI>::petsc_solve( const Vec & rhs, Vec out ) const {
 
-        if (m_MatType == AMAT_TYPE::MAT_FREE) {
+        if( m_MatType == AMAT_TYPE::MAT_FREE ) {
 
             // PETSc shell matrix
             Mat pMatFree;
@@ -2161,13 +2167,14 @@ namespace par {
             // clean up
             KSPDestroy(&ksp);
 
-        } else {
+        }
+        else { // Not MAT_FREE
             // abstract Krylov object, linear solver context
             KSP ksp;
             // abstract preconditioner object, pre conditioner context
             PC  pc;
             // default KSP context
-            KSPCreate(m_comm, &ksp);
+            KSPCreate( m_comm, &ksp );
 
             // set default solver (e.g. KSPCG, KSPFGMRES, ...)
             // could be overwritten at runtime using -ksp_type <type>
@@ -2187,7 +2194,7 @@ namespace par {
             KSPSolve(ksp, rhs, out); // solve the linear system
 
             // clean up
-            KSPDestroy(&ksp);
+            KSPDestroy( &ksp );
         }
 
         return Error::SUCCESS;
@@ -2287,13 +2294,13 @@ namespace par {
     } // dump_mat_matvec
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_matmult(Vec x, Vec y){
-        MatMult(m_pMat, x, y);
+    par::Error aMat<DT,GI,LI>::petsc_matmult( Vec x, Vec result ){
+        MatMult( m_pMat, x, result );
         return Error::SUCCESS;
     } // petsc_matmult
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>:: petsc_set_matrix_matvec(DT* vec, unsigned int global_column, InsertMode mode) {
+    par::Error aMat<DT,GI,LI>:: petsc_set_matrix_matvec( DT* vec, unsigned int global_column, InsertMode mode /* = ADD_VALUES */ ) {
 
         PetscScalar value;
         PetscInt rowId;
@@ -2314,13 +2321,14 @@ namespace par {
     } // petsc_set_matrix_matvec
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::print_vector(const DT* vec, bool ghosted){
-        if (ghosted){
+    par::Error aMat<DT,GI,LI>::print_vector( const DT* vec, bool ghosted /* = false */ ){
+        if( ghosted ){
             // size of vec includes ghost DoFs, print local DoFs only
             for (unsigned int i = m_uiNodeLocalBegin; i < m_uiNodeLocalEnd; i++){
                 printf("rank %d, v[%d] = %10.5f \n", m_uiRank, i - m_uiNumPreGhostNodes, vec[i]);
             }
-        } else {
+        }
+        else {
             // vec is only for local DoFs
             printf("here, rank %d, m_uiNumNodes = %d\n", m_uiRank, m_uiNumNodes);
             for (unsigned int i = m_uiNodeLocalBegin; i < m_uiNodeLocalEnd; i++){
@@ -2525,4 +2533,4 @@ namespace par {
         return Error::SUCCESS;
     } // petsc_set_element_matrix
 
-} // end of namespace par
+} // end namespace par
