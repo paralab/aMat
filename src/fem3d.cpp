@@ -54,7 +54,7 @@ usage()
     cout << "     Nez: Number of elements in z\n";
     cout << "     use eigen: 1 => yes\n";
     cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
-    exit( 0) ;        
+    exit( 0) ;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -97,7 +97,8 @@ int main( int argc, char *argv[] ) {
 
     double* xe = new double[nDim * nNodePerElem];
     double* ke = new double[(nDofPerNode * nNodePerElem) * (nDofPerNode * nNodePerElem)];
-    double* fe = new double[nDofPerNode * nNodePerElem];
+    //double* fe = new double[nDofPerNode * nNodePerElem];
+    Matrix<double,8,1> fe;
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x, y, z direction
     const double Lx = 2.0, Ly = 2.0, Lz = 2.0;
@@ -118,7 +119,7 @@ int main( int argc, char *argv[] ) {
     MPI_Comm_size(comm, &size);
 
     if(!rank) {
-        std::cout<<"============ parameters read  =======================\n"; 
+        std::cout<<"============ parameters read  =======================\n";
         std::cout<<"\t\tNex : "<<Nex<<" Ney: "<<Ney<<" Nez: "<<Nez<< "\n";
     }
     if(!rank && useEigen) { std::cout<<"\t\tuseEigen: "<<useEigen << "\n"; }
@@ -276,8 +277,10 @@ int main( int argc, char *argv[] ) {
 
     // boundary nodes: bound
     unsigned int** bound_nodes = new unsigned int *[nelem];
+    double** bound_values = new double* [nelem];
     for (unsigned int e = 0; e < nelem; e++) {
         bound_nodes[e] = new unsigned int[nNodePerElem];
+        bound_values[e] = new double [nNodePerElem];
     }
 
 
@@ -327,8 +330,10 @@ int main( int argc, char *argv[] ) {
                 (std::fabs(y) < tol) || (std::fabs(y - Ly) < tol) ||
                 (std::fabs(z) < tol) || (std::fabs(z - Lz) < tol)) {
                 bound_nodes[eid][n] = 1; // boundary
+                bound_values[eid][n] = 0; // prescribed value
             } else {
                 bound_nodes[eid][n] = 0; // interior
+                bound_values[eid][n] = -1000000; // for testing
             }
         }
 
@@ -341,7 +346,7 @@ int main( int argc, char *argv[] ) {
         }
 
         // compute element force vector
-        fe_hex8(fe, xe);
+        fe_hex8_eig(fe,xe);
 
         // assemble element stiffness matrix to global K
         if (useEigen){
@@ -360,17 +365,19 @@ int main( int argc, char *argv[] ) {
             }
         }
         // assemble element load vector to global F
-        stMat.petsc_set_element_vec(rhs, eid, fe, ADD_VALUES);
+        stMat.petsc_set_element_vec(rhs, eid, fe, 0, ADD_VALUES); // 0 is block_i which is only one block for this case
     }
 
 
     // set boundary globalMap
-    stMat.set_bdr_map(bound_nodes);
+    stMat.set_bdr_map(bound_nodes, bound_values);
+
+    stMat.get_boundary_dofs();
 
     //stMat.print_matrix();
 
     delete [] ke;
-    delete [] fe;
+    //delete [] fe;
     delete [] xe;
 
     // Pestc begins and completes assembling the global stiffness matrix
@@ -383,7 +390,7 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    // write results to files
+
 
     //stMat.dump_vec("rhs_vec.dat", rhs);
     //stMat.dump_vec("out_vec.dat", out);
@@ -496,6 +503,13 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
+    // write results to files
+    /*if (!matFree){
+        stMat.dump_mat("matrix.dat");
+    } else {
+        stMat.print_mepMat();
+    }*/
+
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
 
@@ -504,7 +518,8 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_finalize_vec(out);
 
     // compute exact solution for comparison
-    double* e_exact = new double[nNodePerElem]; // only for 1 DOF/node
+    //double* e_exact = new double[nNodePerElem]; // only for 1 DOF/node
+    Matrix<double,8,1> e_exact;
 
     for (unsigned int e = 0; e < nelem; e++) {
         for (unsigned int n = 0; n < nNodePerElem; n++) {
@@ -519,16 +534,16 @@ int main( int argc, char *argv[] ) {
             if ((std::abs(x) < tol) || (std::abs(x - Lx) < tol) ||
                 (std::abs(y) < tol) || (std::abs(y - Ly) < tol) ||
                 (std::abs(z) < tol) || (std::abs(z - Lz) < tol)) {
-                e_exact[n] = 0.0; // boundary
+                e_exact(n) = 0.0; // boundary
             } else {
-                e_exact[n] = (1.0 / (12.0 * M_PI * M_PI)) * sin(2 * M_PI * x) * sin(2 * M_PI * y) * sin(2 * M_PI * z);
+                e_exact(n) = (1.0 / (12.0 * M_PI * M_PI)) * sin(2 * M_PI * x) * sin(2 * M_PI * y) * sin(2 * M_PI * z);
             }
         }
         // set exact solution to Pestc vector
-        stMat.petsc_set_element_vec(sol_exact, e, e_exact, INSERT_VALUES);
+        stMat.petsc_set_element_vec(sol_exact, e, e_exact, 0, INSERT_VALUES);
     }
 
-    delete [] e_exact;
+    //delete [] e_exact;
 
     // Pestc begins and completes assembling the exact solution
     stMat.petsc_init_vec(sol_exact);
@@ -550,9 +565,11 @@ int main( int argc, char *argv[] ) {
     for (unsigned int eid = 0; eid < nelem; eid++){
         delete [] globalMap[eid];
         delete [] bound_nodes[eid];
+        delete [] bound_values[eid];
     }
     delete [] globalMap;
     delete [] bound_nodes;
+    delete [] bound_values;
 
     for (unsigned int eid = 0; eid < nelem; eid++){
         delete [] localMap[eid];
