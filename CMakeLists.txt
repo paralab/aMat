@@ -50,11 +50,17 @@ target_include_directories(fem3d PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(fem3d PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(fem3d ${MPI_LIBRARIES} m)
 
-#add_executable(matfree src/matfree.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
-#target_include_directories(matfree PUBLIC include)
-#target_include_directories(matfree PRIVATE ${MPI_INCLUDE_PATH})
-#target_include_directories(matfree PRIVATE ${EIGEN_HEADER_DIR})
-#target_link_libraries(matfree ${MPI_LIBRARIES} m)
+add_executable(fem1d src/fem1d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+target_include_directories(fem1d PUBLIC include)
+target_include_directories(fem1d PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(fem1d PRIVATE ${EIGEN_HEADER_DIR})
+target_link_libraries(fem1d ${MPI_LIBRARIES} m)
+
+add_executable(fem2d src/fem2d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+target_include_directories(fem2d PUBLIC include)
+target_include_directories(fem2d PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(fem2d PRIVATE ${EIGEN_HEADER_DIR})
+target_link_libraries(fem2d ${MPI_LIBRARIES} m)
 
 
 #add_executable(testEigen ${INCLUDE_FILES} ${SOURCE_FILES} test/src/testEigen.cpp test/include/aMat.h)
@@ -68,8 +74,11 @@ if(BUILD_WITH_PETSC)
     target_include_directories(fem3d PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(fem3d ${PETSC_LIBRARIES})
 
-#    target_include_directories(matfree PUBLIC ${PETSC_INCLUDES})
-#    target_link_libraries(matfree ${PETSC_LIBRARIES})
+    target_include_directories(fem1d PUBLIC ${PETSC_INCLUDES})
+    target_link_libraries(fem1d ${PETSC_LIBRARIES})
+
+    target_include_directories(fem2d PUBLIC ${PETSC_INCLUDES})
+    target_link_libraries(fem2d ${PETSC_LIBRARIES})
 
 #    target_include_directories(testEigen PUBLIC ${PETSC_INCLUDES})
 #    target_link_libraries(testEigen ${PETSC_LIBRARIES})

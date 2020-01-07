@@ -16,4 +16,7 @@ double *gauss(int n);
 double *basis_hex8 (double p[]);
 double *dfbasis_hex8 (double p[]);
 
+double* basis_quad4(double p[]);
+double* dfbasis_quad4(double p[]);
+
 #endif //ADAPTIVEMATRIX_SHFUNCTION_H

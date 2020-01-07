@@ -142,3 +142,54 @@ Output : double *dN[24] values of the derivatives of shape functions
     return dN;
 }
 
+/**
+ * @brief: compute shape functions of 4-node quad element
+ * @brief: allocate memory for dN --> NEED TO FREE MEMORY AFTER N IS USED
+ * @param[in] x natural coordinates
+ * @param[out] N values of shape functions at x
+ * @author Han Tran
+* */
+double* basis_quad4(double xi[]) {
+    // allocate memory for N --> NEED TO FREE MEMORY AFTER N IS USED
+    double* N = new double[4];
+
+    N[0] = 0.25 * (1.0 - xi[0]) * (1.0 - xi[1]);
+    N[1] = 0.25 * (1.0 + xi[0]) * (1.0 - xi[1]);
+    N[2] = 0.25 * (1.0 + xi[0]) * (1.0 + xi[1]);
+    N[3] = 0.25 * (1.0 - xi[0]) * (1.0 + xi[1]);
+
+    // return the address of the memory stored value of N
+    return N;
+}
+
+/**
+ * @brief: compute derivatives of shape functions of 4-node quad element
+ * @brief: allocate memory for dN --> NEED TO FREE MEMORY AFTER dN IS USED
+ * @param[in] x natural coordinates
+ * @param[out] dN values of derivatives of shape functions at x
+ * @author Han Tran
+* */
+double* dfbasis_quad4(double xi[])
+{
+    // allocate memory for dN --> NEED TO FREE MEMORY AFTER dN IS USED
+    double* dN = new double[8];
+
+    // dN[0]/dxi, dN[0]/deta
+    dN[0] = 0.25 * (xi[1] - 1.0);
+    dN[1] = 0.25 * (xi[0] - 1.0);
+
+    // dN[1]/dxi, dN[1]/deta
+    dN[2] = 0.25 * (1.0 - xi[1]);
+    dN[3] = (-0.25) * (1.0 + xi[0]);
+
+    // dN[2]/dxi, dN[2]/deta
+    dN[4] = 0.25 * (xi[1] + 1.0);
+    dN[5] = 0.25 * (xi[0] + 1.0);
+
+    // dN[3]/dxi, dN[3]/deta
+    dN[6] = (-0.25) * (1.0 + xi[1]);
+    dN[7] = 0.25 * (1.0 - xi[0]);
+
+    // return the address of the memory stored value of dN
+    return dN;
+}

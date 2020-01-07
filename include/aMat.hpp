@@ -24,6 +24,7 @@
 
 #include <vector>
 #include <fstream>
+#include <algorithm>
 
 //////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -44,7 +45,8 @@ namespace par {
                        GHOST_NODE_NOT_FOUND,
                        UNKNOWN_MAT_TYPE,
                        WRONG_COMMUNICATION,
-                       UNKNOWN_DOF_TYPE};
+                       UNKNOWN_DOF_TYPE,
+                       UNKNOWN_CONSTRAINT };
 
     enum class DOF_TYPE { FREE, PRESCRIBED, UNDEFINED };
 
@@ -190,6 +192,7 @@ namespace par {
 
     }; // class MatRecord
 
+    // class BoundRecord, designed to be used for get_boundary_dofs(), but no longer in use
     template <typename Dt, typename Gi, typename Li>
     class BoundRecord {
     private:
@@ -320,14 +323,8 @@ namespace par {
         /**@brief map from local DoF of element to local DoF: m_uiMap[eid][element_node]  = local node-ID */
         const LI* const*  m_uipLocalMap;
 
-        /**@brief map from local DoF of element to boundary flag: 0 = interior dof; 1 = boundary dof */
-        unsigned int** m_uipBdrMap;
-
-        /**@brief prescribed value on boundary dofs*/
-        DT** m_dtPresValMap;
-
-        /**@brief DOF types */
-
+        /**@brief map from local DoF to global DoF */
+        const GI* m_ulpLocal2Global;
 
         /**@brief number of DoFs owned by each rank, NOT include ghost DoFs */
         std::vector<LI> m_uivLocalNodeCounts;
@@ -392,19 +389,34 @@ namespace par {
         /**@brief matrix record for block jacobi matrix*/
         std::vector<MatRecord<DT,LI>> m_vMatRec;
 
-        /**@brief boundary dof Ids and prescribed values for Dirichlet bc */
-        std::vector<BoundRecord<DT,GI,LI>> m_vBdrRec;
+        /**@brief map of constrained DOFs: 0 = free dof; 1 = constrained dof */
+        unsigned int** m_uipBdrMap;
 
-        /**@brief free dof Ids */
-        std::vector<GI> m_vFreeNodes;
+        /**@brief map of values prescribed on constrained DOFs */
+        DT** m_dtPresValMap;
 
-        std::vector< par::DOF_TYPE > m_DofType;
-        std::vector< DT > m_dPreDofValue;
-        std::vector< GI > m_GlobalDofId;
+        /**@brief list of constrained DOFs owned by my rank */
+        std::vector<GI> ownedConstrainedDofs;
+
+        /**@brief list of values prescribed at constrained DOFs owned by my rank */
+        std::vector<DT> ownedPrescribedValues;
+
+        /**@brief list of free DOFs owned by my rank */
+        std::vector<GI> ownedFreeDofs;
+
+        /**@KfcUc (= Kfc * Uc) used to apply bc for rhs */
+        Vec KfcUcVec;
+
 
         /**@brief TEMPORARY VARIABLES FOR DEBUGGING */
         Mat m_pMat_matvec; // matrix created by matvec() to compare with m_pMat
-        GI* m_ulpLocal2Global; // map from local dof to global dof, temporarily used for testing matvec()
+
+        /**@brief VARIABLES ARE NO LONGER USED */
+        std::vector<BoundRecord<DT,GI,LI>> m_vBdrRec; // boundary dof Ids and prescribed values for Dirichlet bc
+        std::vector<GI> m_vFreeNodes; // free dof Ids
+        std::vector< par::DOF_TYPE > m_DofType;
+        std::vector< DT > m_dPreDofValue;
+        std::vector< GI > m_GlobalDofId;
 
     public:
 
@@ -439,15 +451,6 @@ namespace par {
 
         /**@brief build scatter-gather map (used for communication) and local-to-local map (used for matvec) */
         par::Error buildScatterMap();
-
-        /**@brief set mapping from element local node to global node */
-        inline par::Error set_bdr_map(unsigned int** bdr_map, DT** bdr_val){
-            // indicator whether dof is on boundary
-            m_uipBdrMap = bdr_map;
-            // prescribed value on boundary d
-            m_dtPresValMap = bdr_val;
-            return Error::SUCCESS;
-        }
 
         /**@brief return number of DoFs owned by this rank*/
         inline unsigned int get_local_num_nodes() const {
@@ -612,6 +615,7 @@ namespace par {
 
         /**@brief v = K * u; v and u are of size including ghost DoFs*/
         par::Error matvec_ghosted(DT* v, DT* u);
+        par::Error matvec_ghosted_bc(DT* v, DT* u);
 
         /**@brief matrix-free version of MatMult of PETSc */
         PetscErrorCode MatMult_mf(Mat A, Vec u, Vec v);
@@ -658,25 +662,23 @@ namespace par {
             return f;
         }
 
+        /**@brief set boundary data */
+        par::Error set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints);
+
         /**@brief apply Dirichlet BCs by modifying the matrix "m_pMat" */
         par::Error apply_bc_mat();
+
+        /**@brief apply Dirichlet BCs to diagonal vector used for Jacobi preconditioner */
+        par::Error apply_bc_diagonal(Vec rhs);
 
         /**@brief apply Dirichlet BCs to block diagonal matrix */
         par::Error apply_bc_blkdiag(Mat* blkdiagMat);
 
-        par::Error collect_bc_info();
-
         /**@brief apply Dirichlet BCs by modifying the rhs vector, also used for diagonal vector in Jacobi precondition*/
         par::Error apply_bc_rhs(Vec rhs);
 
-        /**@brief apply Dirichlet BCs to diagonal vector used for Jacobi preconditioner */
-        par::Error apply_bc_diagonal(Vec rhs, PetscScalar value = 0.0);
-
-        /**@brief get all boundary data and put into a single vector*/
-        par::Error get_boundary_dofs();
-
         /**@brief: invoke basic PETSc solver, "out" is solution vector */
-        par::Error petsc_solve( const Vec & rhs, Vec out ) const;
+        par::Error petsc_solve( const Vec rhs, Vec out ) const;
 
 
         /**@brief ********* FUNCTIONS FOR DEBUGGING **************************************************/
@@ -827,6 +829,8 @@ namespace par {
         if( matType == AMAT_TYPE::MAT_FREE ){
             m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
         }
+        //m_uipBdrMap = nullptr;
+        //m_dtPresValMap = nullptr;
     }// constructor
 
     template <typename DT,typename GI, typename LI>
@@ -843,6 +847,12 @@ namespace par {
             //MatDestroy(&m_pMat);
         }
 
+        /*for (LI eid = 0; eid < m_uiNumElems; eid++){
+            if (m_uipBdrMap[eid] != nullptr) delete [] m_uipBdrMap[eid];
+            if (m_dtPresValMap[eid] != nullptr) delete [] m_dtPresValMap[eid];
+        }
+        delete [] m_uipBdrMap;
+        delete [] m_dtPresValMap;*/
     } // ~aMat
 
     template <typename DT,typename GI, typename LI>
@@ -865,6 +875,9 @@ namespace par {
 
         // point to provided local map
         m_uiNodesPerElem = dofs_per_element;
+
+        // point to rank_to_global map
+        m_ulpLocal2Global = rank_to_global_map;
 
         m_ulpMap = new GI* [m_uiNumElems];
         for( LI eid = 0; eid < m_uiNumElems; eid++ ){
@@ -937,6 +950,9 @@ namespace par {
 
         // point to new dofs_per_element map
         m_uiNodesPerElem = dofs_per_element;
+
+        // update new rank_to_global map
+        m_ulpLocal2Global = rank_to_global_map;
 
         // allocate with new dofs per element, and update new global map
         for (LI eid = 0; eid < m_uiNumElems; eid++){
@@ -1260,6 +1276,63 @@ namespace par {
 
 
     template <typename DT,typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints){
+
+        // extract constrained dofs owned by me
+        LI local_Id;
+        GI global_Id;
+
+        for (LI i = 0; i < numConstraints; i++){
+            global_Id = constrainedDofs[i];
+            if ((global_Id >= m_uivLocalNodeScan[m_uiRank]) && (global_Id < m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)) {
+                ownedConstrainedDofs.push_back(global_Id);
+                ownedPrescribedValues.push_back(prescribedValues[i]);
+            }
+        }
+
+        // construct elemental map of boundary condition
+        m_uipBdrMap = new unsigned int* [m_uiNumElems];
+        m_dtPresValMap = new DT* [m_uiNumElems];
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            m_uipBdrMap[eid] = new unsigned int[m_uiNodesPerElem[eid]];
+            m_dtPresValMap[eid] = new DT [m_uiNodesPerElem[eid]];
+        }
+
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (LI nid = 0; nid < m_uiNodesPerElem[eid]; nid++){
+                global_Id = m_ulpMap[eid][nid];
+                LI index;
+                for (index = 0; index < numConstraints; index++) {
+                    if (global_Id == constrainedDofs[index]) {
+                        m_uipBdrMap[eid][nid] = 1;
+                        m_dtPresValMap[eid][nid] = prescribedValues[index];
+                        break;
+                    }
+                }
+                if (index == numConstraints){
+                    m_uipBdrMap[eid][nid] = 0;
+                    m_dtPresValMap[eid][nid] = -1E16; // for testing
+                    if ((global_Id >= m_uivLocalNodeScan[m_uiRank]) && (global_Id < m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)) {
+                        ownedFreeDofs.push_back(global_Id);
+                    }
+                }
+            }
+        }
+
+        //if (ownedFreeDofs_unsorted.size() > 0){
+        if (ownedFreeDofs.size() > 0){
+            std::sort(ownedFreeDofs.begin(), ownedFreeDofs.end());
+            ownedFreeDofs.erase(std::unique(ownedFreeDofs.begin(),ownedFreeDofs.end()), ownedFreeDofs.end());
+        }
+
+        // allocate KfcUc, this will be subtracted from rhs to apply bc
+        petsc_create_vec(KfcUcVec);
+
+        return Error::SUCCESS;
+    }//set_bdr_map
+
+
+    template <typename DT,typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_create_vec(Vec &vec, PetscScalar alpha) const {
         VecCreate(m_comm, &vec);
         if (m_uiSize>1) {
@@ -1279,8 +1352,7 @@ namespace par {
     // assume that element vector uses the same block structure as for element matrix, i.e. the order of blocks in the
     // local and global maps are {1, 2, 3, ...} = {(block_i, block_j) = (0,0), (0,1), (1,0), (1,1), ...} for the case
     // of there are 2 blocks in row and 2 blocks in column
-    // todo: check with Keith that off-diagonal blocks do not have element load vector (because if yes, then different
-    // todo: off-diagonal matrices, e.g. (0,1) and (1,0), have the same row ID in element load vector
+    // todo verify this with Keith: length of e_vec = m_uiNumNodesPerElem[eid]
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode){
 
@@ -1326,6 +1398,38 @@ namespace par {
             //MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
             MatSetValues(m_pMat, 1, &rowId, colIndices.size(), colIndices.data(), values.data(), mode);
         } // r
+
+        // prepare for bc of rhs
+        std::vector<PetscScalar> KfcUcValues;
+        std::vector<PetscInt> rowIndices;
+        PetscScalar temp;
+        bool bdrFlag, rowFlag;
+        // loop over rows of the element matrix (block)
+        for (LI r = 0; r < num_rows; r++){
+            rowFlag = false;
+            // continue if row is associated with a free dof
+            if (m_uipBdrMap[eid][block_i * num_rows + r] == 0){
+                rowId = m_ulpMap[eid][block_i * num_rows + r];
+                temp = 0;
+                // loop over columns of the element matrix (block)
+                for (LI c = 0; c < num_rows; c++){
+                    // continue if column is associated with a constrained dof
+                    if (m_uipBdrMap[eid][block_j * num_rows + c] == 1){
+                        // accumulate Kfc[r,c]*Uc[c]
+                        temp += e_mat(r,c) * m_dtPresValMap[eid][block_j * num_rows + c];
+                        rowFlag = true; // this rowId has constrained column dof
+                        bdrFlag = true; // this element matrix has KfcUc
+                    }
+                }
+                if (rowFlag){
+                    rowIndices.push_back(rowId);
+                    KfcUcValues.push_back(-1.0*temp);
+                }
+            }
+        }
+        if (bdrFlag){
+            VecSetValues(KfcUcVec, rowIndices.size(), rowIndices.data(), KfcUcValues.data(), ADD_VALUES);
+        }
 
         return Error::SUCCESS;
     } // petsc_set_element_matrix
@@ -1461,15 +1565,52 @@ namespace par {
 
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::copy_element_matrix( LI eid, EigenMat emat, LI block_i, LI block_j, LI blocks_dim ) {
+    par::Error aMat<DT,GI,LI>::copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) {
         // resize the vector of blocks for element eid
-        m_epMat[eid].resize(blocks_dim*blocks_dim);
+        m_epMat[eid].resize(blocks_dim * blocks_dim);
 
-        // index of block corresponding to block_i and block_j
-        LI index = block_i*blocks_dim + block_j;
+        // 1D-index of (block_i, block_j)
+        LI index = (block_i * blocks_dim) + block_j;
 
         // copy e_mat to the location of index
-        m_epMat[eid][index] = emat;
+        m_epMat[eid][index] = e_mat;
+
+        // prepare for bc of rhs
+        LI num_rows = e_mat.rows();
+        assert(num_rows == e_mat.cols());
+        std::vector<PetscScalar> KfcUcValues;
+        std::vector<PetscInt> rowIndices;
+        PetscInt rowId;
+        PetscScalar temp;
+        bool bdrFlag, rowFlag;
+
+        // loop over rows of the element matrix (block)
+        for (LI r = 0; r < num_rows; r++){
+            rowFlag = false;
+            // continue if row is associated with a free dof
+            if (m_uipBdrMap[eid][block_i * num_rows + r] == 0){
+                rowId = m_ulpMap[eid][block_i * num_rows + r];
+                temp = 0;
+                // loop over columns of the element matrix (block)
+                for (LI c = 0; c < num_rows; c++){
+                    // continue if column is associated with a constrained dof
+                    if (m_uipBdrMap[eid][block_j * num_rows + c] == 1){
+                        // accumulate Kfc[r,c]*Uc[c]
+                        temp += e_mat(r,c) * m_dtPresValMap[eid][block_j * num_rows + c];
+                        rowFlag = true; // this rowId has constrained column dof
+                        bdrFlag = true; // this element matrix has KfcUc
+                    }
+                }
+                if (rowFlag){
+                    rowIndices.push_back(rowId);
+                    KfcUcValues.push_back(-1.0*temp);
+                }
+            }
+        }
+
+        if (bdrFlag){
+            VecSetValues(KfcUcVec, rowIndices.size(), rowIndices.data(), KfcUcValues.data(), ADD_VALUES);
+        }
 
         return Error::SUCCESS;
     }// copy_element_matrix
@@ -1997,6 +2138,7 @@ namespace par {
     par::Error aMat<DT,GI,LI>::matvec(DT* v, const DT* u, bool isGhosted) {
         if (isGhosted) {
             // std::cout << "GHOSTED MATVEC" << std::endl;
+            //matvec_ghosted_bc(v, (DT*)u);
             matvec_ghosted(v, (DT*)u);
         } else {
             // std::cout << "NON GHOSTED MATVEC" << std::endl;
@@ -2007,7 +2149,7 @@ namespace par {
             create_vec(gu, true, 0.0);
             // copy u to gu
             local_to_ghost(gu, u);
-
+            //matvec_ghosted_bc(gv, gu);
             matvec_ghosted(gv, gu);
             // copy gv to v
             ghost_to_local(v, gv);
@@ -2022,7 +2164,7 @@ namespace par {
     template <typename  DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::matvec_ghosted(DT* v, DT* u){
 
-        LI num_dofs, blocks_dim, num_dofs_per_bolck;
+        LI blocks_dim, num_dofs_per_bolck;
         DT* ue;
         DT* ve;
         EigenMat emat;
@@ -2036,20 +2178,22 @@ namespace par {
         ue = new DT[m_uiMaxNodesPerElem];
         ve = new DT[m_uiMaxNodesPerElem];
 
-        LI rowID;
+        LI rowID, colID;
 
         // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
         ghost_receive_begin(u);
         ghost_receive_end(u);
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            //num_dofs = m_uiNodesPerElem[eid];
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
-            LI active_block = 0;
-
+            LI block_row_offset = 0;
+            LI block_col_offset = 0;
+            LI num_dofs_per_block;
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
+
                 for (LI block_j = 0; block_j < blocks_dim; block_j++){
+
                     LI index = block_i * blocks_dim + block_j;
 
                     if (m_epMat[eid][index].size() != 0){
@@ -2057,31 +2201,34 @@ namespace par {
                         // get block-element matrix from storage
                         emat = m_epMat[eid][index];
                         assert(emat.rows() == emat.cols());
-                        const LI num_dofs_per_block = emat.rows();
+
+                        num_dofs_per_block = emat.rows();
+                        assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
 
                         // extract block-element vector ue from structure vector u
-                        for (LI r = 0; r < num_dofs_per_block; ++r) {
-                            rowID = m_uipLocalMap[eid][active_block * num_dofs_per_block + r];
-                            ue[r] = u[rowID];
+                        for (LI c = 0; c < num_dofs_per_block; c++) {
+                            colID = m_uipLocalMap[eid][block_col_offset + c];
+                            ue[c] = u[colID];
                         }
 
                         // multiply block-element matrix with block-element vector
                         for (LI i = 0; i < num_dofs_per_block; i++){
                             ve[i] = 0.0;
-                            for (unsigned int j = 0; j < num_dofs_per_block; j ++){
+                            for (unsigned int j = 0; j < num_dofs_per_block; j++){
                                 ve[i] += emat(i,j) * ue[j];
                             }
                         }
                         // accumulate element vector ve to structure vector v
                         for (unsigned int r = 0; r < num_dofs_per_block; r++){
-                            rowID = m_uipLocalMap[eid][active_block * num_dofs_per_block + r];
+                            rowID = m_uipLocalMap[eid][block_row_offset + r];
                             v[rowID] += ve[r];
                         }
-
-                        // todo this could be wrong because it is inside if, i.e. it could not increase if size() = 0
-                        active_block++;
                     }
+                    // move to next block in j direction (u changes)
+                    block_col_offset += num_dofs_per_block;
                 }
+                // move to next block in i direction (v changes)
+                block_row_offset += num_dofs_per_block;
             }
         }
 
@@ -2095,70 +2242,160 @@ namespace par {
     } // matvec_ghosted
 
 
+    // matvec (v = K * u) embeded applying bc by modifying matrix
+    template <typename  DT, typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::matvec_ghosted_bc(DT* v, DT* u){
+
+        LI blocks_dim, num_dofs_per_bolck;
+        DT* ue;
+        DT* ve;
+        EigenMat emat;
+
+        // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumNodesTotal)
+        for (unsigned int i = 0; i < m_uiNodePostGhostEnd; i++){
+            v[i] = 0.0;
+        }
+
+        // allocate memory for element vectors
+        ue = new DT[m_uiMaxNodesPerElem];
+        ve = new DT[m_uiMaxNodesPerElem];
+
+        LI rowID, colID;
+
+        // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
+        ghost_receive_begin(u);
+        ghost_receive_end(u);
+
+        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+            blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            LI block_row_offset = 0;
+            LI block_col_offset = 0;
+            LI num_dofs_per_block;
+
+            for (LI block_i = 0; block_i < blocks_dim; block_i++){
+
+                for (LI block_j = 0; block_j < blocks_dim; block_j++){
+
+                    LI index = block_i * blocks_dim + block_j;
+
+                    if (m_epMat[eid][index].size() != 0){
+
+                        emat = m_epMat[eid][index];
+                        assert(emat.rows() == emat.cols());
+
+                        num_dofs_per_block = emat.rows();
+                        assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
+
+                        // extract block-element vector ue from structure vector u
+                        for (LI c = 0; c < num_dofs_per_block; c++) {
+                            colID = m_uipLocalMap[eid][block_col_offset + c];
+                            ue[c] = u[colID];
+                        }
+
+                        // apply bc by modifying matrix according to {Kfc = 0; Kcf = 0; Kcc = I}
+                        for (LI r = 0; r < num_dofs_per_block; r++){
+                            if (m_uipBdrMap[eid][block_row_offset + r] == 1){
+                                for (LI c = 0; c < num_dofs_per_block; c++){
+                                    if ((c == r) && (block_i == block_j)){
+                                        // set [Kcc] = [I]
+                                        emat(r,c) = 1.0;
+                                    } else {
+                                        // set [Kcf] = [0]
+                                        emat(r,c) = 0.0;
+                                    }
+                                }
+                            } else {
+                                for (LI c = 0; c < num_dofs_per_block; c++){
+                                    if (m_uipBdrMap[eid][block_col_offset + c] == 1){
+                                        // set [Kfc] = [0]
+                                        emat(r,c) = 0.0;
+                                    }
+                                }
+                            }
+                        }
+
+                        // multiply block-element matrix with block-element vector
+                        for (LI i = 0; i < num_dofs_per_block; i++){
+                            ve[i] = 0.0;
+                            for (unsigned int j = 0; j < num_dofs_per_block; j++){
+                                ve[i] += emat(i,j) * ue[j];
+                            }
+                        }
+                        // accumulate element vector ve to structure vector v
+                        for (unsigned int r = 0; r < num_dofs_per_block; r++){
+                            rowID = m_uipLocalMap[eid][block_row_offset + r];
+                            v[rowID] += ve[r];
+                        }
+                    }
+                    // move to next block in j direction (u changes)
+                    block_col_offset += num_dofs_per_block;
+                }
+                // move to next block in i direction (v changes)
+                block_row_offset += num_dofs_per_block;
+            }
+        }
+
+        // send data from ghost nodes back to owned nodes after computing v
+        ghost_send_begin(v);
+        ghost_send_end(v);
+
+        delete [] ue;
+        delete [] ve;
+        return Error::SUCCESS;
+    } // matvec_ghosted_bc
+
     template <typename  DT, typename GI, typename LI>
     PetscErrorCode aMat<DT,GI,LI>::MatMult_mf(Mat A, Vec u, Vec v) {
 
+        //dump_vec(u);
         PetscScalar * vv; // this allows vv to be considered as regular vector
         PetscScalar * uu;
 
-        // VecZeroEntries(v);
+        LI local_Id;
+        //VecZeroEntries(v);
 
         VecGetArray(v, &vv);
         VecGetArrayRead(u,(const PetscScalar**)&uu);
 
-        double * vvg;
-        double * uug;
-        double * uug_p;
+        DT* vvg;
+        DT* uug;
 
         // allocate memory for vvg and uug including ghost nodes
         create_vec(vvg, true, 0);
         create_vec(uug, true, 0);
-        create_vec(uug_p, true, 0);
 
-        // copy data of uu and vv (not-ghosted) to uug and vvg
+        // copy data of uu (not-ghosted) to uug
         local_to_ghost(uug, uu);
-        // pLap->local_to_ghost(vvg, vv);
 
-        // get local number of elements (m_uiNumElems)
-        unsigned int nelem = get_local_num_elements();
-        // get local map (m_uipLocalMap)
-        const LI * const * e2n_local = get_e2local_map();
 
         // save value of U_c, then make U_c = 0
-        for (unsigned int eid = 0; eid < nelem; eid++){
-            const unsigned nodePerElem = get_nodes_per_element(eid);
-            for (unsigned int n = 0; n < nodePerElem; n++){
-                if (m_uipBdrMap[eid][n] && is_local_node(eid,n)){
-                    // save value of U_c
-                    uug_p[(e2n_local[eid][n])] = uug[(e2n_local[eid][n])];
-                    // set U_c to zero
-                    uug[(e2n_local[eid][n])] = 0.0;
-                }
-            }
+        // this is used with matvec_ghosted, comment out when using matvec_ghosted_bc
+        const LI numConstraints = ownedConstrainedDofs.size();
+        DT* Uc = new DT [numConstraints];
+        for (LI nid = 0; nid < numConstraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+            Uc[nid] = uug[local_Id];
+            uug[local_Id] = 0.0;
         }
 
         // vvg = K * uug
         matvec(vvg, uug, true); // this gives V_f = (K_ff * U_f) + (K_fc * 0) = K_ff * U_f
 
         // now set V_c = U_c which was saved in U'_c
-        for (unsigned int eid = 0; eid < nelem; eid++){
-            const unsigned nodePerElem = get_nodes_per_element(eid);
-            for (unsigned int n = 0; n < nodePerElem; n++){
-                if (m_uipBdrMap[eid][n] && is_local_node(eid,n)){
-                    vvg[(e2n_local[eid][n])] = uug_p[(e2n_local[eid][n])];
-                }
-            }
+        // this is used with matvec_ghosted, comment out when using matvec_ghosted_bc
+        for (LI nid = 0; nid < numConstraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+            vvg[local_Id] = Uc[nid];
         }
 
         ghost_to_local(vv,vvg);
-        ghost_to_local(uu,uug);
 
         delete [] vvg;
         delete [] uug;
-        delete [] uug_p;
+        delete [] Uc;
 
         VecRestoreArray(v,&vv);
-        VecRestoreArray(u,&uu);
+        //dump_vec(v);
 
         return 0;
     }// MatMult_mf
@@ -2194,7 +2431,7 @@ namespace par {
         VecRestoreArray(d, &dd);
 
         // apply Dirichlet boundary condition
-        apply_bc_diagonal(d, 1.0);
+        apply_bc_diagonal(d);
         petsc_init_vec(d);
         petsc_finalize_vec(d);
 
@@ -2323,12 +2560,12 @@ namespace par {
     }
 
 
-    // apply Dirichlet bc by modifying matrix
+    // apply Dirichlet bc by modifying matrix, only used in matrix-based approach
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::apply_bc_mat() {
         unsigned int num_nodes;
 
-        PetscInt rowId, colId, boundcol;
+        PetscInt rowId, colId;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid ++) {
             num_nodes = m_uiNodesPerElem[eid];
             for (unsigned int r = 0; r < num_nodes; r++) {
@@ -2345,8 +2582,7 @@ namespace par {
                 } else {
                     for (unsigned int c = 0; c < num_nodes; c++) {
                         colId = m_ulpMap[eid][c];
-                        boundcol = m_uipBdrMap[eid][c];
-                        if (boundcol == 1) {
+                        if (m_uipBdrMap[eid][c] == 1) {
                             MatSetValue(m_pMat, rowId, colId, 0.0, INSERT_VALUES);
                         }
                     }
@@ -2354,7 +2590,28 @@ namespace par {
             }
         }
         return Error::SUCCESS;
-    } // apply_bc_mat
+    }
+
+
+    // apply Dirichlet bc to diagonal vector used in Jacobi preconditioning
+    template <typename DT, typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::apply_bc_diagonal(Vec diag) {
+        unsigned int num_nodes;
+        PetscInt rowId;
+
+        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+            num_nodes = m_uiNodesPerElem[eid];
+            for (unsigned int r = 0; r < num_nodes; r++){
+                if (m_uipBdrMap[eid][r] == 1){
+                    // global row ID
+                    rowId = m_ulpMap[eid][r];
+                    VecSetValue(diag, rowId, 1.0, INSERT_VALUES);
+                }
+            }
+        }
+        return Error::SUCCESS;
+    }
+
 
     // apply Dirichlet BC to block diagonal matrix
     template <typename DT, typename GI, typename LI>
@@ -2396,7 +2653,7 @@ namespace par {
             }
         }
         return Error::SUCCESS;
-    } //apply_bc_blkdiag
+    }
 
 
 
@@ -2406,273 +2663,41 @@ namespace par {
     //          where nc is the total number of boundary dofs and K_ij is stiffness matrix
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::apply_bc_rhs(Vec rhs){
-        LI  num_bdr_nodes, num_free_nodes;
-        PetscInt pestc_rowId; // todo check if PetscInt is enough for global Id?
-        PetscScalar value;
-        EigenMat emat;
 
-        LI block_row_offset = 0;
-        LI block_index = 0;
-        LI local_rowID = 0;
-
-        PetscInt global_rowID; // todo check if PetscInt is enough for global Id?
-
-        LI blocks_dim;
-        LI num_dofs_per_block;
-
-        DT KfcUc;
-
-
-        if (m_MatType == AMAT_TYPE::MAT_FREE){
-
-            // compute fvec where fvec[j] = 0 if j is a prescribed dof, fvec[j] = sum_{j=1}^{nc}{K_ij * Uc_j} if j is a free dof
-            DT* fvec = new DT[m_uiNumNodesTotal];
-            for (LI r = 0; r < m_uiNumNodesTotal; r++){
-                fvec[r] = 0.0;
-            }
-
-            for (LI eid = 0; eid < m_uiNumElems; eid++){
-
-                //const LI num_nodes = m_uiNodesPerElem[eid];
-                blocks_dim = (LI)sqrt(m_epMat[eid].size());
-                assert(blocks_dim * blocks_dim == m_epMat[eid].size());
-
-                block_row_offset = 0;
-
-                for (LI block_i = 0; block_i < blocks_dim; block_i++){
-
-                    // only diagonal blocks have boundary conditions (todo verify this with Keith)
-                    block_index = block_i * blocks_dim + block_i;
-
-                    // diagonal block must not be null
-                    assert(m_epMat[eid][block_index].size() != 0);
-
-                    emat = m_epMat[eid][block_index];
-                    assert(emat.rows() == emat.cols());
-
-                    num_dofs_per_block = emat.rows();
-                    assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
-
-                    for (LI r = 0; r < num_dofs_per_block; r++){
-
-                        // free dofs ...
-                        if (m_uipBdrMap[eid][block_row_offset + r] == 0){
-
-                            // local ID of the free dof
-                            local_rowID = m_uipLocalMap[eid][block_row_offset + r];
-
-                            // sum of ke(r,c)*uc(c) if c is a boundary dof
-                            KfcUc = 0;
-                            for (LI c = 0; c < num_dofs_per_block; c++){
-                                // because we only work with diagonal block, block_col_offset = block_row_offset
-                                if (m_uipBdrMap[eid][block_row_offset + c] == 1) {
-                                    KfcUc += emat(r,c) * m_dtPresValMap[eid][block_row_offset + c];
-                                }
-                            }
-                            // accumulate to fi
-                            fvec[local_rowID] += KfcUc;
-                        }
-                    }
-
-                    // move to next diagonal block
-                    block_row_offset += num_dofs_per_block;
-                }
-            }
-
-            ghost_send_begin(fvec);
-            ghost_send_end(fvec);
-
-            for (LI nid = 0; nid < m_uiNumNodes; nid++){
-                local_rowID = nid + m_uiNumPreGhostNodes;
-                global_rowID = nid + m_uivLocalNodeScan[m_uiRank];
-                if (m_DofType[local_rowID] == DOF_TYPE::PRESCRIBED) {
-                    value = m_dPreDofValue[local_rowID];
-                }
-                else if (m_DofType[local_rowID] == DOF_TYPE::FREE) {
-                    VecGetValues(rhs, 1, &global_rowID, &value);
-                    value = value - fvec[local_rowID];
-                }
-                else {
-                    return Error::UNKNOWN_DOF_TYPE;
-                }
-                VecSetValue(rhs,global_rowID,value,INSERT_VALUES);
-            }
-
-            delete[] fvec;
-        }
-        else if (m_MatType == AMAT_TYPE::PETSC_SPARSE){
-            // todo apply bc for rhs in matrix-based method
-
-        }
-        else {
-            return Error::UNKNOWN_MAT_TYPE;
-        }
-
-
-
-        /*for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            LI num_nodes = m_uiNodesPerElem[eid];
-            for (LI r = 0; r < num_nodes; r++){
-                global_rowID = m_ulpMap[eid][r]; // global ID
-                if (m_uipBdrMap[eid][r] == 1){
-                    // prescribed dof, set bi = prescribed value
-                    value = m_dtPresValMap[eid][r]; // prescribed value
-                    VecSetValue(rhs, global_rowID, value, INSERT_VALUES);
-                }
-                else if (m_uipBdrMap[eid][r] == 0){
-                    // free dof, subtract [Kfc][Uc] from bi
-                    local_rowID = m_uipLocalMap[eid][r];
-                    value = (-1.0)*fvec[local_rowID];
-                    VecSetValue(rhs, global_rowID, value, ADD_VALUES);
-                }
-                else {
-                    return Error::UNKNOWN_DOF_TYPE;
-                }
-
-            }
-        }*/
-
-
-        return Error::SUCCESS;
-    } // apply_bc_rhs
-
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::get_boundary_dofs() {
+        // set rows associated with constrained dofs to be equal to Uc
         LI num_nodes;
-        LI local_DofId;
-        GI global_DofId;
+        PetscInt global_Id;
+        PetscScalar value, value1, value2;
 
-        GI gDofId;
-        unsigned int rankID;
-        DT presVal;
-        std::vector<BoundRecord<DT,GI,LI>> boundRec; // unsorted vector of boundary records
-        BoundRecord<DT,GI,LI> bdrRec; // one boundary record
-        std::vector<GI> freeNodes;
-
-        if (m_MatType == AMAT_TYPE::MAT_FREE){
-            m_DofType.resize( m_uiNumNodesTotal );
-            m_dPreDofValue.resize( m_uiNumNodesTotal );
-            for (LI nid = 0; nid < m_uiNumNodesTotal; nid++){
-                m_DofType[nid] = DOF_TYPE::UNDEFINED;
-                m_dPreDofValue[nid] = 0.0;
-            }
-
-            for (LI eid = 0; eid < m_uiNumElems; eid++) {
-                num_nodes = m_uiNodesPerElem[eid];
-
-                for (LI nid = 0; nid < num_nodes; nid++) {
-                    local_DofId = m_uipLocalMap[eid][nid];
-                    if (m_uipBdrMap[eid][nid] == 1) {
-                        // boundary dof...
-                        m_DofType[local_DofId] = DOF_TYPE::PRESCRIBED;
-                        m_dPreDofValue[local_DofId] = m_dtPresValMap[eid][nid];
-                    }
-                    else if (m_uipBdrMap[eid][nid] == 0) {
-                        // interior dof...
-                        m_DofType[local_DofId] = DOF_TYPE::FREE;
-                    }
-                }
-            }
-        }
-        else if (m_MatType == AMAT_TYPE::PETSC_SPARSE) {
-            m_vBdrRec.clear();
-            m_vFreeNodes.clear();
-
-            for (LI eid = 0; eid < m_uiNumElems; eid++){
-                num_nodes = m_uiNodesPerElem[eid];
-
-                for (LI nid = 0; nid < num_nodes; nid++){
-                    global_DofId = m_ulpMap[eid][nid];
-                    // todo scan of local nodes is done only in buildScatterMap?
-                    if ((global_DofId >= m_uivLocalNodeScan[m_uiRank]) &&
-                        (global_DofId < (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes))){
-                        if (m_uipBdrMap[eid][nid] == 1){
-                            rankID = globalId_2_rank(gDofId); //rank who owns
-                            presVal = m_dtPresValMap[eid][nid]; //prescribed value
-                            // put all into an object of bdrRec
-                            bdrRec.setRank(rankID);
-                            bdrRec.setDofId(gDofId);
-                            bdrRec.setPresVal(presVal);
-                            // add to the vector of bdrRec (unsorted and repeated data)
-                            boundRec.push_back(bdrRec);
-                        }
-                        else if (m_uipBdrMap[eid][nid] == 0){
-                            gDofId = m_ulpMap[eid][nid]; //global ID of free dof
-                            // add to the vector of free dofs
-                            freeNodes.push_back(gDofId);
-                        }
-                    }
-
-                }
-            }
-
-            // sorting...
-            std::sort(boundRec.begin(), boundRec.end());
-            std::sort(freeNodes.begin(), freeNodes.end());
-
-            // delete repeated dofs and pack to m_vBdrRec
-            unsigned int ind = 0;
-            while (ind < boundRec.size()){
-                bdrRec.setRank(boundRec[ind].getRank());
-                bdrRec.setDofId(boundRec[ind].getDofId());
-                bdrRec.setPresVal(boundRec[ind].getPresVal());
-
-                while (((ind + 1) < boundRec.size()) && (boundRec[ind] == boundRec[ind + 1])){
-                    ind++;
-                }
-                m_vBdrRec.push_back(bdrRec);
-                ind++;
-            }
-
-            // delete repeated dofs and pack to m_vFreeNodes
-            ind = 0;
-            while (ind < freeNodes.size()){
-                while (((ind+1) < freeNodes.size()) && (freeNodes[ind] == freeNodes[ind+1])){
-                    ind++;
-                }
-                m_vFreeNodes.push_back(freeNodes[ind]);
-                ind++;
-            }
-        }
-        else {
-            return Error::UNKNOWN_MAT_TYPE;
+        for (LI nid = 0; nid < ownedConstrainedDofs.size(); nid++){
+            global_Id = ownedConstrainedDofs[nid];
+            value = ownedPrescribedValues[nid];
+            VecSetValue(rhs, global_Id, value, INSERT_VALUES);
         }
 
+        // need to finalize vector KfcUcVec before extracting its value
+        petsc_init_vec(KfcUcVec);
+        petsc_finalize_vec(KfcUcVec);
 
-        /*for (unsigned int i = 0; i < m_vBdrRec.size(); i++){
-            printf("[%d,%d] rank= %d, dof= %d, prescribed value= %f\n",m_uiRank,i,m_vBdrRec[i].getRank(),m_vBdrRec[i].getDofId(),m_vBdrRec[i].getPresVal());
-        }*/
-        /*for (unsigned int i = 0; i < m_vFreeNodes.size(); i++){
-            printf("rank= %d, i= %d, free dofs= %d\n",m_uiRank,i,m_vFreeNodes[i]);
-        }*/
+        for (LI nid = 0; nid < ownedFreeDofs.size(); nid++){
+            global_Id = ownedFreeDofs[nid];
+            VecGetValues(KfcUcVec, 1, &global_Id, &value1);
+            VecGetValues(rhs, 1, &global_Id, &value2);
+            value = value1 + value2;
+            VecSetValue(rhs, global_Id, value, INSERT_VALUES);
+        }
+
+        VecDestroy(&KfcUcVec);
 
         return Error::SUCCESS;
-    }//get_boundary_dofs
+    }
 
-    // apply Dirichlet bc to diagonal vector used in Jacobi preconditioner
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::apply_bc_diagonal(Vec rhs, PetscScalar value) {
 
-        unsigned int num_nodes;
-        PetscInt rowId;
 
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiNodesPerElem[eid];
-            for (unsigned int r = 0; r < num_nodes; r++){
-                // boundary node, set rhs = Ff - Kfc*Uc
-                if (m_uipBdrMap[eid][r] == 1){
-                    // global row ID
-                    rowId = m_ulpMap[eid][r];
-                    VecSetValue(rhs, rowId, value, INSERT_VALUES);
-                }
-            }
-        }
-        return Error::SUCCESS;
-    } // apply_bc_diagonal
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_solve( const Vec & rhs, Vec out ) const {
+    par::Error aMat<DT,GI,LI>::petsc_solve(const Vec rhs, Vec out) const {
 
         if( m_MatType == AMAT_TYPE::MAT_FREE ) {
 

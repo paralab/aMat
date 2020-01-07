@@ -28,5 +28,6 @@ void ke_hex8_test(double* ke, const double* xe);
 * */
 void ke_hex8_eig(Eigen::Matrix<double,8,8> &ke, double* xe);
 void ke_hex8_eig_test(Eigen::Matrix<double,8,8> &ke, double* xe);
+void ke_quad4_eig(Eigen::Matrix<double,4,4> &ke, double* xe);
 
 #endif //ADAPTIVEMATRIX_KE_MATRIX_H

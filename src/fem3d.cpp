@@ -306,6 +306,54 @@ int main( int argc, char *argv[] ) {
     stMat.set_map(nelem, localMap, nodes_per_element, numLocalNodes, local2GlobalMap, start_global_node,
                   end_global_node, nnode_total);
 
+
+    // construct element maps of constrained DoFs and prescribed values
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int n = 0; n < nNodePerElem; n++) {
+            nid = globalMap[eid][n];
+
+            // get node coordinates
+            x = (double) (nid % (Nex + 1)) * hx;
+            y = (double) ((nid % ((Nex + 1) * (Ney + 1))) / (Nex + 1)) * hy;
+            z = (double) (nid / ((Nex + 1) * (Ney + 1))) * hz;
+
+            // specify boundary nodes
+            if ((std::fabs(x) < tol) || (std::fabs(x - Lx) < tol) ||
+                (std::fabs(y) < tol) || (std::fabs(y - Ly) < tol) ||
+                (std::fabs(z) < tol) || (std::fabs(z - Lz) < tol)) {
+                bound_nodes[eid][n] = 1; // boundary
+                bound_values[eid][n] = 0; // prescribed value
+            } else {
+                bound_nodes[eid][n] = 0; // interior
+                bound_values[eid][n] = -1000000; // for testing
+            }
+        }
+    }
+
+    // create lists of constrained dofs (for new interface of set_bdr_map)
+    std::vector<unsigned long> constrainedDofs;
+    for (unsigned int eid = 0; eid < nelem; eid++){
+        for (unsigned int nid = 0; nid < nNodePerElem; nid++){
+            if (bound_nodes[eid][nid] == 1){
+                constrainedDofs.push_back(globalMap[eid][nid]);
+            }
+        }
+    }
+    std::sort(constrainedDofs.begin(),constrainedDofs.end());
+    constrainedDofs.erase(std::unique(constrainedDofs.begin(),constrainedDofs.end()),constrainedDofs.end());
+
+    unsigned long * constrainedDofs_ptr;
+    double * prescribedValues_ptr;
+    constrainedDofs_ptr = new unsigned long [constrainedDofs.size()];
+    prescribedValues_ptr = new double [constrainedDofs.size()];
+    for (unsigned int i = 0; i < constrainedDofs.size(); i++){
+        constrainedDofs_ptr[i] = constrainedDofs[i];
+        prescribedValues_ptr[i] = 0.0;
+    }
+    // set boundary maps
+    stMat.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, constrainedDofs.size());
+
+
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact;
     stMat.petsc_create_vec(rhs);
@@ -326,7 +374,7 @@ int main( int argc, char *argv[] ) {
             xe[(n * 3) + 2] = z;
 
             // specify boundary nodes
-            if ((std::fabs(x) < tol) || (std::fabs(x - Lx) < tol) ||
+            /*if ((std::fabs(x) < tol) || (std::fabs(x - Lx) < tol) ||
                 (std::fabs(y) < tol) || (std::fabs(y - Ly) < tol) ||
                 (std::fabs(z) < tol) || (std::fabs(z - Lz) < tol)) {
                 bound_nodes[eid][n] = 1; // boundary
@@ -334,7 +382,7 @@ int main( int argc, char *argv[] ) {
             } else {
                 bound_nodes[eid][n] = 0; // interior
                 bound_values[eid][n] = -1000000; // for testing
-            }
+            }*/
         }
 
         // compute element stiffness matrix
@@ -370,11 +418,7 @@ int main( int argc, char *argv[] ) {
 
 
     // set boundary globalMap
-    stMat.set_bdr_map(bound_nodes, bound_values);
-
-    stMat.get_boundary_dofs();
-
-    //stMat.print_matrix();
+    //stMat.set_bdr_map_old(bound_nodes, bound_values);
 
     delete [] ke;
     //delete [] fe;
@@ -389,8 +433,6 @@ int main( int argc, char *argv[] ) {
     // Pestc begins and completes assembling the global load vector
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
-
-
 
     //stMat.dump_vec("rhs_vec.dat", rhs);
     //stMat.dump_vec("out_vec.dat", out);
@@ -499,6 +541,7 @@ int main( int argc, char *argv[] ) {
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
+    //stMat.apply_bc_rhs_old(rhs);
     stMat.apply_bc_rhs(rhs);
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
@@ -506,6 +549,7 @@ int main( int argc, char *argv[] ) {
     // write results to files
     /*if (!matFree){
         stMat.dump_mat("matrix.dat");
+        stMat.dump_vec(rhs,"rhs.dat");
     } else {
         stMat.print_mepMat();
     }*/
@@ -513,7 +557,6 @@ int main( int argc, char *argv[] ) {
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
 
-    // Pestc begins and completes assembling the global load vector
     stMat.petsc_init_vec(out);
     stMat.petsc_finalize_vec(out);
 
@@ -583,6 +626,9 @@ int main( int argc, char *argv[] ) {
     //delete [] kee;
     delete [] local2GlobalMap;
     delete [] nodes_per_element;
+
+    delete [] constrainedDofs_ptr;
+    delete [] prescribedValues_ptr;
 
     // clean up Pestc vectors
     VecDestroy(&out);
