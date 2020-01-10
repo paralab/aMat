@@ -1349,10 +1349,7 @@ namespace par {
 
 
     // 16.Dec.2019: change type of e_vec from DT* to EigenVec to be consistent with element matrix
-    // assume that element vector uses the same block structure as for element matrix, i.e. the order of blocks in the
-    // local and global maps are {1, 2, 3, ...} = {(block_i, block_j) = (0,0), (0,1), (1,0), (1,1), ...} for the case
-    // of there are 2 blocks in row and 2 blocks in column
-    // todo verify this with Keith: length of e_vec = m_uiNumNodesPerElem[eid]
+    // Note: for force vector, there is no block_j (as in stiffness matrix)
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode){
 
@@ -2138,7 +2135,6 @@ namespace par {
     par::Error aMat<DT,GI,LI>::matvec(DT* v, const DT* u, bool isGhosted) {
         if (isGhosted) {
             // std::cout << "GHOSTED MATVEC" << std::endl;
-            //matvec_ghosted_bc(v, (DT*)u);
             matvec_ghosted(v, (DT*)u);
         } else {
             // std::cout << "NON GHOSTED MATVEC" << std::endl;
@@ -2149,7 +2145,6 @@ namespace par {
             create_vec(gu, true, 0.0);
             // copy u to gu
             local_to_ghost(gu, u);
-            //matvec_ghosted_bc(gv, gu);
             matvec_ghosted(gv, gu);
             // copy gv to v
             ghost_to_local(v, gv);
@@ -2161,6 +2156,7 @@ namespace par {
     } // matvec
 
 
+    // matvec (v = K * u) embeded applying bc by modifying matrix
     template <typename  DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::matvec_ghosted(DT* v, DT* u){
 
@@ -2174,87 +2170,10 @@ namespace par {
             v[i] = 0.0;
         }
 
-        // allocate memory for element vectors
-        ue = new DT[m_uiMaxNodesPerElem];
-        ve = new DT[m_uiMaxNodesPerElem];
-
-        LI rowID, colID;
-
-        // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
-        ghost_receive_begin(u);
-        ghost_receive_end(u);
-
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            blocks_dim = (LI)sqrt(m_epMat[eid].size());
-            LI block_row_offset = 0;
-            LI block_col_offset = 0;
-            LI num_dofs_per_block;
-
-            for (LI block_i = 0; block_i < blocks_dim; block_i++){
-
-                for (LI block_j = 0; block_j < blocks_dim; block_j++){
-
-                    LI index = block_i * blocks_dim + block_j;
-
-                    if (m_epMat[eid][index].size() != 0){
-
-                        // get block-element matrix from storage
-                        emat = m_epMat[eid][index];
-                        assert(emat.rows() == emat.cols());
-
-                        num_dofs_per_block = emat.rows();
-                        assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
-
-                        // extract block-element vector ue from structure vector u
-                        for (LI c = 0; c < num_dofs_per_block; c++) {
-                            colID = m_uipLocalMap[eid][block_col_offset + c];
-                            ue[c] = u[colID];
-                        }
-
-                        // multiply block-element matrix with block-element vector
-                        for (LI i = 0; i < num_dofs_per_block; i++){
-                            ve[i] = 0.0;
-                            for (unsigned int j = 0; j < num_dofs_per_block; j++){
-                                ve[i] += emat(i,j) * ue[j];
-                            }
-                        }
-                        // accumulate element vector ve to structure vector v
-                        for (unsigned int r = 0; r < num_dofs_per_block; r++){
-                            rowID = m_uipLocalMap[eid][block_row_offset + r];
-                            v[rowID] += ve[r];
-                        }
-                    }
-                    // move to next block in j direction (u changes)
-                    block_col_offset += num_dofs_per_block;
-                }
-                // move to next block in i direction (v changes)
-                block_row_offset += num_dofs_per_block;
-            }
-        }
-
-        // send data from ghost nodes back to owned nodes after computing v
-        ghost_send_begin(v);
-        ghost_send_end(v);
-
-        delete [] ue;
-        delete [] ve;
-        return Error::SUCCESS;
-    } // matvec_ghosted
-
-
-    // matvec (v = K * u) embeded applying bc by modifying matrix
-    template <typename  DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::matvec_ghosted_bc(DT* v, DT* u){
-
-        LI blocks_dim, num_dofs_per_bolck;
-        DT* ue;
-        DT* ve;
-        EigenMat emat;
-
-        // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumNodesTotal)
-        for (unsigned int i = 0; i < m_uiNodePostGhostEnd; i++){
-            v[i] = 0.0;
-        }
+        /*printf("rank %d, before matvec u = \n",m_uiRank);
+        for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
+            printf("u[%d]= %f\n",i,u[i]);
+        }*/
 
         // allocate memory for element vectors
         ue = new DT[m_uiMaxNodesPerElem];
@@ -2265,6 +2184,16 @@ namespace par {
         // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
         ghost_receive_begin(u);
         ghost_receive_end(u);
+
+        // apply bc...
+        const LI numConstraints = ownedConstrainedDofs.size();
+        LI local_Id;
+        DT* Uc = new DT [numConstraints];
+        for (LI nid = 0; nid < numConstraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+            Uc[nid] = u[local_Id];
+            u[local_Id] = 0.0;
+        }
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
@@ -2293,7 +2222,8 @@ namespace par {
                         }
 
                         // apply bc by modifying matrix according to {Kfc = 0; Kcf = 0; Kcc = I}
-                        for (LI r = 0; r < num_dofs_per_block; r++){
+                        // BUG here: Kcc = 1 on diagonals is accumulated, thus at the end it is NOT 1
+                        /*for (LI r = 0; r < num_dofs_per_block; r++){
                             if (m_uipBdrMap[eid][block_row_offset + r] == 1){
                                 for (LI c = 0; c < num_dofs_per_block; c++){
                                     if ((c == r) && (block_i == block_j)){
@@ -2312,7 +2242,7 @@ namespace par {
                                     }
                                 }
                             }
-                        }
+                        }*/
 
                         // multiply block-element matrix with block-element vector
                         for (LI i = 0; i < num_dofs_per_block; i++){
@@ -2339,15 +2269,27 @@ namespace par {
         ghost_send_begin(v);
         ghost_send_end(v);
 
+        // apply bc...
+        for (LI nid = 0; nid < numConstraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+            v[local_Id] = Uc[nid];
+        }
+
         delete [] ue;
         delete [] ve;
+        delete [] Uc;
+
+        /*printf("rank %d, before matvec v = \n",m_uiRank);
+        for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
+            printf("v[%d]= %f\n",i,v[i]);
+        }*/
+
         return Error::SUCCESS;
-    } // matvec_ghosted_bc
+    } // matvec_ghosted
 
     template <typename  DT, typename GI, typename LI>
     PetscErrorCode aMat<DT,GI,LI>::MatMult_mf(Mat A, Vec u, Vec v) {
 
-        //dump_vec(u);
         PetscScalar * vv; // this allows vv to be considered as regular vector
         PetscScalar * uu;
 
@@ -2369,33 +2311,32 @@ namespace par {
 
 
         // save value of U_c, then make U_c = 0
-        // this is used with matvec_ghosted, comment out when using matvec_ghosted_bc
-        const LI numConstraints = ownedConstrainedDofs.size();
+        // this is moved to matvec_ghosted()
+        /*const LI numConstraints = ownedConstrainedDofs.size();
         DT* Uc = new DT [numConstraints];
         for (LI nid = 0; nid < numConstraints; nid++){
             local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
             Uc[nid] = uug[local_Id];
             uug[local_Id] = 0.0;
-        }
+        }*/
 
         // vvg = K * uug
         matvec(vvg, uug, true); // this gives V_f = (K_ff * U_f) + (K_fc * 0) = K_ff * U_f
 
         // now set V_c = U_c which was saved in U'_c
-        // this is used with matvec_ghosted, comment out when using matvec_ghosted_bc
-        for (LI nid = 0; nid < numConstraints; nid++){
+        // this is moved to matvec_ghosted()
+        /*for (LI nid = 0; nid < numConstraints; nid++){
             local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
             vvg[local_Id] = Uc[nid];
-        }
+        }*/
 
         ghost_to_local(vv,vvg);
 
         delete [] vvg;
         delete [] uug;
-        delete [] Uc;
+        //delete [] Uc;
 
         VecRestoreArray(v,&vv);
-        //dump_vec(v);
 
         return 0;
     }// MatMult_mf
