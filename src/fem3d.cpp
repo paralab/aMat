@@ -52,9 +52,10 @@ usage()
     cout << "     Nex: Number of elements in X\n";
     cout << "     Ney: Number of elements in y\n";
     cout << "     Nez: Number of elements in z\n";
-    cout << "     use eigen: 1 => yes\n";
-    cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
-    exit( 0) ;
+    cout << "     use eigen: 1 => yes (0 => no)\n";
+    cout << "     use matrix-free: 1 => yes.  0 => matrix-based method.\n";
+    cout << "\n";
+    exit( 0 ) ;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////

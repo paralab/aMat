@@ -437,7 +437,7 @@ namespace par {
         par::Error set_map( const LI          n_elements_on_rank,
                             const LI* const * element_to_rank_map,
                             const LI        * dofs_per_element,
-                            const LI          n_all_dofs_on_rank,
+                            const LI          n_all_dofs_on_rank, // Note: includes ghost dofs
                             const GI        * rank_to_global_map,
                             const GI          owned_global_dof_range_begin,
                             const GI          owned_global_dof_range_end,
@@ -545,7 +545,7 @@ namespace par {
         /**@brief: write PETSc matrix "m_pMat" to "filename"
          * @param[in] filename: name of file to write matrix to.  If nullptr, then write to stdout.
          */
-        par::Error dump_mat( const char* filename = nullptr ) const;
+        par::Error dump_mat( const char* filename = nullptr ); // Note: can't be 'const' because may call matvec which may need MPI data to be stored...
 
         /**@brief: write PETSc vector "vec" to filename "fvec"
          * @param[in] vec      : petsc vector to write to file
@@ -560,16 +560,16 @@ namespace par {
         par::Error petsc_destroy_vec( Vec & vec ) const;
 
         /**@brief allocate memory for "vec", size includes ghost DoFs if isGhosted=true, initialized by alpha */
-        par::Error create_vec( DT* &vec, bool isGhosted = false, DT alpha = (DT)0.0 );
+        par::Error create_vec( DT* &vec, bool isGhosted = false, DT alpha = (DT)0.0 ) const;
 
         /**@brief allocate memory for "mat", size includes ghost DoFs if isGhosted=true, initialized by alpha */
         par::Error create_mat( DT** &mat, bool isGhosted = false, DT alpha = (DT)0.0 );
 
         /**@brief copy local to corresponding positions of gVec (size including ghost DoFs) */
-        par::Error local_to_ghost(DT*  gVec, const DT* local);
+        par::Error local_to_ghost(DT*  gVec, const DT* local) const;
 
         /**@brief copy gVec (size including ghost DoFs) to local (size of local DoFs) */
-        par::Error ghost_to_local(DT* local, const DT* gVec);
+        par::Error ghost_to_local(DT* local, const DT* gVec) const;
 
         /**@brief copy element matrix and store in m_mats, used for matrix-free method */
         par::Error copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim );
@@ -607,13 +607,14 @@ namespace par {
         /**@brief end: ghost DoFs send, owned DoFs receive and accumulate to current data, called after matvec() */
         par::Error ghost_send_end(DT* vec);
 
-        /**@brief v = K * u (K is not assembled, but directly using elemental K_e's)
+        /**@brief v = K * u (K is not assembled, but directly using elemental K_e's).  v (the result) must be allocated by the caller.
          * @param[in] isGhosted = true, if v and u are of size including ghost DoFs
          * @param[in] isGhosted = false, if v and u are of size NOT including ghost DoFs
          * */
         par::Error matvec(DT* v, const DT* u, bool isGhosted = false);
 
-        /**@brief v = K * u; v and u are of size including ghost DoFs*/
+        // FIXME: internal only call (move to private)?  Use matvec instead?
+        /**@brief v = K * u; v and u are of size including ghost DoFs. */
         par::Error matvec_ghosted(DT* v, DT* u);
         par::Error matvec_ghosted_bc(DT* v, DT* u);
 
@@ -621,10 +622,10 @@ namespace par {
         PetscErrorCode MatMult_mf(Mat A, Vec u, Vec v);
 
         /**@brief matrix-free version of MatGetDiagonal of PETSc */
-        PetscErrorCode MatGetDiagonal_mf(Mat A, Vec d);
+        PetscErrorCode MatGetDiagonal_mf( Mat A, Vec d );
 
         /**@brief matrix-free version of MatGetDiagonalBlock of PETSc */
-        PetscErrorCode MatGetDiagonalBlock_mf(Mat A, Mat* a);
+        PetscErrorCode MatGetDiagonalBlock_mf( Mat A, Mat* a );
 
         /**@brief pointer function points to MatMult_mt */
         inline std::function<PetscErrorCode(Mat,Vec,Vec)>* get_MatMult_func(){
@@ -675,7 +676,7 @@ namespace par {
         par::Error apply_bc_blkdiag(Mat* blkdiagMat);
 
         /**@brief apply Dirichlet BCs by modifying the rhs vector, also used for diagonal vector in Jacobi precondition*/
-        par::Error apply_bc_rhs(Vec rhs);
+        par::Error apply_bc_rhs( Vec rhs );
 
         /**@brief: invoke basic PETSc solver, "out" is solution vector */
         par::Error petsc_solve( const Vec rhs, Vec out ) const;
@@ -741,7 +742,7 @@ namespace par {
         par::Error mat_get_diagonal_block_seq(DT **diag_blk);
 
         /**@brief copy gMat (size including ghost DoFs) to lMat (size of local DoFs) */
-        par::Error ghost_to_local_mat(DT**  lMat, DT** gMat);
+        par::Error ghost_to_local_mat(DT**  lMat, DT** gMat) const;
 
         /**@brief assemble element matrix to global matrix for matrix-based, not using Eigen */
         par::Error petsc_set_element_matrix( LI eid, DT *e_mat, InsertMode mode = ADD_VALUES );
@@ -1028,7 +1029,7 @@ namespace par {
            Currently we do not account for twin elements
            "node" is actually "dof" because the map is in terms of dofs */
 
-        if (m_ulpMap == nullptr) return Error::NULL_L2G_MAP;
+        if( m_ulpMap == nullptr ) { return Error::NULL_L2G_MAP; }
 
         m_uivLocalNodeCounts.clear();
         m_uivLocalElementCounts.clear();
@@ -1433,7 +1434,7 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::dump_mat( const char* filename /* = nullptr */ ) const {
+    par::Error aMat<DT,GI,LI>::dump_mat( const char* filename /* = nullptr */ ) {
 
         if( m_pMat == nullptr ) {
             std::cout << "Matrix has not yet been allocated, can't display...\n";
@@ -1493,7 +1494,7 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::create_vec( DT* &vec, bool isGhosted, DT alpha /* = 0.0 */ ){
+    par::Error aMat<DT,GI,LI>::create_vec( DT* &vec, bool isGhosted /* = false */, DT alpha /* = 0.0 */ ) const {
         if (isGhosted){
             vec = new DT[m_uiNumNodesTotal];
         } else {
@@ -1540,7 +1541,7 @@ namespace par {
     }
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::local_to_ghost( DT*  gVec, const DT* local ){
+    par::Error aMat<DT,GI,LI>::local_to_ghost( DT*  gVec, const DT* local ) const {
         for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
             if ((i >= m_uiNumPreGhostNodes) && (i < m_uiNumPreGhostNodes + m_uiNumNodes)) {
                 gVec[i] = local[i - m_uiNumPreGhostNodes];
@@ -1553,7 +1554,7 @@ namespace par {
     } // local_to_ghost
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_to_local(DT* local, const DT* gVec) {
+    par::Error aMat<DT,GI,LI>::ghost_to_local(DT* local, const DT* gVec) const {
         for (unsigned int i = 0; i < m_uiNumNodes; i++) {
             local[i] = gVec[i + m_uiNumPreGhostNodes];
         }
@@ -1612,7 +1613,6 @@ namespace par {
         return Error::SUCCESS;
     }// copy_element_matrix
 
-
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::mat_get_diagonal(DT* diag, bool isGhosted){
         if (isGhosted) {
@@ -1626,7 +1626,6 @@ namespace par {
         }
         return Error::SUCCESS;
     }// mat_get_diagonal
-
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
@@ -1676,7 +1675,6 @@ namespace par {
         return Error::SUCCESS;
     }// mat_get_diagonal_ghosted
 
-
     // return rank that owns global gId
     template <typename DT, typename GI, typename LI>
     unsigned int aMat<DT, GI, LI>::globalId_2_rank(GI gId) const {
@@ -1696,7 +1694,7 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::mat_get_diagonal_block(std::vector<MatRecord<DT,LI>> &diag_blk){
+    par::Error aMat<DT, GI, LI>::mat_get_diagonal_block(std::vector<MatRecord<DT,LI>> &diag_blk){
         LI blocks_dim;
         EigenMat e_mat;
         GI glo_RowId, glo_ColId;
@@ -1923,7 +1921,6 @@ namespace par {
         return Error::SUCCESS;
     } // mat_get_diagonal_block
 
-
     template <typename DT, typename  GI, typename LI>
     par::Error aMat<DT,GI,LI>::get_max_dof_per_elem(){
         unsigned int num_nodes;
@@ -2132,11 +2129,12 @@ namespace par {
     } // ghost_send_end
 
     template <typename  DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::matvec(DT* v, const DT* u, bool isGhosted) {
-        if (isGhosted) {
+    par::Error aMat<DT,GI,LI>::matvec( DT* v, const DT* u, bool isGhosted /* = false */ ) {
+        if( isGhosted ) {
             // std::cout << "GHOSTED MATVEC" << std::endl;
             matvec_ghosted(v, (DT*)u);
-        } else {
+        }
+        else {
             // std::cout << "NON GHOSTED MATVEC" << std::endl;
             DT* gv;
             DT* gu;
@@ -2145,6 +2143,7 @@ namespace par {
             create_vec(gu, true, 0.0);
             // copy u to gu
             local_to_ghost(gu, u);
+
             matvec_ghosted(gv, gu);
             // copy gv to v
             ghost_to_local(v, gv);
@@ -2158,7 +2157,7 @@ namespace par {
 
     // matvec (v = K * u) embeded applying bc by modifying matrix
     template <typename  DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::matvec_ghosted(DT* v, DT* u){
+    par::Error aMat<DT,GI,LI>::matvec_ghosted( DT* v, DT* u ) {
 
         LI blocks_dim, num_dofs_per_bolck;
         DT* ue;
@@ -2288,13 +2287,13 @@ namespace par {
     } // matvec_ghosted
 
     template <typename  DT, typename GI, typename LI>
-    PetscErrorCode aMat<DT,GI,LI>::MatMult_mf(Mat A, Vec u, Vec v) {
+    PetscErrorCode aMat<DT,GI,LI>::MatMult_mf( Mat A, Vec u, Vec v ) {
 
         PetscScalar * vv; // this allows vv to be considered as regular vector
         PetscScalar * uu;
 
         LI local_Id;
-        //VecZeroEntries(v);
+        // VecZeroEntries(v);
 
         VecGetArray(v, &vv);
         VecGetArrayRead(u,(const PetscScalar**)&uu);
@@ -2372,9 +2371,9 @@ namespace par {
         VecRestoreArray(d, &dd);
 
         // apply Dirichlet boundary condition
-        apply_bc_diagonal(d);
-        petsc_init_vec(d);
-        petsc_finalize_vec(d);
+        apply_bc_diagonal( d );
+        petsc_init_vec( d );
+        petsc_finalize_vec( d );
 
         return 0;
 
@@ -2531,8 +2530,7 @@ namespace par {
             }
         }
         return Error::SUCCESS;
-    }
-
+    } // apply_bc_mat
 
     // apply Dirichlet bc to diagonal vector used in Jacobi preconditioning
     template <typename DT, typename GI, typename LI>
@@ -2596,14 +2594,23 @@ namespace par {
         return Error::SUCCESS;
     }
 
-
-
     // apply Dirichlet bc by modifying rhs:
     // rhs[i] = Uc_i if i is on boundary of Dirichlet condition, Uc_i is the prescribed value on boundary
     // rhs[i] = rhs[i] - sum_{j=1}^{nc}{K_ij * Uc_j} if i is a free dof
     //          where nc is the total number of boundary dofs and K_ij is stiffness matrix
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::apply_bc_rhs(Vec rhs){
+
+        // FIXME: Do we need to handle apply_bc_rhs() differently depending on matrix type?
+        //
+        // if (m_MatType == AMAT_TYPE::MAT_FREE){
+        // }
+        // else if (m_MatType == AMAT_TYPE::PETSC_SPARSE){
+        //     // todo apply bc for rhs in matrix-based method
+        // }
+        // else {
+        //     return Error::UNKNOWN_MAT_TYPE;
+        // }
 
         // set rows associated with constrained dofs to be equal to Uc
         LI num_nodes;
@@ -2631,14 +2638,10 @@ namespace par {
         VecDestroy(&KfcUcVec);
 
         return Error::SUCCESS;
-    }
-
-
-
-
+    } // apply_bc_rhs
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_solve(const Vec rhs, Vec out) const {
+    par::Error aMat<DT,GI,LI>::petsc_solve( const Vec rhs, Vec out ) const {
 
         if( m_MatType == AMAT_TYPE::MAT_FREE ) {
 
@@ -2647,29 +2650,30 @@ namespace par {
             // get context to aMat
             aMatCTX<DT,GI,LI> ctx;
             // point back to aMat
-            ctx.aMatPtr =  (aMat<DT,GI,LI>*)this;
+            ctx.aMatPtr =  (aMat<DT,GI,LI>*)this; // FIXME: casting away "const", better way to do this?
 
             // create matrix shell
-            MatCreateShell(m_comm, m_uiNumNodes, m_uiNumNodes, PETSC_DETERMINE, PETSC_DETERMINE, &ctx, &pMatFree);
+            MatCreateShell( m_comm, m_uiNumNodes, m_uiNumNodes, PETSC_DETERMINE, PETSC_DETERMINE, &ctx, &pMatFree );
 
             // set operation for matrix-vector multiplication using aMat::MatMult_mf
-            MatShellSetOperation(pMatFree, MATOP_MULT, (void(*)(void))aMat_matvec<DT,GI,LI>);
+            MatShellSetOperation( pMatFree, MATOP_MULT, (void(*)(void))aMat_matvec<DT,GI,LI> );
 
             // set operation for geting matrix diagonal using aMat::MatGetDiagonal_mf
-            MatShellSetOperation(pMatFree, MATOP_GET_DIAGONAL, (void(*)(void))aMat_matgetdiagonal<DT,GI,LI>);
+            MatShellSetOperation( pMatFree, MATOP_GET_DIAGONAL, (void(*)(void))aMat_matgetdiagonal<DT,GI,LI> );
 
             // set operation for geting block matrix diagonal using aMat::MatGetDiagonalBlock_mf
-            MatShellSetOperation(pMatFree, MATOP_GET_DIAGONAL_BLOCK, (void(*)(void))aMat_matgetdiagonalblock<DT,GI,LI>);
+            MatShellSetOperation( pMatFree, MATOP_GET_DIAGONAL_BLOCK, (void(*)(void))aMat_matgetdiagonalblock<DT,GI,LI> );
 
             // abstract Krylov object, linear solver context
             KSP ksp;
             // abstract preconditioner object, pre conditioner context
             PC  pc;
+
             // default KSP context
-            KSPCreate(m_comm, &ksp);
+            KSPCreate( m_comm, &ksp );
 
             // set the matrix associated the linear system
-            KSPSetOperators(ksp, pMatFree, pMatFree);
+            KSPSetOperators( ksp, pMatFree, pMatFree );
 
             // set default solver (e.g. KSPCG, KSPFGMRES, ...)
             // could be overwritten at runtime using -ksp_type <type>
@@ -2678,18 +2682,18 @@ namespace par {
 
             // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
             // could be overwritten at runtime using -pc_type <type>
-            KSPGetPC(ksp,&pc);
-            PCSetType(pc, PCJACOBI);
-            PCSetFromOptions(pc);
+            KSPGetPC( ksp, &pc );
+            PCSetType( pc, PCJACOBI );
+            PCSetFromOptions( pc );
 
             // solve the system
-            KSPSolve(ksp, rhs, out);
+            KSPSolve( ksp, rhs, out );
 
             // clean up
-            KSPDestroy(&ksp);
+            KSPDestroy( &ksp );
 
         }
-        else { // Not MAT_FREE
+        else { // Normal PETSc solve (ie, not matrix free)
             // abstract Krylov object, linear solver context
             KSP ksp;
             // abstract preconditioner object, pre conditioner context
@@ -2834,8 +2838,9 @@ namespace par {
             //rowId = local_to_global[i];
             rowId = m_ulpLocal2Global[i];
             // std::cout << "setting: " << rowId << "," << colId << std::endl;
-            if (fabs(value) > 1e-16)
+            if (fabs(value) > 1e-16) {
                 MatSetValue(m_pMat_matvec, rowId, colId, value, mode);
+            }
         }
 
         return Error::SUCCESS;
@@ -2946,7 +2951,7 @@ namespace par {
     }// mat_get_diagonal_block_seq
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_to_local_mat(DT** lMat, DT** gMat){
+    par::Error aMat<DT,GI,LI>::ghost_to_local_mat(DT** lMat, DT** gMat) const {
         for (unsigned int r = 0; r < m_uiNumNodes; r++){
             for (unsigned int c = 0; c < m_uiNumNodes; c++){
                 lMat[r][c] = gMat[r + m_uiNumPreGhostNodes][c + m_uiNumPreGhostNodes];
@@ -2966,6 +2971,7 @@ namespace par {
         std::vector<PetscScalar> values(num_nodes);
         //std::vector<PetscInt> colIndices(num_nodes * dof);
         std::vector<PetscInt> colIndices(num_nodes);
+
         PetscInt rowId;
 
         unsigned int index = 0;
