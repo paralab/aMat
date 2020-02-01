@@ -4,7 +4,7 @@
  * @author Han Duc Tran  hantran@cs.utah.edu
  *
  * @brief Example of solving 1D FEM problem, in parallel using aMat, Petsc and Eigen
- * @brief u''(x) = 0 with BCs u(0) = 0 and u(L) = 1
+ * @brief u''(x) = 0 with BCs u(0) = 0, u(L/2) = 0.7 and u(L) = 20
  *
  * @version 0.1
  * @date 2020-01-03
@@ -199,8 +199,6 @@ int main(int argc, char *argv[]){
     }
 
     // compute constrained map
-    const double prescribedDispl = 1.0; // prescribed displacement applied at the right end of the bar
-
     unsigned int** bound_nodes = new unsigned int* [nelem];
     double** bound_values = new double* [nelem];
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -211,7 +209,8 @@ int main(int argc, char *argv[]){
         for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
             unsigned long global_Id = globalMap[eid][nid];
             double x = (double)(global_Id * h);
-            if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001)){
+            //if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001)){
+            if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001) || (std::fabs(x - 0.5*L) < 0.000001)){
                 bound_nodes[eid][nid] = 1;
             } else {
                 bound_nodes[eid][nid] = 0;
@@ -221,7 +220,10 @@ int main(int argc, char *argv[]){
                 bound_values[eid][nid] = 0.0;
             } else if (std::fabs(x - L) < 0.000001){
                 // right end
-                bound_values[eid][nid] = prescribedDispl;
+                //bound_values[eid][nid] = prescribedDispl;
+                bound_values[eid][nid] = 20.0;
+            } else if (std::fabs(x - 0.5*L) < 0.000001){
+                bound_values[eid][nid] = 0.7;
             } else {
                 // free dofs
                 bound_values[eid][nid] = -1000000;
@@ -249,9 +251,14 @@ int main(int argc, char *argv[]){
         double x = (double)(global_Id * h);
         constrainedDofs_ptr[i] = global_Id;
         if (std::fabs(x - L) < 0.000001){
-            prescribedValues_ptr[i] = prescribedDispl;
-        } else {
+            prescribedValues_ptr[i] = 20.0;
+        } else if (std::fabs(x - 0.5*L) < 0.000001){
+            prescribedValues_ptr[i] = 0.7;
+        } else if (std::fabs(x) < 0.000001){
             prescribedValues_ptr[i] = 0.0;
+        } else {
+            std::cout << "something wrong with the list of constrained dofs...";
+            return 0;
         }
     }
 
@@ -314,6 +321,8 @@ int main(int argc, char *argv[]){
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
+    //stMat.dump_vec(rhs);
+
     // write results to files
     /*if (!matFree){
         stMat.dump_mat("matrix.dat");
@@ -332,8 +341,9 @@ int main(int argc, char *argv[]){
     // display solution on screen
     stMat.dump_vec(out);
 
+    // following exact solution is only for the problem of u(0) = 0 and u(L) = 1, thus not valid for current test
     // exact solution: u(x) = (prescribedDispl/L)*x
-    Vec sol_exact;
+    /* Vec sol_exact;
     PetscInt rowId;
     stMat.petsc_create_vec(sol_exact);
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -345,19 +355,19 @@ int main(int argc, char *argv[]){
         }
     }
     stMat.petsc_init_vec(sol_exact);
-    stMat.petsc_finalize_vec(sol_exact);
+    stMat.petsc_finalize_vec(sol_exact); */
 
     // display exact solution on screen
     //stMat.dump_vec(sol_exact);
 
     // compute the norm of error
-    PetscScalar norm, alpha = -1.0;
+    /* PetscScalar norm, alpha = -1.0;
     VecAXPY(sol_exact, alpha, out);
     VecNorm(sol_exact, NORM_INFINITY, &norm);
 
     if (!rank){
         printf("L_inf norm= %20.16f\n", norm);
-    }
+    } */
 
     // free allocated memory...
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -381,7 +391,7 @@ int main(int argc, char *argv[]){
     delete [] local2GlobalMap;
     delete [] nnode_per_elem;
     VecDestroy(&out);
-    VecDestroy(&sol_exact);
+    //VecDestroy(&sol_exact);
     VecDestroy(&rhs);
 
 

@@ -616,7 +616,6 @@ namespace par {
         // FIXME: internal only call (move to private)?  Use matvec instead?
         /**@brief v = K * u; v and u are of size including ghost DoFs. */
         par::Error matvec_ghosted(DT* v, DT* u);
-        par::Error matvec_ghosted_bc(DT* v, DT* u);
 
         /**@brief matrix-free version of MatMult of PETSc */
         PetscErrorCode MatMult_mf(Mat A, Vec u, Vec v);
@@ -1961,6 +1960,9 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::ghost_receive_begin(DT* vec) {
 
+        if(m_uiSize==1)
+            return par::Error::SUCCESS;
+
         // exchange context for vec
         AsyncExchangeCtx ctx((const void*)vec);
 
@@ -2013,6 +2015,9 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::ghost_receive_end(DT* vec) {
 
+        if(m_uiSize==1)
+            return par::Error::SUCCESS;
+
         // get the context associated with vec
         unsigned int ctx_index;
         for (unsigned i = 0; i < m_vAsyncCtx.size(); i++){
@@ -2050,6 +2055,9 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::ghost_send_begin(DT* vec) {
+
+        if(m_uiSize==1)
+            return par::Error::SUCCESS;
 
         AsyncExchangeCtx ctx((const void*)vec);
 
@@ -2097,6 +2105,9 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::ghost_send_end(DT* vec) {
+
+        if(m_uiSize==1)
+            return par::Error::SUCCESS;
 
         unsigned int ctx_index;
         for (unsigned i = 0; i < m_vAsyncCtx.size(); i++){
@@ -2180,11 +2191,7 @@ namespace par {
 
         LI rowID, colID;
 
-        // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
-        ghost_receive_begin(u);
-        ghost_receive_end(u);
-
-        // apply bc...
+        // apply BC: save Uc and set u(Uc) = 0 (could be moved to MatMult_mf)
         const LI numConstraints = ownedConstrainedDofs.size();
         LI local_Id;
         DT* Uc = new DT [numConstraints];
@@ -2193,7 +2200,13 @@ namespace par {
             Uc[nid] = u[local_Id];
             u[local_Id] = 0.0;
         }
+        // end of apply BC
 
+        // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
+        ghost_receive_begin(u);
+        ghost_receive_end(u);
+
+        // multiply [ve] = [ke][ue] for all elements
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
             LI block_row_offset = 0;
@@ -2268,15 +2281,16 @@ namespace par {
         ghost_send_begin(v);
         ghost_send_end(v);
 
-        // apply bc...
+        // apply BC: set v(Uc) = Uc which is saved before doing matvec (could be moved to MatMult_mf)
         for (LI nid = 0; nid < numConstraints; nid++){
             local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
             v[local_Id] = Uc[nid];
         }
+        delete [] Uc;
+        // end of apply BC
 
         delete [] ue;
         delete [] ve;
-        delete [] Uc;
 
         /*printf("rank %d, before matvec v = \n",m_uiRank);
         for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
@@ -2308,32 +2322,31 @@ namespace par {
         // copy data of uu (not-ghosted) to uug
         local_to_ghost(uug, uu);
 
-
-        // save value of U_c, then make U_c = 0
-        // this is moved to matvec_ghosted()
-        /*const LI numConstraints = ownedConstrainedDofs.size();
+        // apply BC: save value of U_c, then make U_c = 0
+        /* const LI numConstraints = ownedConstrainedDofs.size();
         DT* Uc = new DT [numConstraints];
         for (LI nid = 0; nid < numConstraints; nid++){
             local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
             Uc[nid] = uug[local_Id];
             uug[local_Id] = 0.0;
-        }*/
+        } */
+        // end of apply BC
 
         // vvg = K * uug
         matvec(vvg, uug, true); // this gives V_f = (K_ff * U_f) + (K_fc * 0) = K_ff * U_f
 
-        // now set V_c = U_c which was saved in U'_c
-        // this is moved to matvec_ghosted()
-        /*for (LI nid = 0; nid < numConstraints; nid++){
+        // apply BC: now set V_c = U_c which was saved in U'_c
+        /* for (LI nid = 0; nid < numConstraints; nid++){
             local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
             vvg[local_Id] = Uc[nid];
-        }*/
+        }
+        delete [] Uc; */
+        // end of apply BC
 
         ghost_to_local(vv,vvg);
 
         delete [] vvg;
         delete [] uug;
-        //delete [] Uc;
 
         VecRestoreArray(v,&vv);
 
