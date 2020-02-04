@@ -353,11 +353,17 @@ namespace par {
         /**@brief local DoF IDs to be sent (size = total number of nodes to be sent */
         std::vector<LI> m_uivSendNodeIds;
 
+        /**@brief process IDs that I send data to */
+        std::vector<unsigned int> m_uivSendRankIds;
+
         /**@brief number of DoFs to be received from each process (size = m_uiSize) */
         std::vector<LI> m_uivRecvNodeCounts;
 
         /**@brief offsets (i.e. exclusive scan) of m_uiRecvNodeCounts */
         std::vector<LI> m_uivRecvNodeOffset;
+
+        /**@brief process IDs that I receive data from */
+        std::vector<unsigned int> m_uivRecvRankIds;
 
         /**@brief local node-ID starting of pre-ghost nodes, always = 0 */
         LI m_uiNodePreGhostBegin;
@@ -1243,6 +1249,16 @@ namespace par {
             m_uivRecvNodeOffset[i] = sendOffset[i];
         }
 
+        // identify ranks that I need to send to and ranks that I will receive from
+        for (unsigned int i = 0; i < m_uiSize; i++){
+            if (m_uivSendNodeCounts[i] > 0){
+                m_uivSendRankIds.push_back(i);
+            }
+            if (m_uivRecvNodeCounts[i] > 0){
+                m_uivRecvRankIds.push_back(i);
+            }
+        }
+
         // assert local map m_uipLocalMap[eid][nid]
         // structure displ vector = [0, ..., (m_uiNumPreGhostNodes - 1), --> ghost nodes owned by someone before me
         //    m_uiNumPreGhostNodes, ..., (m_uiNumPreGhostNodes + m_uiNumNodes - 1), --> nodes owned by me
@@ -1982,9 +1998,8 @@ namespace par {
             for (unsigned int i = 0; i < total_send; i++){
                 send_buf[i] = vec[m_uivSendNodeIds[i]];
             }
-            for (unsigned int i = 0; i < m_uiSize; i++){
-                // if nothing to send to rank i then skip
-                if (m_uivSendNodeCounts[i] == 0) continue;
+            for (unsigned int r = 0; r < m_uivSendRankIds.size(); r++){
+                unsigned int i = m_uivSendRankIds[r]; // rank that I will send to
                 // send to rank i
                 MPI_Request* req = new MPI_Request();
                 MPI_Isend(&send_buf[m_uivSendNodeOffset[i]], m_uivSendNodeCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
@@ -1997,8 +2012,9 @@ namespace par {
         if (total_recv > 0){
             ctx.allocateRecvBuffer(sizeof(DT) * total_recv);
             DT* recv_buf = (DT*) ctx.getRecvBuffer();
-            for (unsigned int i = 0; i < m_uiSize; i++){
-                if (m_uivRecvNodeCounts[i] == 0) continue;
+
+            for (unsigned int r = 0; r < m_uivRecvRankIds.size(); r++){
+                unsigned int i = m_uivRecvRankIds[r];
                 MPI_Request* req = new MPI_Request();
                 MPI_Irecv(&recv_buf[m_uivRecvNodeOffset[i]], m_uivRecvNodeCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 // pout output request req of receiving into Request list of ctx
@@ -2070,8 +2086,8 @@ namespace par {
         if (total_recv > 0){
             ctx.allocateRecvBuffer(sizeof(DT) * total_recv);
             DT* recv_buf = (DT*) ctx.getRecvBuffer();
-            for (unsigned int i = 0; i < m_uiSize; i++){
-                if (m_uivSendNodeCounts[i] == 0) continue;
+            for (unsigned int r = 0; r < m_uivSendRankIds.size(); r++){
+                unsigned int i = m_uivSendRankIds[r];
                 MPI_Request* req = new MPI_Request();
                 MPI_Irecv(&recv_buf[m_uivSendNodeOffset[i]], m_uivSendNodeCounts[i]*sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 ctx.getRequestList().push_back(req);
@@ -2091,8 +2107,8 @@ namespace par {
             for (unsigned int i = m_uiNumPreGhostNodes + m_uiNumNodes; i < m_uiNumPreGhostNodes + m_uiNumNodes + m_uiNumPostGhostNodes; i++){
                 send_buf[i - m_uiNumNodes] = vec[i];
             }
-            for (unsigned int i = 0; i < m_uiSize; i++){
-                if (m_uivRecvNodeCounts[i] == 0) continue;
+            for (unsigned int r = 0; r < m_uivRecvRankIds.size(); r++){
+                unsigned int i = m_uivRecvRankIds[r];
                 MPI_Request* req = new MPI_Request();
                 MPI_Isend(&send_buf[m_uivRecvNodeOffset[i]], m_uivRecvNodeCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 ctx.getRequestList().push_back(req);
