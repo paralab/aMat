@@ -347,6 +347,8 @@ int main(int argc, char *argv[]){
     }
     delete [] xe;
 
+    PetscScalar norm, alpha = -1.0;
+
     // Pestc begins and completes assembling the global stiffness matrix
     if (!matFree){
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
@@ -357,10 +359,10 @@ int main(int argc, char *argv[]){
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    /*if (!matFree) {
+    /* if (!matFree) {
         stMat.dump_mat("matrix_before_bc.dat");
         stMat.dump_vec(rhs, "rhs_before_bc.dat");
-    }*/
+    } */
 
     // modifying stiffness matrix and load vector to apply dirichlet BCs
     if (!matFree){
@@ -391,6 +393,11 @@ int main(int argc, char *argv[]){
 
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
+
+    VecNorm(out, NORM_2, &norm);
+    if (!rank){
+        printf("L2 norm of computed solution = %f\n",norm);
+    }
     //stMat.dump_vec(out);
 
     // exact solution...
@@ -411,14 +418,17 @@ int main(int argc, char *argv[]){
 
     // display exact solution on screen
     //stMat.dump_vec(sol_exact);
+    VecNorm(sol_exact, NORM_2, &norm);
+    if (!rank){
+        printf("L2 norm of exact solution = %f\n",norm);
+    }
 
     // compute the norm of error
-    PetscScalar norm, alpha = -1.0;
     VecAXPY(sol_exact, alpha, out);
     VecNorm(sol_exact, NORM_INFINITY, &norm);
 
     if (!rank){
-        printf("L_inf norm= %20.10f\n", norm);
+        printf("Inf norm of error = %20.10f\n", norm);
     }
 
     // free allocated memory...

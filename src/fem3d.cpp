@@ -26,7 +26,7 @@
 #    include <petsc.h>
 #endif
 
-#include <Eigen/Dense>
+#include "Eigen/Dense"
 
 #include "shfunction.hpp"
 #include "ke_matrix.hpp"
@@ -79,9 +79,9 @@ int main( int argc, char *argv[] ) {
 
     unsigned  int emin = 0, emax = 0;
     unsigned long nid, eid;
-    const unsigned int nDofPerNode = 1;         // number of dofs per node
-    const unsigned int nDim = 3;                // number of dimension
-    const unsigned int nNodePerElem = 8;        // number of nodes per element
+    const unsigned int NDOF_PER_NODE = 1;         // number of dofs per node
+    const unsigned int NDIM = 3;                // number of dimension
+    const unsigned int NNODE_PER_ELEM = 8;        // number of nodes per element
 
     // number of (global) elements in x, y and z directions
     const unsigned int Nex = atoi(argv[1]);
@@ -91,15 +91,19 @@ int main( int argc, char *argv[] ) {
     const bool useEigen = atoi(argv[4]); // use Eigen matrix
     const bool matFree = atoi(argv[5]);
 
-    //Matrix<double,8,8>* kee;
-    //kee = new Matrix<double,8,8>[AMAT_MAX_EMAT_PER_ELEMENT];
-    std::vector<Matrix<double,8,8>> kee;
-    kee.resize(AMAT_MAX_EMAT_PER_ELEMENT);
+    // element matrix (contains multiple matrix blocks)
+    std::vector< Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM > > kee;
+    kee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT * AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
 
-    double* xe = new double[nDim * nNodePerElem];
-    double* ke = new double[(nDofPerNode * nNodePerElem) * (nDofPerNode * nNodePerElem)];
-    //double* fe = new double[nDofPerNode * nNodePerElem];
-    Matrix<double,8,1> fe;
+    // nodal coordinates of element
+    double* xe = new double[NDIM * NNODE_PER_ELEM];
+
+    // matrix block
+    double* ke = new double[(NDOF_PER_NODE * NNODE_PER_ELEM) * (NDOF_PER_NODE * NNODE_PER_ELEM)];
+
+    // element force vector (contains multiple vector blocks)
+    std::vector< Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, 1 > > fee;
+    fee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x, y, z direction
     const double Lx = 2.0, Ly = 2.0, Lz = 2.0;
@@ -120,11 +124,11 @@ int main( int argc, char *argv[] ) {
     MPI_Comm_size(comm, &size);
 
     if(!rank) {
-        std::cout<<"============ parameters read  =======================\n";
-        std::cout<<"\t\tNex : "<<Nex<<" Ney: "<<Ney<<" Nez: "<<Nez<< "\n";
+        std::cout << "============ parameters read  =======================\n";
+        std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
     }
-    if(!rank && useEigen) { std::cout<<"\t\tuseEigen: "<<useEigen << "\n"; }
-    if(!rank && matFree)  { std::cout<<"\t\tmatrix free: "<<matFree << "\n"; }
+    if(!rank && useEigen) { std::cout << "\t\tuseEigen: " << useEigen << "\n"; }
+    if(!rank && matFree)  { std::cout << "\t\tmatrix free: " << matFree << "\n"; }
     if(!rank) { std::cout<<"=====================================================\n"; }
 
     if( rank == 0 ) {
@@ -169,17 +173,15 @@ int main( int argc, char *argv[] ) {
         nnode_z = nelem_z;
     }
 
-
     unsigned int nnode_y = nelem_y + 1;
     unsigned int nnode_x = nelem_x + 1;
     unsigned int nnode = (nnode_x) * (nnode_y) * (nnode_z);
-
 
     // map from local nodes to global nodes
     unsigned long int** globalMap;
     globalMap = new unsigned long int *[nelem];
     for (unsigned int e = 0; e < nelem; e++) {
-        globalMap[e] = new unsigned long int[AMAT_MAX_EMAT_PER_ELEMENT*nNodePerElem];
+        globalMap[e] = new unsigned long int[AMAT_MAX_BLOCKSDIM_PER_ELEMENT*NNODE_PER_ELEM];
     }
     for (unsigned k = 0; k < nelem_z; k++){
         for (unsigned j = 0; j < nelem_y; j++){
@@ -276,18 +278,17 @@ int main( int argc, char *argv[] ) {
     start_global_node = nnodeOffset[rank];
     end_global_node = start_global_node + (nnode - 1);
 
-    // boundary nodes: bound
-    unsigned int** bound_nodes = new unsigned int *[nelem];
+    // element boundary node and prescribed value
+    unsigned int** bound_nodes = new unsigned int* [nelem];
     double** bound_values = new double* [nelem];
     for (unsigned int e = 0; e < nelem; e++) {
-        bound_nodes[e] = new unsigned int[nNodePerElem];
-        bound_values[e] = new double [nNodePerElem];
+        bound_nodes[e] = new unsigned int[NNODE_PER_ELEM];
+        bound_values[e] = new double [NNODE_PER_ELEM];
     }
-
 
     unsigned int* nodes_per_element = new unsigned int[nelem];
     for (unsigned e = 0; e < nelem; e ++){
-        nodes_per_element[e] = 8;
+        nodes_per_element[e] = NNODE_PER_ELEM;
     }
 
     // declare aMat object =================================
@@ -307,10 +308,9 @@ int main( int argc, char *argv[] ) {
     stMat.set_map(nelem, localMap, nodes_per_element, numLocalNodes, local2GlobalMap, start_global_node,
                   end_global_node, nnode_total);
 
-
     // construct element maps of constrained DoFs and prescribed values
     for (unsigned int eid = 0; eid < nelem; eid++) {
-        for (unsigned int n = 0; n < nNodePerElem; n++) {
+        for (unsigned int n = 0; n < NNODE_PER_ELEM; n++) {
             nid = globalMap[eid][n];
 
             // get node coordinates
@@ -334,7 +334,7 @@ int main( int argc, char *argv[] ) {
     // create lists of constrained dofs (for new interface of set_bdr_map)
     std::vector<unsigned long> constrainedDofs;
     for (unsigned int eid = 0; eid < nelem; eid++){
-        for (unsigned int nid = 0; nid < nNodePerElem; nid++){
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             if (bound_nodes[eid][nid] == 1){
                 constrainedDofs.push_back(globalMap[eid][nid]);
             }
@@ -363,7 +363,7 @@ int main( int argc, char *argv[] ) {
 
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
     for (unsigned int eid = 0; eid < nelem; eid++){
-        for (unsigned int n = 0; n < nNodePerElem; n++){
+        for (unsigned int n = 0; n < NNODE_PER_ELEM; n++){
             nid = globalMap[eid][n];
 
             // get node coordinates
@@ -373,36 +373,23 @@ int main( int argc, char *argv[] ) {
             xe[n * 3] = x;
             xe[(n * 3) + 1] = y;
             xe[(n * 3) + 2] = z;
-
-            // specify boundary nodes
-            /*if ((std::fabs(x) < tol) || (std::fabs(x - Lx) < tol) ||
-                (std::fabs(y) < tol) || (std::fabs(y - Ly) < tol) ||
-                (std::fabs(z) < tol) || (std::fabs(z - Lz) < tol)) {
-                bound_nodes[eid][n] = 1; // boundary
-                bound_values[eid][n] = 0; // prescribed value
-            } else {
-                bound_nodes[eid][n] = 0; // interior
-                bound_values[eid][n] = -1000000; // for testing
-            }*/
         }
 
         // compute element stiffness matrix
         if (useEigen) {
             ke_hex8_eig(kee[0], xe);
-            //ke_hex8_eig_test(kee[0], xe);
         } else {
             ke_hex8(ke, xe);
         }
 
         // compute element force vector
-        fe_hex8_eig(fe,xe);
+        fe_hex8_eig(fee[0], xe);
 
         // assemble element stiffness matrix to global K
         if (useEigen){
             if (matFree) {
                 // copy element matrix to store in m_epMat[eid]
                 stMat.copy_element_matrix(eid, kee[0], 0, 0, 1);
-
             } else {
                 stMat.petsc_set_element_matrix(eid, kee[0], 0, 0, ADD_VALUES);
             }
@@ -414,15 +401,9 @@ int main( int argc, char *argv[] ) {
             }
         }
         // assemble element load vector to global F
-        stMat.petsc_set_element_vec(rhs, eid, fe, 0, ADD_VALUES); // 0 is block_i which is only one block for this case
+        stMat.petsc_set_element_vec(rhs, eid, fee[0], 0, ADD_VALUES); // 0 is block_i which is only one block for this case
     }
-
-
-    // set boundary globalMap
-    //stMat.set_bdr_map_old(bound_nodes, bound_values);
-
     delete [] ke;
-    //delete [] fe;
     delete [] xe;
 
     // Pestc begins and completes assembling the global stiffness matrix
@@ -435,125 +416,15 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    //stMat.dump_vec("rhs_vec.dat", rhs);
-    //stMat.dump_vec("out_vec.dat", out);
-
-    // ---------------------------------------------------------------------------------------------
-    // matrix-free test:
-    /*if (matFree) {
-        double *dv;
-        double *du;
-
-        const bool ghosted = false; // not include ghost nodes
-
-        // write assembled matrix for comparison
-        stMat.dump_mat("mat_as.m");
-
-        // build scatter globalMap
-        stMat.buildScatterMap();
-
-        // set local to global globalMap
-        stMat.set_Local2Global(local2GlobalMap);
-
-        // create m_pMat_matvec and initialize all to zero
-        stMat.petsc_create_matrix_matvec();
-
-        // create vectors dv and du with size = nnode and initialize all components to zero
-        stMat.create_vec(dv, ghosted);
-        stMat.create_vec(du, ghosted);
-
-        unsigned int local_dof_one; // local dof that has value 1
-
-        for (unsigned int n = 0; n < nnode_total; n++) {
-            //printf("rank= %d, n= %d\n", rank, n);
-            if ((n >= nnode_scan) && (n < (nnode_scan + nnode))) {
-                local_dof_one = n - nnode_scan;
-                for (unsigned int j = 0; j < nnode; j++) {
-                    if (j == local_dof_one) {
-                        du[j] = 1.0;
-                    } else {
-                        du[j] = 0.0;
-                    }
-                }
-            } else {
-                for (unsigned int j = 0; j < nnode; j++) {
-                    du[j] = 0.0;
-                }
-            }
-            stMat.matvec(dv, du);
-            stMat.petsc_set_matrix_matvec(dv, n, ADD_VALUES);
-        }
-        // std::cout << "Finished setting cols" << std::endl;
-
-        stMat.petsc_init_mat_matvec(MAT_FINAL_ASSEMBLY);
-        stMat.petsc_finalize_mat_matvec(MAT_FINAL_ASSEMBLY);
-        stMat.dump_mat_matvec("mat_mf.m");
-
-        //stMat.petsc_compare_matrix();
-        //stMat.petsc_norm_matrix_difference();
-
-        // do matvec using Petsc
-        Vec petsc_dv, petsc_du, petsc_compare;
-        stMat.petsc_create_vec(petsc_dv, 0.0);
-        stMat.petsc_create_vec(petsc_du, 1.0);
-        stMat.petsc_matmult(petsc_du, petsc_dv); //petsc_du = matrix*pets_dv
-        //stMat.dump_vec("petsc_dv.dat", petsc_dv);//print to file of petsc_dv
-
-        // transform dv to pestc vector for easy to compare
-        stMat.petsc_create_vec(petsc_compare, 0.0);
-        stMat.transform_to_petsc_vector(dv, petsc_compare, ghosted); // transform dv to pestc-type vector petsc_compare
-        //stMat.dump_vec("petsc_compare.dat", petsc_compare); // print to file petsc_compare
-
-        // subtract two vectors: petsc_compare = petsc_compare - petsc_dv
-        PetscScalar norm1, alpha1 = -1.0;
-        VecAXPY(petsc_compare, alpha1, petsc_dv);
-
-        // compute the norm of petsc_compare
-        VecNorm(petsc_compare, NORM_INFINITY, &norm1);
-
-        if (rank == 0){
-            printf("petsc_compare norm= %20.10f\n", norm1);
-        }
-
-    }*/
-
-    // testing the get_diagonal
-    /*if (matFree){
-        double* diag;
-        Vec petsc_diag, diag_to_petsc;
-
-        stMat.create_vec(diag, false);
-        stMat.get_diagonal(diag, false);
-
-        //stMat.print_vector(diag, false);
-        stMat.petsc_create_vec(petsc_diag);
-        stMat.petsc_create_vec(diag_to_petsc);
-
-        stMat.transform_to_petsc_vector(diag, diag_to_petsc, false);
-        stMat.petsc_get_diagonal(petsc_diag);
-
-        stMat.dump_vec("diag_to_petsc.dat",diag_to_petsc);
-        stMat.dump_vec("petsc_diag.dat",petsc_diag);
-    }*/
-
     // modifying stiffness matrix and load vector to apply dirichlet BCs
     if (!matFree){
         stMat.apply_bc_mat();
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
-    //stMat.apply_bc_rhs_old(rhs);
     stMat.apply_bc_rhs(rhs);
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
-
-    // write results to files
-    /*if (!matFree){
-        stMat.dump_mat("matrix.dat");
-        stMat.dump_vec(rhs,"rhs.dat");
-    } else {
-        stMat.print_mepMat();
-    }*/
 
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
@@ -562,11 +433,10 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_finalize_vec(out);
 
     // compute exact solution for comparison
-    //double* e_exact = new double[nNodePerElem]; // only for 1 DOF/node
-    Matrix<double,8,1> e_exact;
+    Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, 1 > e_exact;
 
     for (unsigned int e = 0; e < nelem; e++) {
-        for (unsigned int n = 0; n < nNodePerElem; n++) {
+        for (unsigned int n = 0; n < NNODE_PER_ELEM; n++) {
             // global node ID
             nid = globalMap[e][n];
             // nodal coordinates
@@ -586,8 +456,6 @@ int main( int argc, char *argv[] ) {
         // set exact solution to Pestc vector
         stMat.petsc_set_element_vec(sol_exact, e, e_exact, 0, INSERT_VALUES);
     }
-
-    //delete [] e_exact;
 
     // Pestc begins and completes assembling the exact solution
     stMat.petsc_init_vec(sol_exact);

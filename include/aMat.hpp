@@ -26,10 +26,16 @@
 #include <fstream>
 #include <algorithm>
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+#include <stdio.h>
+#include <immintrin.h>
+#include <stdlib.h>
+#include <stdlib.h>
 
-#define AMAT_MAX_CRACK_LEVEL      0                          // number of cracks allowed in 1 element
-#define AMAT_MAX_EMAT_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL) // max number of cracked elements on each element
+//////////////////////////////////////////////////////////////////////////////////////////////
+// number of cracks allowed in 1 element
+#define AMAT_MAX_CRACK_LEVEL 0
+// max number of block dimensions in one cracked element
+#define AMAT_MAX_BLOCKSDIM_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL)
 
 //////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -192,63 +198,6 @@ namespace par {
 
     }; // class MatRecord
 
-    // class BoundRecord, designed to be used for get_boundary_dofs(), but no longer in use
-    template <typename Dt, typename Gi, typename Li>
-    class BoundRecord {
-    private:
-        // rank who owns boundary dof
-        unsigned int m_uiRank;
-        // Dof type
-        //par::DOF_TYPE m_DofType;
-        // global Id of boundary dof
-        Gi m_uiDofId;
-        // value prescribed at boundary dof
-        Dt m_dtPresVal;
-    public:
-        BoundRecord() {
-            m_uiRank = 0;
-            m_uiDofId = 0;
-            m_dtPresVal = 0;
-        }
-        BoundRecord(unsigned int rank, Li dofId, Dt presVal){
-            m_uiRank = rank;
-            m_uiDofId = dofId;
-            m_dtPresVal = presVal;
-        }
-        ~BoundRecord(){}
-
-        inline unsigned int getRank() const {return m_uiRank;}
-        //inline par::DOF_TYPE getDofType() const {return m_DofType;}
-        inline Li getDofId() const {return m_uiDofId;}
-        inline Dt getPresVal() const {return m_dtPresVal;}
-
-        inline void setRank(unsigned int rank) {m_uiRank = rank;}
-        //inlinde void setDofType(par::DOF_TYPE dofType) {m_DofType = dofType;}
-        inline void setDofId(Li dofId) {m_uiDofId = dofId;}
-        inline void setPresVal(Dt presVal) {m_dtPresVal = presVal;}
-
-        bool operator == (BoundRecord const &other) const {
-            return ((m_uiRank == other.getRank())&&(m_uiDofId == other.getDofId()));
-        }
-        bool operator < (BoundRecord const &other) const {
-            if (m_uiRank < other.getRank()) {
-                return true;
-            }
-            else if (m_uiRank == other.getRank()) {
-                if (m_uiDofId < other.getDofId()) {
-                    return true;
-                }
-                else {
-                    return false;
-                }
-            }
-            else {
-                return false;
-            }
-        }
-        bool operator <= (BoundRecord const &other) const { return (((*this) < other) || (*this) == other); }
-    };
-
     ////////////////////////////////////////////////////////////////////////////////////////////////////////
     //
     // DT => type of data stored in matrix (eg: double). LI => size of local index.
@@ -269,6 +218,40 @@ namespace par {
         }
     }; // class MPI_datatype_matrecord
 
+    //////////////////////////////////////////////////////////////////////////////////////////////
+    // Class ElemMat: elemental matrix
+    //      DT => type of data stored in matrix (eg: double)
+    template <typename DT, typename GI>
+    class ConstrainedRecord {
+        private:
+        GI dofId; // global dof Id that is constrained (i.e. Dirichlet BC)
+        DT preVal;// prescribed valua for the constrained dof
+
+        public:
+        ConstrainedRecord() {
+            dofId = 0;
+            preVal = 0.0;
+        }
+
+        inline GI get_dofId() const { return dofId; }
+        inline DT get_preVal() const {return preVal; }
+
+        inline void set_dofId(GI id) { dofId = id; }
+        inline void set_preVal(DT value) { preVal = value; }
+
+        bool operator == (ConstrainedRecord const &other) const {
+            return (dofId == other.get_dofId());
+        }
+        bool operator < (ConstrainedRecord const &other) const {
+            if (dofId < other.get_dofId()) return true;
+            else return false;
+        }
+        bool operator <= (ConstrainedRecord const &other) const {
+            return (((*this) < other) || ((*this) == other));
+        }
+
+        ~ConstrainedRecord() {}
+    };// class ConstrainedDof
     ////////////////////////////////////////////////////////////////////////////////////////////////////////
     //
     // Class aMat
@@ -280,6 +263,22 @@ namespace par {
 
         typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
         typedef Eigen::Matrix<DT, Eigen::Dynamic, 1> EigenVec;
+
+    #ifdef AVX512
+        #define AVX_SIMD_LENGTH 8
+        protected:
+        /**@brief compute y = alpha * x + y using vector register of AVX512, length of x and y is n */
+        par::Error avx512_vec_axpy(double alpha, double* x, double* y, unsigned int n);
+    #elif AVX256
+        #define AVX_SIMD_LENGTH 4
+        protected:
+        /**@brief compute y = alpha * x + y using vector register of AVX256, length of x and y is n */
+        par::Error avx256_vec_axpy(double alpha, double* x, double* y, unsigned int n);
+    #else
+        protected:
+        /**@brief compute y = alpha * x + y length of x and y is n */
+        par::Error vec_axpy(DT alpha, DT* x, DT* y, LI n);
+    #endif
 
     protected:
         /**@brief Flag to use matrix-free or matrix-based method*/
@@ -293,32 +292,32 @@ namespace par {
         unsigned int m_uiSize;
 
         /**@brief (local) number of DoFs owned by rank */
-        LI m_uiNumNodes;
+        LI m_uiNumDofs;
         /**@brief (global) number of DoFs owned by all ranks */
-        GI m_ulNumNodesGlobal;
+        GI m_ulNumDofsGlobal;
         /**@brief start of global ID of owned dofs, just for assertion */
-        GI m_ulGlobalNodeStart_assert;
+        GI m_ulGlobalDofStart_assert;
         /**@brief end of global ID of owned dofs, just for assertion */
-        GI m_ulGlobalNodeEnd_assert;
+        GI m_ulGlobalDofEnd_assert;
         /**@brief total dofs inclulding ghost, just for assertion */
-        LI m_uiTotalNodes_assert;
+        LI m_uiTotalDofs_assert;
         /**@brief (local) number of elements owned by rank */
         LI m_uiNumElems;
         /**@brief max number of DoFs per element*/
-        LI m_uiMaxNodesPerElem;
+        LI m_uiMaxDofsPerElem;
 
 
         /**@brief assembled stiffness matrix */
         Mat m_pMat;
-        /**@brief storage of element matrices */
-        std::vector<EigenMat>* m_epMat;
 
+        /**@brief storage of element matrices (each block of elemental matrix is an (DT*)) */
+        std::vector< DT* >* m_epMat;
 
         /**@brief map from local DoF of element to global DoF: m_ulpMap[eid][local_id]  = global_id */
         GI** m_ulpMap;
 
         /**@brief number of dofs per element */
-        const LI* m_uiNodesPerElem;
+        const LI* m_uiDofsPerElem;
 
         /**@brief map from local DoF of element to local DoF: m_uiMap[eid][element_node]  = local node-ID */
         const LI* const*  m_uipLocalMap;
@@ -327,64 +326,64 @@ namespace par {
         const GI* m_ulpLocal2Global;
 
         /**@brief number of DoFs owned by each rank, NOT include ghost DoFs */
-        std::vector<LI> m_uivLocalNodeCounts;
+        std::vector<LI> m_uivLocalDofCounts;
 
         /**@brief number of elements owned by each rank */
         std::vector<LI> m_uivLocalElementCounts;
 
         /**@brief exclusive scan of (local) number of DoFs */
-        std::vector<GI> m_uivLocalNodeScan;
+        std::vector<GI> m_uivLocalDofScan;
 
         /**@brief exclusive scan of (local) number of elements */
         std::vector<GI> m_uivLocalElementScan;
 
         /**@brief number of ghost DoFs owned by "pre" processes (whose ranks are smaller than m_uiRank) */
-        LI m_uiNumPreGhostNodes;
+        LI m_uiNumPreGhostDofs;
 
         /**@brief total number of ghost DoFs owned by "post" processes (whose ranks are larger than m_uiRank) */
-        LI m_uiNumPostGhostNodes;
+        LI m_uiNumPostGhostDofs;
 
         /**@brief number of DoFs sent to each process (size = m_uiSize) */
-        std::vector<LI> m_uivSendNodeCounts;
+        std::vector<LI> m_uivSendDofCounts;
 
         /**@brief offsets (i.e. exclusive scan) of m_uiSendNodeCounts */
-        std::vector<LI> m_uivSendNodeOffset;
+        std::vector<LI> m_uivSendDofOffset;
 
         /**@brief local DoF IDs to be sent (size = total number of nodes to be sent */
-        std::vector<LI> m_uivSendNodeIds;
+        std::vector<LI> m_uivSendDofIds;
 
         /**@brief process IDs that I send data to */
         std::vector<unsigned int> m_uivSendRankIds;
 
         /**@brief number of DoFs to be received from each process (size = m_uiSize) */
-        std::vector<LI> m_uivRecvNodeCounts;
+        std::vector<LI> m_uivRecvDofCounts;
 
         /**@brief offsets (i.e. exclusive scan) of m_uiRecvNodeCounts */
-        std::vector<LI> m_uivRecvNodeOffset;
+        std::vector<LI> m_uivRecvDofOffset;
 
         /**@brief process IDs that I receive data from */
         std::vector<unsigned int> m_uivRecvRankIds;
 
-        /**@brief local node-ID starting of pre-ghost nodes, always = 0 */
-        LI m_uiNodePreGhostBegin;
+        /**@brief local dof-ID starting of pre-ghost nodes, always = 0 */
+        LI m_uiDofPreGhostBegin;
 
-        /**@brief local node-ID ending of pre-ghost nodes */
-        LI m_uiNodePreGhostEnd;
+        /**@brief local dof-ID ending of pre-ghost nodes */
+        LI m_uiDofPreGhostEnd;
 
-        /**@brief local node-ID starting of nodes owned by me */
-        LI m_uiNodeLocalBegin;
+        /**@brief local dof-ID starting of nodes owned by me */
+        LI m_uiDofLocalBegin;
 
-        /**@brief local node-ID ending of nodes owned by me */
-        LI m_uiNodeLocalEnd;
+        /**@brief local dof-ID ending of nodes owned by me */
+        LI m_uiDofLocalEnd;
 
-        /**@brief local node-ID starting of post-ghost nodes */
-        LI m_uiNodePostGhostBegin;
+        /**@brief local dof-ID starting of post-ghost nodes */
+        LI m_uiDofPostGhostBegin;
 
-        /**@brief local node-ID ending of post-ghost nodes */
-        LI m_uiNodePostGhostEnd;
+        /**@brief local dof-ID ending of post-ghost nodes */
+        LI m_uiDofPostGhostEnd;
 
-        /**@brief total number of nodes including ghost nodes and nodes owned by me */
-        LI m_uiNumNodesTotal;
+        /**@brief total number of dofs including ghost dofs and dofs owned by me */
+        LI m_uiNumDofsTotal;
 
         /**@brief MPI communication tag*/
         int m_iCommTag;
@@ -417,12 +416,14 @@ namespace par {
         /**@brief TEMPORARY VARIABLES FOR DEBUGGING */
         Mat m_pMat_matvec; // matrix created by matvec() to compare with m_pMat
 
-        /**@brief VARIABLES ARE NO LONGER USED */
-        std::vector<BoundRecord<DT,GI,LI>> m_vBdrRec; // boundary dof Ids and prescribed values for Dirichlet bc
-        std::vector<GI> m_vFreeNodes; // free dof Ids
-        std::vector< par::DOF_TYPE > m_DofType;
-        std::vector< DT > m_dPreDofValue;
-        std::vector< GI > m_GlobalDofId;
+    private:
+        /**@brief elemental vectors used in matvec */
+        DT* ue;
+        DT* ve;
+
+        /**@brief used to save constrained dofs when applying BCs in matvec */
+        DT* Uc;
+        LI n_owned_constraints;
 
     public:
 
@@ -460,11 +461,11 @@ namespace par {
 
         /**@brief return number of DoFs owned by this rank*/
         inline unsigned int get_local_num_nodes() const {
-            return m_uiNumNodes;
+            return m_uiNumDofs;
         }
         /**@brief return total number of DoFs (owned DoFs + ghost DoFs)*/
         inline unsigned int get_total_local_num_nodes() const {
-            return m_uiNumNodesTotal;
+            return m_uiNumDofsTotal;
         }
         /**@brief return number of elements owned by this rank*/
         inline unsigned int get_local_num_elements() const {
@@ -472,7 +473,7 @@ namespace par {
         }
         /**@brief return number of nodes of element eid */
         inline unsigned int get_nodes_per_element (unsigned int eid) const {
-            return m_uiNodesPerElem[eid];
+            return m_uiDofsPerElem[eid];
         }
         /**@brief return the map from DoF of element to local ID of vector (included ghost DoFs) */
         inline const LI * const * get_e2local_map() const {
@@ -484,32 +485,32 @@ namespace par {
         }
         /**@brief return the ID of first pre-ghost DoF */
         inline unsigned int get_pre_ghost_begin() const {
-            return m_uiNodePreGhostBegin;
+            return m_uiDofPreGhostBegin;
         }
         /**@brief return the ID that is 1 bigger than last pre-ghost DoF */
         inline unsigned int get_pre_ghost_end() const {
-            return m_uiNodePreGhostEnd;
+            return m_uiDofPreGhostEnd;
         }
         /**@brief return the ID of first post-ghost DoF */
         inline unsigned int get_post_ghost_begin() const {
-            return m_uiNodePostGhostBegin;
+            return m_uiDofPostGhostBegin;
         }
         /**@brief return the ID that is 1 bigger than last post-ghost DoF */
         inline unsigned int get_post_ghost_end() const {
-            return m_uiNodePostGhostEnd;
+            return m_uiDofPostGhostEnd;
         }
         /**@brief return the ID of first DoF owned by this rank*/
         inline unsigned int get_local_begin() const {
-            return m_uiNodeLocalBegin;
+            return m_uiDofLocalBegin;
         }
         /**@brief return the Id that is 1 bigger than last DoF owned by this rank*/
         inline unsigned int get_local_end() const {
-            return m_uiNodeLocalEnd;
+            return m_uiDofLocalEnd;
         }
         /**@brief return true if DoF "enid" of element "eid" is owned by this rank, false otherwise */
         inline bool is_local_node(unsigned int eid, unsigned int enid) const {
             const unsigned int nid = (const unsigned int)m_uipLocalMap[eid][enid];
-            if( nid >= m_uiNodeLocalBegin && nid < m_uiNodeLocalEnd ) {
+            if( nid >= m_uiDofLocalBegin && nid < m_uiDofLocalEnd ) {
                 return true;
             }
             else {
@@ -542,7 +543,6 @@ namespace par {
         par::Error petsc_create_vec( Vec &vec, PetscScalar alpha = 0.0 ) const;
 
         /**@brief assembly global load vector */
-        //par::Error petsc_set_element_vec( Vec vec, LI eid, DT* e_vec, LI block_i, LI block_j, InsertMode mode = ADD_VALUES );
         par::Error petsc_set_element_vec( Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode = ADD_VALUES );
 
         /**@brief assembly element matrix to structural matrix (for matrix-based method) */
@@ -668,7 +668,7 @@ namespace par {
             return f;
         }
 
-        /**@brief set boundary data */
+        /**@brief set boundary data, numConstraints is the global number of constrains */
         par::Error set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints);
 
         /**@brief apply Dirichlet BCs by modifying the matrix "m_pMat" */
@@ -757,14 +757,6 @@ namespace par {
         /**@brief get diagonal block matrix (dense matrix) */
         par::Error mat_get_diagonal_block_dense(DT **diag_blk);
 
-        /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
-        /**@brief assembly element matrix to structure matrix, multiple levels of twining
-         * @param[in] e_mat : element stiffness matrices (pointer)
-         * @param[in] twin_level: level of twinning (0 no crack, 1 one crack, 2 two cracks, 3 three cracks)
-         * */
-        par::Error set_element_matrices( LI eid, const EigenMat* e_mat, unsigned int twin_level, InsertMode mode = ADD_VALUES);
-        par::Error petsc_set_element_matrix( LI eid, const EigenMat e_mat, LI e_mat_id, InsertMode mode = ADD_VALUES );
-
     }; // end class aMat
 
 
@@ -824,41 +816,75 @@ namespace par {
     template <typename DT,typename GI, typename LI>
     aMat<DT,GI,LI>::aMat( AMAT_TYPE matType ){
         m_MatType          = matType;       // set type of matrix (matrix-based or matrix-free)
-        m_uiNumNodes       = 0;             // umber of local dofs
-        m_ulNumNodesGlobal = 0;             // number of global dofs
+        m_uiNumDofs        = 0;             // umber of local dofs
+        m_ulNumDofsGlobal  = 0;             // number of global dofs
         m_uiNumElems       = 0;             // number of local elements
         m_ulpMap           = nullptr;       // local-to-global map
-        m_uiNodesPerElem   = nullptr;       // number of dofs per element
+        m_uiDofsPerElem    = nullptr;       // number of dofs per element
         m_epMat            = nullptr;       // element matrices (Eigen matrix), used in matrix-free
-        m_pMat             = nullptr;       // structure matrix, used in matrix-based
+        m_pMat             = nullptr;       // "global" matrix, used in matrix-based
         m_comm             = MPI_COMM_NULL; // communication of aMat
         if( matType == AMAT_TYPE::MAT_FREE ){
             m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
+            ue = nullptr;
+            ve = nullptr;
+            Uc = nullptr;
         }
-        //m_uipBdrMap = nullptr;
-        //m_dtPresValMap = nullptr;
+        m_uipBdrMap = nullptr;
+        m_dtPresValMap = nullptr;
     }// constructor
 
     template <typename DT,typename GI, typename LI>
-    aMat<DT,GI,LI>::~aMat()
-    {
-        delete [] m_epMat;
-        if( m_MatType == AMAT_TYPE::MAT_FREE ){
-            for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-                delete [] m_ulpMap[eid]; //delete array
+    aMat<DT,GI,LI>::~aMat() {
+        //delete [] m_epMat;
+        if (m_MatType == AMAT_TYPE::MAT_FREE){
+            if (m_epMat != nullptr){
+                for (LI eid = 0; eid < m_uiNumElems; eid++){
+                    for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
+                        if (m_epMat[eid][bid] != nullptr){
+                            #ifdef AVX512
+                                free(m_epMat[eid][bid]);
+                            #elif AVX256
+                                free(m_epMat[eid][bid]);
+                            #else
+                                delete [] m_epMat[eid][bid];
+                            #endif
+                        }
+                    }
+                    m_epMat[eid].clear();
+                }
+                delete [] m_epMat;
             }
-            delete [] m_ulpMap;
-        }
-        else if( m_MatType == AMAT_TYPE::PETSC_SPARSE ) {
-            //MatDestroy(&m_pMat);
         }
 
-        /*for (LI eid = 0; eid < m_uiNumElems; eid++){
-            if (m_uipBdrMap[eid] != nullptr) delete [] m_uipBdrMap[eid];
-            if (m_dtPresValMap[eid] != nullptr) delete [] m_dtPresValMap[eid];
+
+        if( m_MatType == AMAT_TYPE::MAT_FREE ){
+            if (m_ulpMap != nullptr){
+                for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+                    if (m_ulpMap[eid] != nullptr) delete [] m_ulpMap[eid];
+                }
+                delete [] m_ulpMap;
+            }
+            if (ue != nullptr) delete [] ue;
+            if (ve != nullptr) delete [] ve;
+            if (n_owned_constraints > 0) delete [] Uc;
         }
-        delete [] m_uipBdrMap;
-        delete [] m_dtPresValMap;*/
+        //else if( m_MatType == AMAT_TYPE::PETSC_SPARSE ) {
+        //    MatDestroy(&m_pMat);
+        //}
+
+        if (m_uipBdrMap != nullptr){
+            for (LI eid = 0; eid < m_uiNumElems; eid++) {
+                if (m_uipBdrMap[eid] != nullptr) delete [] m_uipBdrMap[eid];
+            }
+            delete [] m_uipBdrMap;
+        }
+        if (m_dtPresValMap != nullptr) {
+            for (LI eid = 0; eid < m_uiNumElems; eid++) {
+                if (m_dtPresValMap[eid] != nullptr) delete [] m_dtPresValMap[eid];
+            }
+            delete [] m_dtPresValMap;
+        }
     } // ~aMat
 
     template <typename DT,typename GI, typename LI>
@@ -872,32 +898,32 @@ namespace par {
                                         const GI           n_global_dofs ){
 
         m_uiNumElems = n_elements_on_rank; // This is number of owned element
-        m_uiNumNodes = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
+        m_uiNumDofs = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
-        m_ulNumNodesGlobal = n_global_dofs; // currently this is not used
-        m_ulGlobalNodeStart_assert = owned_global_dof_range_begin; // this will be used for assertion in buildScatterMap
-        m_ulGlobalNodeEnd_assert = owned_global_dof_range_end; // this will be used for assertion in buildScatterMap
-        m_uiTotalNodes_assert = n_all_dofs_on_rank; // this will be used for assertion in buildScatterMap
+        m_ulNumDofsGlobal = n_global_dofs; // currently this is not used
+        m_ulGlobalDofStart_assert = owned_global_dof_range_begin; // this will be used for assertion in buildScatterMap
+        m_ulGlobalDofEnd_assert = owned_global_dof_range_end; // this will be used for assertion in buildScatterMap
+        m_uiTotalDofs_assert = n_all_dofs_on_rank; // this will be used for assertion in buildScatterMap
 
         // point to provided local map
-        m_uiNodesPerElem = dofs_per_element;
+        m_uiDofsPerElem = dofs_per_element;
 
         // point to rank_to_global map
         m_ulpLocal2Global = rank_to_global_map;
 
         m_ulpMap = new GI* [m_uiNumElems];
         for( LI eid = 0; eid < m_uiNumElems; eid++ ){
-            m_ulpMap[eid] = new GI [m_uiNodesPerElem[eid]];
+            m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
         }
         for( LI eid = 0; eid < m_uiNumElems; eid++ ){
-            for( unsigned int nid = 0; nid < m_uiNodesPerElem[eid]; nid++ ){
+            for( unsigned int nid = 0; nid < m_uiDofsPerElem[eid]; nid++ ){
                 m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
             }
         }
 
         if( m_MatType == AMAT_TYPE::PETSC_SPARSE ){
             MatCreate(m_comm, &m_pMat);
-            MatSetSizes(m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE);
+            MatSetSizes(m_pMat, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
             if(m_uiSize > 1) {
                 MatSetType(m_pMat, MATMPIAIJ);
                 MatMPIAIJSetPreallocation( m_pMat, 30, PETSC_NULL, 30, PETSC_NULL );
@@ -915,10 +941,25 @@ namespace par {
         }
         else if( m_MatType == AMAT_TYPE::MAT_FREE ){
             if( m_epMat != nullptr) {
+                for (LI eid = 0; eid < m_uiNumElems; eid++){
+                    for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
+                        if (m_epMat[eid][bid] != nullptr){
+                            #ifdef AVX512
+                                free(m_epMat[eid][bid]);
+                            #elif AVX256
+                                free(m_epMat[eid][bid]);
+                            #else
+                                delete [] m_epMat[eid][bid];
+                            #endif
+                        }
+                    }
+                    m_epMat[eid].clear();
+                }
                 delete [] m_epMat;
                 m_epMat = nullptr;
             }
-            m_epMat = new std::vector<EigenMat>[m_uiNumElems];
+            //m_epMat = new std::vector<EigenMat> [m_uiNumElems];
+            m_epMat = new std::vector<DT*> [m_uiNumElems]; // we do not know how many blocks and size of blocks for each element at this time
 
             // point to provided local Map
             m_uipLocalMap = element_to_rank_map;
@@ -927,8 +968,7 @@ namespace par {
 
             get_max_dof_per_elem();
 
-        }
-        else {
+        } else {
             std::cout << "ERROR: mat type is unknown: " << (int)m_MatType << "\n";
             return Error::UNKNOWN_MAT_TYPE;
         }
@@ -955,45 +995,45 @@ namespace par {
         }
 
         // point to new dofs_per_element map
-        m_uiNodesPerElem = dofs_per_element;
+        m_uiDofsPerElem = dofs_per_element;
 
         // update new rank_to_global map
         m_ulpLocal2Global = rank_to_global_map;
 
         // allocate with new dofs per element, and update new global map
         for (LI eid = 0; eid < m_uiNumElems; eid++){
-            m_ulpMap[eid] = new GI[m_uiNodesPerElem[eid]];
+            m_ulpMap[eid] = new GI[m_uiDofsPerElem[eid]];
         }
         for (LI eid = 0; eid < m_uiNumElems; eid++){
-            for (LI nid = 0; nid < m_uiNodesPerElem[eid]; nid++){
+            for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
                 m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
             }
         }
 
         // update total number of owned dofs
-        m_uiNumNodes = owned_global_dof_range_end - owned_global_dof_range_begin;
+        m_uiNumDofs = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
         // update total number of dofs on all ranks, currently not in use
-        m_ulNumNodesGlobal = n_global_dofs;
+        m_ulNumDofsGlobal = n_global_dofs;
 
-        /*unsigned long nl = m_uiNumNodes;
+        /*unsigned long nl = m_uiNumDofs;
         unsigned long ng;
         MPI_Allreduce( &nl, &ng, 1, MPI_LONG, MPI_SUM, m_comm );
         assert( n_global_dofs == ng );*/
 
         // update variables for assertion in buildScatterMap
-        m_ulGlobalNodeStart_assert = owned_global_dof_range_begin;
-        m_ulGlobalNodeEnd_assert = owned_global_dof_range_end;
-        m_uiTotalNodes_assert = n_all_dofs_on_rank;
+        m_ulGlobalDofStart_assert = owned_global_dof_range_begin;
+        m_ulGlobalDofEnd_assert = owned_global_dof_range_end;
+        m_uiTotalDofs_assert = n_all_dofs_on_rank;
 
-        // allocate new (larger) matrix of size m_uiNumNodes
+        // allocate new (larger) matrix of size m_uiNumDofs
         if( m_MatType == AMAT_TYPE::PETSC_SPARSE ) {
             if( m_pMat != nullptr ){
                 MatDestroy( &m_pMat );
                 m_pMat = nullptr;
             }
             MatCreate( m_comm, &m_pMat );
-            MatSetSizes( m_pMat, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE );
+            MatSetSizes( m_pMat, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE );
             if( m_uiSize > 1 ) {
                 // initialize matrix
                 MatSetType(m_pMat, MATMPIAIJ);
@@ -1011,8 +1051,22 @@ namespace par {
         else if (m_MatType == AMAT_TYPE::MAT_FREE){
             // Note: currently we delete all old element matrices and need to add new element matrices again
             // Todo: only add newly formed blocks?
-            for (LI eid = 0; eid < m_uiNumElems; eid++){
-                m_epMat[eid].clear();
+            if( m_epMat != nullptr) {
+                for (LI eid = 0; eid < m_uiNumElems; eid++){
+                    for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
+                        if (m_epMat[eid][bid] != nullptr){
+                            #ifdef AVX512
+                                free(m_epMat[eid][bid]);
+                            #elif AVX256
+                                free(m_epMat[eid][bid]);
+                            #else
+                                delete [] m_epMat[eid][bid];
+                            #endif
+                        }
+                    }
+                    m_epMat[eid].clear();
+                }
+                // we do not delete [] m_epMat because the number of elements do not change when map is updated
             }
 
             // point to new local map
@@ -1036,26 +1090,26 @@ namespace par {
 
         if( m_ulpMap == nullptr ) { return Error::NULL_L2G_MAP; }
 
-        m_uivLocalNodeCounts.clear();
+        m_uivLocalDofCounts.clear();
         m_uivLocalElementCounts.clear();
-        m_uivLocalNodeScan.clear();
+        m_uivLocalDofScan.clear();
         m_uivLocalElementScan.clear();
 
-        m_uivLocalNodeCounts.resize(m_uiSize);
+        m_uivLocalDofCounts.resize(m_uiSize);
         m_uivLocalElementCounts.resize(m_uiSize);
-        m_uivLocalNodeScan.resize(m_uiSize);
+        m_uivLocalDofScan.resize(m_uiSize);
         m_uivLocalElementScan.resize(m_uiSize);
 
         // gather local counts
-        MPI_Allgather(&m_uiNumNodes, 1, MPI_INT, &(*(m_uivLocalNodeCounts.begin())), 1, MPI_INT, m_comm);
+        MPI_Allgather(&m_uiNumDofs, 1, MPI_INT, &(*(m_uivLocalDofCounts.begin())), 1, MPI_INT, m_comm);
         MPI_Allgather(&m_uiNumElems, 1, MPI_INT, &(*(m_uivLocalElementCounts.begin())), 1, MPI_INT, m_comm);
 
         // scan local counts to determine owned-range:
-        // range of global ID of owned dofs = [m_uivLocalNodeScan[m_uiRank], m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)
-        m_uivLocalNodeScan[0] = 0;
+        // range of global ID of owned dofs = [m_uivLocalDofScan[m_uiRank], m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)
+        m_uivLocalDofScan[0] = 0;
         m_uivLocalElementScan[0] = 0;
         for (unsigned int p = 1; p < m_uiSize; p++) {
-            m_uivLocalNodeScan[p] = m_uivLocalNodeScan[p-1] + m_uivLocalNodeCounts[p-1];
+            m_uivLocalDofScan[p] = m_uivLocalDofScan[p-1] + m_uivLocalDofCounts[p-1];
             m_uivLocalElementScan[p] = m_uivLocalElementScan[p-1] + m_uivLocalElementCounts[p-1];
         }
 
@@ -1063,21 +1117,21 @@ namespace par {
         std::vector<GI> preGhostGIds;
         std::vector<GI> postGhostGIds;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++) {
-            unsigned int num_nodes = m_uiNodesPerElem[eid];
+            unsigned int num_nodes = m_uiDofsPerElem[eid];
             for (unsigned int i = 0; i < num_nodes; i++) {
                 // global ID
                 const unsigned int nid = m_ulpMap[eid][i];
-                if (nid < m_uivLocalNodeScan[m_uiRank]) {
+                if (nid < m_uivLocalDofScan[m_uiRank]) {
                     // dofs with global ID < owned-range --> pre-ghost dofs
-                    assert( nid < m_ulGlobalNodeStart_assert);
+                    assert( nid < m_ulGlobalDofStart_assert);
                     preGhostGIds.push_back(nid);
-                } else if (nid >= (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)){
+                } else if (nid >= (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)){
                     // dofs with global ID > owned-range --> post-ghost dofs
-                    assert( nid > m_ulGlobalNodeEnd_assert);
+                    assert( nid > m_ulGlobalDofEnd_assert);
                     postGhostGIds.push_back(nid);
                 } else {
-                    assert ((nid >= m_uivLocalNodeScan[m_uiRank])  && (nid< (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)));
-                    assert((nid >= m_ulGlobalNodeStart_assert) && (nid <= m_ulGlobalNodeEnd_assert));
+                    assert ((nid >= m_uivLocalDofScan[m_uiRank])  && (nid< (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)));
+                    assert((nid >= m_ulGlobalDofStart_assert) && (nid <= m_ulGlobalDofEnd_assert));
                 }
             }
         }
@@ -1091,44 +1145,44 @@ namespace par {
         postGhostGIds.erase(std::unique(postGhostGIds.begin(), postGhostGIds.end()), postGhostGIds.end());
 
         // number of ghost dofs
-        m_uiNumPreGhostNodes = preGhostGIds.size();
-        m_uiNumPostGhostNodes = postGhostGIds.size();
+        m_uiNumPreGhostDofs = preGhostGIds.size();
+        m_uiNumPostGhostDofs = postGhostGIds.size();
 
-        // range of local ID of pre-ghost dofs = [0, m_uiNodePreGhostEnd)
-        m_uiNodePreGhostBegin = 0;
-        m_uiNodePreGhostEnd = m_uiNumPreGhostNodes;
+        // range of local ID of pre-ghost dofs = [0, m_uiDofPreGhostEnd)
+        m_uiDofPreGhostBegin = 0;
+        m_uiDofPreGhostEnd = m_uiNumPreGhostDofs;
 
-        // range of local ID of owned dofs = [m_uiNodeLocalBegin, m_uiNodeLocalEnd)
-        m_uiNodeLocalBegin = m_uiNodePreGhostEnd;
-        m_uiNodeLocalEnd = m_uiNodeLocalBegin + m_uiNumNodes;
+        // range of local ID of owned dofs = [m_uiDofLocalBegin, m_uiDofLocalEnd)
+        m_uiDofLocalBegin = m_uiDofPreGhostEnd;
+        m_uiDofLocalEnd = m_uiDofLocalBegin + m_uiNumDofs;
 
-        // range of local ID of post-ghost dofs = [m_uiNodePostGhostBegin, m_uiNodePostGhostEnd)
-        m_uiNodePostGhostBegin = m_uiNodeLocalEnd;
-        m_uiNodePostGhostEnd = m_uiNodePostGhostBegin + m_uiNumPostGhostNodes;
+        // range of local ID of post-ghost dofs = [m_uiDofPostGhostBegin, m_uiDofPostGhostEnd)
+        m_uiDofPostGhostBegin = m_uiDofLocalEnd;
+        m_uiDofPostGhostEnd = m_uiDofPostGhostBegin + m_uiNumPostGhostDofs;
 
         // total number of dofs including ghost dofs
-        m_uiNumNodesTotal = m_uiNumNodes + m_uiNumPreGhostNodes + m_uiNumPostGhostNodes;
-        assert(m_uiNumNodesTotal == m_uiTotalNodes_assert);
+        m_uiNumDofsTotal = m_uiNumDofs + m_uiNumPreGhostDofs + m_uiNumPostGhostDofs;
+        assert(m_uiNumDofsTotal == m_uiTotalDofs_assert);
 
         // determine owners of pre- and post-ghost dofs
         std::vector<unsigned int> preGhostOwner;
         std::vector<unsigned int> postGhostOwner;
-        preGhostOwner.resize(m_uiNumPreGhostNodes);
-        postGhostOwner.resize(m_uiNumPostGhostNodes);
+        preGhostOwner.resize(m_uiNumPreGhostDofs);
+        postGhostOwner.resize(m_uiNumPostGhostDofs);
 
         // pre-ghost
         unsigned int pcount = 0; // processor count, start from 0
         unsigned int gcount = 0; // global ID count
-        while (gcount < m_uiNumPreGhostNodes) {
+        while (gcount < m_uiNumPreGhostDofs) {
             // global ID of pre-ghost dof gcount
             unsigned int nid = preGhostGIds[gcount];
             while ((pcount < m_uiRank) &&
-                   (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount]))))) {
+                   (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))) {
                 // nid is not in the range of global ID of dofs owned by pcount
                 pcount++;
             }
             // check if nid is really in the range of global ID of dofs owned by pcount
-            if (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount])))) {
+            if (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount])))) {
                 std::cout << "m_uiRank: " << m_uiRank << " pre ghost gid : " << nid << " was not found in any processor" << std::endl;
                 return Error::GHOST_NODE_NOT_FOUND;
             }
@@ -1139,17 +1193,17 @@ namespace par {
         // post-ghost
         pcount = m_uiRank; // start from my rank
         gcount = 0;
-        while(gcount < m_uiNumPostGhostNodes)
+        while(gcount < m_uiNumPostGhostDofs)
             {
                 // global ID of post-ghost dof gcount
                 unsigned int nid = postGhostGIds[gcount];
                 while ((pcount < m_uiSize) &&
-                       (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount]))))){
+                       (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))){
                     // nid is not the range of global ID of dofs owned by pcount
                     pcount++;
                 }
                 // check if nid is really in the range of global ID of dofs owned by pcount
-                if (!((nid >= m_uivLocalNodeScan[pcount]) && (nid < (m_uivLocalNodeScan[pcount] + m_uivLocalNodeCounts[pcount])))) {
+                if (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount])))) {
                     std::cout << "m_uiRank: " << m_uiRank << " post ghost gid : " << nid << " was not found in any processor" << std::endl;
                     return Error::GHOST_NODE_NOT_FOUND;
                 }
@@ -1169,12 +1223,12 @@ namespace par {
         }
 
         // count number of pre-ghost dofs to corresponding owners
-        for (unsigned int i = 0; i < m_uiNumPreGhostNodes; i++) {
+        for (unsigned int i = 0; i < m_uiNumPreGhostDofs; i++) {
             sendCounts[preGhostOwner[i]] += 1;
         }
 
         // count number of post-ghost dofs to corresponding owners
-        for (unsigned int i = 0; i < m_uiNumPostGhostNodes; i++) {
+        for (unsigned int i = 0; i < m_uiNumPostGhostDofs; i++) {
             sendCounts[postGhostOwner[i]] += 1;
         }
 
@@ -1198,10 +1252,10 @@ namespace par {
         recvBuf.resize(recvOffset[m_uiSize-1] + recvCounts[m_uiSize-1]);
 
         // put global ID of pre- and post-ghost dofs to sendBuf
-        for(unsigned int i = 0; i < m_uiNumPreGhostNodes; i++)
+        for(unsigned int i = 0; i < m_uiNumPreGhostDofs; i++)
             sendBuf[i] = preGhostGIds[i];
-        for(unsigned int i = 0; i < m_uiNumPostGhostNodes; i++)
-            sendBuf[i + m_uiNumPreGhostNodes] = postGhostGIds[i];
+        for(unsigned int i = 0; i < m_uiNumPostGhostDofs; i++)
+            sendBuf[i + m_uiNumPreGhostDofs] = postGhostGIds[i];
 
         for(unsigned int i = 0; i < m_uiSize; i++) {
             sendCounts[i] *= sizeof(GI);
@@ -1222,64 +1276,64 @@ namespace par {
         }
 
         // compute local ID of owned dofs i (i = 0..recBuf.size()) that need to be send data to where i is a ghost dof
-        m_uivSendNodeIds.resize(recvBuf.size());
+        m_uivSendDofIds.resize(recvBuf.size());
 
         for(unsigned int i = 0; i < recvBuf.size(); i++) {
             // global ID of recvBuf[i]
             const unsigned int gid = recvBuf[i];
             // check if gid is really owned by my rank (if not then something goes wrong with sendBuf above
-            if (gid < m_uivLocalNodeScan[m_uiRank]  || gid >=  (m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)) {
+            if (gid < m_uivLocalDofScan[m_uiRank]  || gid >=  (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
                 std::cout<<" m_uiRank: "<<m_uiRank<< "scatter map error : "<<__func__<<std::endl;
                 par::Error::GHOST_NODE_NOT_FOUND;
             }
-            assert((gid >= m_ulGlobalNodeStart_assert) && (gid <= m_ulGlobalNodeEnd_assert));
+            assert((gid >= m_ulGlobalDofStart_assert) && (gid <= m_ulGlobalDofEnd_assert));
             // local ID
-            m_uivSendNodeIds[i] = m_uiNumPreGhostNodes + (gid - m_uivLocalNodeScan[m_uiRank]);
+            m_uivSendDofIds[i] = m_uiNumPreGhostDofs + (gid - m_uivLocalDofScan[m_uiRank]);
         }
 
-        m_uivSendNodeCounts.resize(m_uiSize);
-        m_uivSendNodeOffset.resize(m_uiSize);
-        m_uivRecvNodeCounts.resize(m_uiSize);
-        m_uivRecvNodeOffset.resize(m_uiSize);
+        m_uivSendDofCounts.resize(m_uiSize);
+        m_uivSendDofOffset.resize(m_uiSize);
+        m_uivRecvDofCounts.resize(m_uiSize);
+        m_uivRecvDofOffset.resize(m_uiSize);
 
         for (unsigned int i = 0; i < m_uiSize; i++) {
-            m_uivSendNodeCounts[i] = recvCounts[i];
-            m_uivSendNodeOffset[i] = recvOffset[i];
-            m_uivRecvNodeCounts[i] = sendCounts[i];
-            m_uivRecvNodeOffset[i] = sendOffset[i];
+            m_uivSendDofCounts[i] = recvCounts[i];
+            m_uivSendDofOffset[i] = recvOffset[i];
+            m_uivRecvDofCounts[i] = sendCounts[i];
+            m_uivRecvDofOffset[i] = sendOffset[i];
         }
 
         // identify ranks that I need to send to and ranks that I will receive from
         for (unsigned int i = 0; i < m_uiSize; i++){
-            if (m_uivSendNodeCounts[i] > 0){
+            if (m_uivSendDofCounts[i] > 0){
                 m_uivSendRankIds.push_back(i);
             }
-            if (m_uivRecvNodeCounts[i] > 0){
+            if (m_uivRecvDofCounts[i] > 0){
                 m_uivRecvRankIds.push_back(i);
             }
         }
 
         // assert local map m_uipLocalMap[eid][nid]
-        // structure displ vector = [0, ..., (m_uiNumPreGhostNodes - 1), --> ghost nodes owned by someone before me
-        //    m_uiNumPreGhostNodes, ..., (m_uiNumPreGhostNodes + m_uiNumNodes - 1), --> nodes owned by me
-        //    (m_uiNumPreGhostNodes + m_uiNumNodes), ..., (m_uiNumPreGhostNodes + m_uiNumNodes + m_uiNumPostGhostNodes - 1)] --> nodes owned by someone after me
+        // structure displ vector = [0, ..., (m_uiNumPreGhostDofs - 1), --> ghost nodes owned by someone before me
+        //    m_uiNumPreGhostDofs, ..., (m_uiNumPreGhostDofs + m_uiNumDofs - 1), --> nodes owned by me
+        //    (m_uiNumPreGhostDofs + m_uiNumDofs), ..., (m_uiNumPreGhostDofs + m_uiNumDofs + m_uiNumPostGhostDofs - 1)] --> nodes owned by someone after me
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            unsigned int num_nodes = m_uiNodesPerElem[eid];
+            unsigned int num_nodes = m_uiDofsPerElem[eid];
 
             for (unsigned int i = 0; i < num_nodes; i++){
                 const unsigned int nid = m_ulpMap[eid][i];
-                if (nid >= m_uivLocalNodeScan[m_uiRank] &&
-                    nid < (m_uivLocalNodeScan[m_uiRank] + m_uivLocalNodeCounts[m_uiRank])) {
+                if (nid >= m_uivLocalDofScan[m_uiRank] &&
+                    nid < (m_uivLocalDofScan[m_uiRank] + m_uivLocalDofCounts[m_uiRank])) {
                     // nid is owned by me
-                    assert(m_uipLocalMap[eid][i] == nid - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes);
-                } else if (nid < m_uivLocalNodeScan[m_uiRank]){
+                    assert(m_uipLocalMap[eid][i] == nid - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs);
+                } else if (nid < m_uivLocalDofScan[m_uiRank]){
                     // nid is owned by someone before me
                     const unsigned int lookUp = std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), nid) - preGhostGIds.begin();
                     assert(m_uipLocalMap[eid][i] == lookUp);
-                } else if (nid >= (m_uivLocalNodeScan[m_uiRank] + m_uivLocalNodeCounts[m_uiRank])){
+                } else if (nid >= (m_uivLocalDofScan[m_uiRank] + m_uivLocalDofCounts[m_uiRank])){
                     // nid is owned by someone after me
                     const unsigned int lookUp = std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), nid) - postGhostGIds.begin();
-                    assert(m_uipLocalMap[eid][i] ==  (m_uiNumPreGhostNodes + m_uiNumNodes) + lookUp);
+                    assert(m_uipLocalMap[eid][i] ==  (m_uiNumPreGhostDofs + m_uiNumDofs) + lookUp);
                 }
             }
         }
@@ -1300,7 +1354,7 @@ namespace par {
 
         for (LI i = 0; i < numConstraints; i++){
             global_Id = constrainedDofs[i];
-            if ((global_Id >= m_uivLocalNodeScan[m_uiRank]) && (global_Id < m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)) {
+            if ((global_Id >= m_uivLocalDofScan[m_uiRank]) && (global_Id < m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
                 ownedConstrainedDofs.push_back(global_Id);
                 ownedPrescribedValues.push_back(prescribedValues[i]);
             }
@@ -1310,12 +1364,12 @@ namespace par {
         m_uipBdrMap = new unsigned int* [m_uiNumElems];
         m_dtPresValMap = new DT* [m_uiNumElems];
         for (LI eid = 0; eid < m_uiNumElems; eid++){
-            m_uipBdrMap[eid] = new unsigned int[m_uiNodesPerElem[eid]];
-            m_dtPresValMap[eid] = new DT [m_uiNodesPerElem[eid]];
+            m_uipBdrMap[eid] = new unsigned int[m_uiDofsPerElem[eid]];
+            m_dtPresValMap[eid] = new DT [m_uiDofsPerElem[eid]];
         }
 
         for (LI eid = 0; eid < m_uiNumElems; eid++){
-            for (LI nid = 0; nid < m_uiNodesPerElem[eid]; nid++){
+            for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
                 global_Id = m_ulpMap[eid][nid];
                 LI index;
                 for (index = 0; index < numConstraints; index++) {
@@ -1328,7 +1382,7 @@ namespace par {
                 if (index == numConstraints){
                     m_uipBdrMap[eid][nid] = 0;
                     m_dtPresValMap[eid][nid] = -1E16; // for testing
-                    if ((global_Id >= m_uivLocalNodeScan[m_uiRank]) && (global_Id < m_uivLocalNodeScan[m_uiRank] + m_uiNumNodes)) {
+                    if ((global_Id >= m_uivLocalDofScan[m_uiRank]) && (global_Id < m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
                         ownedFreeDofs.push_back(global_Id);
                     }
                 }
@@ -1344,6 +1398,12 @@ namespace par {
         // allocate KfcUc, this will be subtracted from rhs to apply bc
         petsc_create_vec(KfcUcVec);
 
+        // allocate memory for Uc used in matvec_ghosted
+        n_owned_constraints = ownedConstrainedDofs.size();
+        if ((n_owned_constraints > 0) && (m_MatType == AMAT_TYPE::MAT_FREE)){
+            Uc = new DT [n_owned_constraints];
+        }
+
         return Error::SUCCESS;
     }//set_bdr_map
 
@@ -1353,11 +1413,11 @@ namespace par {
         VecCreate(m_comm, &vec);
         if (m_uiSize>1) {
             VecSetType(vec,VECMPI);
-            VecSetSizes(vec, m_uiNumNodes, PETSC_DECIDE);
+            VecSetSizes(vec, m_uiNumDofs, PETSC_DECIDE);
             VecSet(vec, alpha);
         } else {
             VecSetType(vec,VECSEQ);
-            VecSetSizes(vec, m_uiNumNodes, PETSC_DECIDE);
+            VecSetSizes(vec, m_uiNumDofs, PETSC_DECIDE);
             VecSet(vec, alpha);
         }
         return Error::SUCCESS;
@@ -1369,7 +1429,6 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode){
 
-        //unsigned int num_nodes = m_uiNodesPerElem[eid];
         unsigned int num_rows = e_vec.size();
         assert(e_vec.size() == e_vec.rows()); // since EigenVec is defined as matrix with 1 column
 
@@ -1511,17 +1570,17 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::create_vec( DT* &vec, bool isGhosted /* = false */, DT alpha /* = 0.0 */ ) const {
         if (isGhosted){
-            vec = new DT[m_uiNumNodesTotal];
+            vec = new DT[m_uiNumDofsTotal];
         } else {
-            vec = new DT[m_uiNumNodes];
+            vec = new DT[m_uiNumDofs];
         }
         // initialize
         if (isGhosted) {
-            for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
+            for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
                 vec[i] = alpha;
             }
         } else {
-            for (unsigned int i = 0; i < m_uiNumNodes; i++){
+            for (unsigned int i = 0; i < m_uiNumDofs; i++){
                 vec[i] = alpha;
             }
         }
@@ -1531,23 +1590,23 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::create_mat( DT** &mat, bool isGhosted /* = false */, DT alpha /* = 0.0 */ ){
         if( isGhosted ){
-            mat = new DT*[m_uiNumNodesTotal];
-            for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
-                mat[i] = new DT[m_uiNumNodesTotal];
+            mat = new DT*[m_uiNumDofsTotal];
+            for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
+                mat[i] = new DT[m_uiNumDofsTotal];
             }
-            for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
-                for (unsigned int j = 0; j < m_uiNumNodesTotal; j++){
+            for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
+                for (unsigned int j = 0; j < m_uiNumDofsTotal; j++){
                     mat[i][j] = alpha;
                 }
             }
         }
         else {
-            mat = new DT *[m_uiNumNodes];
-            for (unsigned int i = 0; i < m_uiNumNodes; i++) {
-                mat[i] = new DT[m_uiNumNodes];
+            mat = new DT *[m_uiNumDofs];
+            for (unsigned int i = 0; i < m_uiNumDofs; i++) {
+                mat[i] = new DT[m_uiNumDofs];
             }
-            for (unsigned int i = 0; i < m_uiNumNodes; i++){
-                for (unsigned int j = 0; j < m_uiNumNodes; j++){
+            for (unsigned int i = 0; i < m_uiNumDofs; i++){
+                for (unsigned int j = 0; j < m_uiNumDofs; j++){
                     mat[i][j] = alpha;
                 }
             }
@@ -1557,9 +1616,9 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::local_to_ghost( DT*  gVec, const DT* local ) const {
-        for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
-            if ((i >= m_uiNumPreGhostNodes) && (i < m_uiNumPreGhostNodes + m_uiNumNodes)) {
-                gVec[i] = local[i - m_uiNumPreGhostNodes];
+        for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
+            if ((i >= m_uiNumPreGhostDofs) && (i < m_uiNumPreGhostDofs + m_uiNumDofs)) {
+                gVec[i] = local[i - m_uiNumPreGhostDofs];
             }
             else {
                 gVec[i] = 0.0;
@@ -1570,14 +1629,109 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::ghost_to_local(DT* local, const DT* gVec) const {
-        for (unsigned int i = 0; i < m_uiNumNodes; i++) {
-            local[i] = gVec[i + m_uiNumPreGhostNodes];
+        for (unsigned int i = 0; i < m_uiNumDofs; i++) {
+            local[i] = gVec[i + m_uiNumPreGhostDofs];
         }
         return Error::SUCCESS;
     } // ghost_to_local
 
 
     template <typename DT,typename GI, typename LI>
+    par::Error aMat<DT,GI,LI>::copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) {
+
+        // resize the vector of blocks for element eid
+        m_epMat[eid].resize(blocks_dim * blocks_dim, nullptr);
+
+        // 1D-index of (block_i, block_j)
+        LI index = (block_i * blocks_dim) + block_j;
+
+        // allocate memory to store e_mat (e_mat is one of blocks of the elemental matrix of element eid)
+        LI num_rows = e_mat.rows();
+        assert (num_rows == e_mat.cols());
+        // delete of this memory will be done in aMat destructor and update_map
+        //DT* block = new DT [num_rows * num_rows];
+        DT* block;
+        //aligned_alloc
+
+        #ifdef AVX512
+            posix_memalign((void **)&block, AVX_SIMD_LENGTH * sizeof(double),(num_rows * num_rows) * sizeof(DT));
+            //block = (DT*)aligned_alloc(AVX_SIMD_LENGTH * sizeof(double), (num_rows * num_rows) * sizeof(DT));
+
+            // store block in column-major
+            LI ind = 0;
+            for (LI c = 0; c < num_rows; c++){
+                for (LI r = 0; r < num_rows; r++){
+                    block[ind] = e_mat(r,c);
+                    ind++;
+                }
+            }
+        #elif AVX256
+            posix_memalign((void **)&block, AVX_SIMD_LENGTH * sizeof(double),(num_rows * num_rows) * sizeof(DT));
+            //block = (DT*)aligned_alloc(AVX_SIMD_LENGTH * sizeof(double), (num_rows * num_rows) * sizeof(DT));
+
+            // store block in column-major
+            LI ind = 0;
+            for (LI c = 0; c < num_rows; c++){
+                for (LI r = 0; r < num_rows; r++){
+                    block[ind] = e_mat(r,c);
+                    ind++;
+                }
+            }
+        #else
+            block = new DT [num_rows * num_rows];
+
+            // store block in row-major
+            LI ind = 0;
+            for (LI r = 0; r < num_rows; r++){
+                for (LI c = 0; c < num_rows; c++){
+                    block[ind] = e_mat(r,c);
+                    ind++;
+                }
+            }
+        #endif
+
+
+
+        // add block (address) to m_epMat[eid]
+        m_epMat[eid][index] = block;
+
+        // prepare for bc of rhs
+        std::vector<PetscScalar> KfcUcValues;
+        std::vector<PetscInt> rowIndices;
+        PetscInt rowId;
+        PetscScalar temp;
+        bool bdrFlag, rowFlag;
+
+        // loop over rows of the element matrix (block)
+        for (LI r = 0; r < num_rows; r++){
+            rowFlag = false;
+            // continue if row is associated with a free dof
+            if (m_uipBdrMap[eid][block_i * num_rows + r] == 0){
+                rowId = m_ulpMap[eid][block_i * num_rows + r];
+                temp = 0;
+                // loop over columns of the element matrix (block)
+                for (LI c = 0; c < num_rows; c++){
+                    // continue if column is associated with a constrained dof
+                    if (m_uipBdrMap[eid][block_j * num_rows + c] == 1){
+                        // accumulate Kfc[r,c]*Uc[c]
+                        temp += e_mat(r,c) * m_dtPresValMap[eid][block_j * num_rows + c];
+                        rowFlag = true; // this rowId has constrained column dof
+                        bdrFlag = true; // this element matrix has KfcUc
+                    }
+                }
+                if (rowFlag){
+                    rowIndices.push_back(rowId);
+                    KfcUcValues.push_back(-1.0*temp);
+                }
+            }
+        }
+        if (bdrFlag){
+            VecSetValues(KfcUcVec, rowIndices.size(), rowIndices.data(), KfcUcValues.data(), ADD_VALUES);
+        }
+        return Error::SUCCESS;
+    }// copy_element_matrix
+
+    /* template <typename DT,typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) {
         // resize the vector of blocks for element eid
         m_epMat[eid].resize(blocks_dim * blocks_dim);
@@ -1626,7 +1780,7 @@ namespace par {
         }
 
         return Error::SUCCESS;
-    }// copy_element_matrix
+    } */// copy_element_matrix
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::mat_get_diagonal(DT* diag, bool isGhosted){
@@ -1644,40 +1798,25 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
-
-        EigenMat e_mat;
         LI rowID;
-
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-
-            // number of blocks in each direction
+            // number of blocks in each direction (i.e. blocks_dim)
             LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            // number of block must be a square of blocks_dim
             assert((blocks_dim*blocks_dim) == m_epMat[eid].size());
-
+            // number of dofs per block, must be the same for all blocks
+            const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
             LI block_row_offset = 0;
-
             for (LI block_i = 0; block_i < blocks_dim; block_i++) {
-
                 // only get diagonals of diagonal blocks
                 LI index = block_i * blocks_dim + block_i;
-
-                // diagonal block must not be null
-                assert (m_epMat[eid][index].size() != 0);
-
-                e_mat = m_epMat[eid][index];
-                assert(e_mat.rows() == e_mat.cols());
-
-                // number of dofs per block
-                const LI num_dofs_per_block = e_mat.rows();
-                assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
-
+                // diagonal block must be non-zero
+                assert (m_epMat[eid][index] != nullptr);
                 for (LI r = 0; r < num_dofs_per_block; r++){
-
                     // local (rank) row ID
                     rowID = m_uipLocalMap[eid][block_row_offset + r];
-
                     // accumulate the diagonal term
-                    diag[rowID] += e_mat(r,r);
+                    diag[rowID] += m_epMat[eid][index][r * num_dofs_per_block + r];
                 }
                 block_row_offset += num_dofs_per_block;
             }
@@ -1694,11 +1833,11 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     unsigned int aMat<DT, GI, LI>::globalId_2_rank(GI gId) const {
         unsigned int rank;
-        if (gId >= m_uivLocalNodeScan[m_uiSize - 1]){
+        if (gId >= m_uivLocalDofScan[m_uiSize - 1]){
             rank = m_uiSize - 1;
         } else {
             for (unsigned int i = 0; i < (m_uiSize - 1); i++){
-                if (gId >= m_uivLocalNodeScan[i] && gId < m_uivLocalNodeScan[i+1] && (i < (m_uiSize -1))) {
+                if (gId >= m_uivLocalDofScan[i] && gId < m_uivLocalDofScan[i+1] && (i < (m_uiSize -1))) {
                     rank = i;
                     break;
                 }
@@ -1707,11 +1846,9 @@ namespace par {
         return rank;
     }
 
-
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT, GI, LI>::mat_get_diagonal_block(std::vector<MatRecord<DT,LI>> &diag_blk){
         LI blocks_dim;
-        EigenMat e_mat;
         GI glo_RowId, glo_ColId;
         LI loc_RowId, loc_ColId;
         LI rowID, colID;
@@ -1735,7 +1872,8 @@ namespace par {
 
             LI block_row_offset = 0;
             LI block_col_offset = 0;
-            LI num_dofs_per_block;
+
+            const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
@@ -1743,14 +1881,7 @@ namespace par {
 
                     LI index = block_i * blocks_dim + block_j;
 
-                    if (m_epMat[eid][index].size() != 0){
-
-                        e_mat = m_epMat[eid][index];
-                        assert(e_mat.rows() == e_mat.cols());
-
-                        // number of dofs per block
-                        num_dofs_per_block = e_mat.rows();
-                        assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
+                    if (m_epMat[eid][index] != nullptr){
 
                         for (LI r = 0; r < num_dofs_per_block; r++){
 
@@ -1764,7 +1895,7 @@ namespace par {
                             rank_r = globalId_2_rank(glo_RowId);
 
                             //local ID in that rank (not include ghost nodes)
-                            loc_RowId = (glo_RowId - m_uivLocalNodeScan[rank_r]);
+                            loc_RowId = (glo_RowId - m_uivLocalDofScan[rank_r]);
 
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 // local column Id (include ghost nodes)
@@ -1777,16 +1908,25 @@ namespace par {
                                 rank_c = globalId_2_rank(glo_ColId);
 
                                 // local column Id in that rank (not include ghost nodes)
-                                loc_ColId = (glo_ColId - m_uivLocalNodeScan[rank_c]);
+                                loc_ColId = (glo_ColId - m_uivLocalDofScan[rank_c]);
 
                                 if( rank_r == rank_c ){
                                     // put all data in a MatRecord object
                                     matr.setRank(rank_r);
                                     matr.setRowId(loc_RowId);
                                     matr.setColId(loc_ColId);
-                                    matr.setVal(e_mat(r,c));
+                                    #ifdef AVX512
+                                    // elemental block matrix stored in column-major
+                                    matr.setVal(m_epMat[eid][index][(c * num_dofs_per_block) + r]);
+                                    #elif AVX256
+                                    // elemental block matrix stored in column-major
+                                    matr.setVal(m_epMat[eid][index][(c * num_dofs_per_block) + r]);
+                                    #else
+                                    // elemental block matrix stored in row-major
+                                    matr.setVal(m_epMat[eid][index][(r * num_dofs_per_block) + c]);
+                                    #endif
 
-                                    if ((rowID >= m_uiNodeLocalBegin) && (rowID < m_uiNodeLocalEnd) && (colID >= m_uiNodeLocalBegin) && (colID < m_uiNodeLocalEnd)){
+                                    if ((rowID >= m_uiDofLocalBegin) && (rowID < m_uiDofLocalEnd) && (colID >= m_uiDofLocalBegin) && (colID < m_uiDofLocalEnd)){
                                         // add to diagonal block of my rank
                                         assert( rank_r == m_uiRank );
                                         matRec1.push_back(matr);
@@ -1938,13 +2078,18 @@ namespace par {
 
     template <typename DT, typename  GI, typename LI>
     par::Error aMat<DT,GI,LI>::get_max_dof_per_elem(){
-        unsigned int num_nodes;
+        unsigned int num_dofs;
         unsigned int max_dpe = 0;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiNodesPerElem[eid];
-            if (max_dpe < num_nodes) max_dpe = num_nodes;
+            num_dofs = m_uiDofsPerElem[eid];
+            if (max_dpe < num_dofs) max_dpe = num_dofs;
         }
-        m_uiMaxNodesPerElem = max_dpe;
+        m_uiMaxDofsPerElem = max_dpe;
+
+        // allocate memory for ue and ve
+        ue = new DT [m_uiMaxDofsPerElem];
+        ve = new DT [m_uiMaxDofsPerElem];
+
         return Error::SUCCESS;
     }// get_max_dof_per_elem
 
@@ -1983,10 +2128,10 @@ namespace par {
         AsyncExchangeCtx ctx((const void*)vec);
 
         // total number of DoFs to be sent
-        const unsigned int total_send = m_uivSendNodeOffset[m_uiSize-1] + m_uivSendNodeCounts[m_uiSize-1];
+        const unsigned int total_send = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
 
         // total number of DoFs to be received
-        const unsigned  int total_recv = m_uivRecvNodeOffset[m_uiSize-1] + m_uivRecvNodeCounts[m_uiSize-1];
+        const unsigned  int total_recv = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
 
         // send data of owned DoFs to corresponding ghost DoFs in all other ranks
         if (total_send > 0){
@@ -1996,13 +2141,13 @@ namespace par {
             DT* send_buf = (DT*)ctx.getSendBuffer();
             // put all sending values to buffer
             for (unsigned int i = 0; i < total_send; i++){
-                send_buf[i] = vec[m_uivSendNodeIds[i]];
+                send_buf[i] = vec[m_uivSendDofIds[i]];
             }
             for (unsigned int r = 0; r < m_uivSendRankIds.size(); r++){
                 unsigned int i = m_uivSendRankIds[r]; // rank that I will send to
                 // send to rank i
                 MPI_Request* req = new MPI_Request();
-                MPI_Isend(&send_buf[m_uivSendNodeOffset[i]], m_uivSendNodeCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
+                MPI_Isend(&send_buf[m_uivSendDofOffset[i]], m_uivSendDofCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 // put output request req of sending into the Request list of ctx
                 ctx.getRequestList().push_back(req);
             }
@@ -2016,7 +2161,7 @@ namespace par {
             for (unsigned int r = 0; r < m_uivRecvRankIds.size(); r++){
                 unsigned int i = m_uivRecvRankIds[r];
                 MPI_Request* req = new MPI_Request();
-                MPI_Irecv(&recv_buf[m_uivRecvNodeOffset[i]], m_uivRecvNodeCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
+                MPI_Irecv(&recv_buf[m_uivRecvDofOffset[i]], m_uivRecvDofCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 // pout output request req of receiving into Request list of ctx
                 ctx.getRequestList().push_back(req);
             }
@@ -2052,13 +2197,13 @@ namespace par {
             MPI_Wait(ctx.getRequestList()[i], &sts);
         }
 
-        //const unsigned  int total_recv = m_uivRecvNodeOffset[m_uiSize-1] + m_uivRecvNodeCounts[m_uiSize-1];
+        //const unsigned  int total_recv = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
 
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
         // copy values of pre-ghost nodes from recv_buf to vec
-        std::memcpy(vec, recv_buf, m_uiNumPreGhostNodes*sizeof(DT));
+        std::memcpy(vec, recv_buf, m_uiNumPreGhostDofs*sizeof(DT));
         // copy values of post-ghost nodes from recv_buf to vec
-        std::memcpy(&vec[m_uiNumPreGhostNodes + m_uiNumNodes], &recv_buf[m_uiNumPreGhostNodes], m_uiNumPostGhostNodes*sizeof(DT));
+        std::memcpy(&vec[m_uiNumPreGhostDofs + m_uiNumDofs], &recv_buf[m_uiNumPreGhostDofs], m_uiNumPostGhostDofs*sizeof(DT));
 
         // free memory of send and receive buffers
         ctx.deAllocateRecvBuffer();
@@ -2078,9 +2223,9 @@ namespace par {
         AsyncExchangeCtx ctx((const void*)vec);
 
         // number of DoFs to be received (= number of DoFs that are sent before calling matvec)
-        const unsigned  int total_recv = m_uivSendNodeOffset[m_uiSize-1] + m_uivSendNodeCounts[m_uiSize-1];
+        const unsigned  int total_recv = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
         // number of DoFs to be sent (= number of DoFs that are received before calling matvec)
-        const unsigned  int total_send = m_uivRecvNodeOffset[m_uiSize-1] + m_uivRecvNodeCounts[m_uiSize-1];
+        const unsigned  int total_send = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
 
         // receive data for owned DoFs that are sent back to my rank from other ranks (after matvec is done)
         if (total_recv > 0){
@@ -2089,7 +2234,7 @@ namespace par {
             for (unsigned int r = 0; r < m_uivSendRankIds.size(); r++){
                 unsigned int i = m_uivSendRankIds[r];
                 MPI_Request* req = new MPI_Request();
-                MPI_Irecv(&recv_buf[m_uivSendNodeOffset[i]], m_uivSendNodeCounts[i]*sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
+                MPI_Irecv(&recv_buf[m_uivSendDofOffset[i]], m_uivSendDofCounts[i]*sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 ctx.getRequestList().push_back(req);
             }
         }
@@ -2100,17 +2245,17 @@ namespace par {
             DT* send_buf = (DT*) ctx.getSendBuffer();
 
             // pre-ghost DoFs
-            for (unsigned int i = 0; i < m_uiNumPreGhostNodes; i++){
+            for (unsigned int i = 0; i < m_uiNumPreGhostDofs; i++){
                 send_buf[i] = vec[i];
             }
             // post-ghost DoFs
-            for (unsigned int i = m_uiNumPreGhostNodes + m_uiNumNodes; i < m_uiNumPreGhostNodes + m_uiNumNodes + m_uiNumPostGhostNodes; i++){
-                send_buf[i - m_uiNumNodes] = vec[i];
+            for (unsigned int i = m_uiNumPreGhostDofs + m_uiNumDofs; i < m_uiNumPreGhostDofs + m_uiNumDofs + m_uiNumPostGhostDofs; i++){
+                send_buf[i - m_uiNumDofs] = vec[i];
             }
             for (unsigned int r = 0; r < m_uivRecvRankIds.size(); r++){
                 unsigned int i = m_uivRecvRankIds[r];
                 MPI_Request* req = new MPI_Request();
-                MPI_Isend(&send_buf[m_uivRecvNodeOffset[i]], m_uivRecvNodeCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
+                MPI_Isend(&send_buf[m_uivRecvDofOffset[i]], m_uivRecvDofCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 ctx.getRequestList().push_back(req);
             }
         }
@@ -2141,12 +2286,12 @@ namespace par {
                 MPI_Wait(ctx.getRequestList()[i],&sts);
             }
 
-        //const unsigned  int total_recv = m_uivSendNodeOffset[m_uiSize-1] + m_uivSendNodeCounts[m_uiSize-1];
+        //const unsigned  int total_recv = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
 
         for (unsigned int i = 0; i < m_uiSize; i++){
-            for (unsigned int j = 0; j < m_uivSendNodeCounts[i]; j++){
-                vec[m_uivSendNodeIds[m_uivSendNodeOffset[i]] + j] += recv_buf[m_uivSendNodeOffset[i] + j];
+            for (unsigned int j = 0; j < m_uivSendDofCounts[i]; j++){
+                vec[m_uivSendDofIds[m_uivSendDofOffset[i]] + j] += recv_buf[m_uivSendDofOffset[i] + j];
             }
         }
         ctx.deAllocateRecvBuffer();
@@ -2181,38 +2326,122 @@ namespace par {
         return Error::SUCCESS;
     } // matvec
 
+    #ifdef AVX512
+        // y = alpha * x + y;
+        template <typename DT, typename GI, typename LI>
+        par::Error aMat<DT,GI,LI>::avx512_vec_axpy(double alpha, double* x, double* y, unsigned int n){
+            unsigned int remain = n % AVX_SIMD_LENGTH;
+            unsigned int n_intervals = n / AVX_SIMD_LENGTH;
+            // broadcast alpha to form alpha vector
+            __m512d alphaVec = _mm512_set1_pd(alpha);
+            for (LI i = 0; i < n_intervals; i++){
+                // load components of x to xVec
+                __m512d xVec = _mm512_loadu_pd(&x[AVX_SIMD_LENGTH * i]);
+                // load components of y to yVec
+                __m512d yVec = _mm512_loadu_pd(&y[AVX_SIMD_LENGTH * i]);
+                // vector multiplication tVec = alphaVec * xVec
+                __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
+                // accumulate tVec to yVec
+                yVec = _mm512_add_pd(tVec, yVec);
+                // store yVec to y
+                _mm512_storeu_pd(&y[AVX_SIMD_LENGTH * i], yVec);
+            }
+            if (remain != 0){
+                double* xVec_remain = new double[AVX_SIMD_LENGTH];
+                double* yVec_remain = new double[AVX_SIMD_LENGTH];
+                for (unsigned int i = 0; i < remain; i++){
+                    xVec_remain[i] = x[i + n_intervals * AVX_SIMD_LENGTH];
+                    yVec_remain[i] = y[i + n_intervals * AVX_SIMD_LENGTH];
+                }
+                for (unsigned int i = remain; i < AVX_SIMD_LENGTH; i++){
+                    xVec_remain[i] = 0.0;
+                    yVec_remain[i] = 0.0;
+                }
+                __m512d xVec = _mm512_loadu_pd(&xVec_remain[0]);
+                __m512d yVec = _mm512_loadu_pd(&yVec_remain[0]);
+                __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
+                yVec = _mm512_add_pd(tVec, yVec);
+                _mm512_storeu_pd(&yVec_remain[0], yVec);
+                for (unsigned int i = 0; i < remain; i++){
+                    y[i + n_intervals * AVX_SIMD_LENGTH] = yVec_remain[i];
+                }
+                delete [] xVec_remain;
+                delete [] yVec_remain;
+            }
+            return Error::SUCCESS;
+        }
+    #elif AVX256
+        // y = alpha * x + y;
+        template <typename DT, typename GI, typename LI>
+        par::Error aMat<DT,GI,LI>::avx256_vec_axpy(double alpha, double* x, double* y, unsigned int n){
+            unsigned int remain = n % AVX_SIMD_LENGTH;
+            unsigned int n_intervals = n / AVX_SIMD_LENGTH;
+            // broadcast alpha to form alpha vector
+            __m256d alphaVec = _mm256_set1_pd(alpha);
+            for (LI i = 0; i < n_intervals; i++){
+                // load components of x to xVec
+                __m256d xVec = _mm256_load_pd(&x[AVX_SIMD_LENGTH * i]);
+                // load components of y to yVec
+                __m256d yVec = _mm256_load_pd(&y[AVX_SIMD_LENGTH * i]);
+                // vector multiplication tVec = alphaVec * xVec
+                __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
+                // accumulate tVec to yVec
+                yVec = _mm256_add_pd(tVec, yVec);
+                // store yVec to y
+                _mm256_storeu_pd(&y[AVX_SIMD_LENGTH * i], yVec);
+            }
+            if (remain != 0){
+                double* xVec_remain = new double[AVX_SIMD_LENGTH];
+                double* yVec_remain = new double[AVX_SIMD_LENGTH];
+                for (unsigned int i = 0; i < remain; i++){
+                    xVec_remain[i] = x[i + n_intervals * AVX_SIMD_LENGTH];
+                    yVec_remain[i] = y[i + n_intervals * AVX_SIMD_LENGTH];
+                }
+                for (unsigned int i = remain; i < AVX_SIMD_LENGTH; i++){
+                    xVec_remain[i] = 0.0;
+                    yVec_remain[i] = 0.0;
+                }
+                __m256d xVec = _mm256_load_pd(&xVec_remain[0]);
+                __m256d yVec = _mm256_load_pd(&yVec_remain[0]);
+                __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
+                yVec = _mm256_add_pd(tVec, yVec);
+                _mm256_storeu_pd(&yVec_remain[0], yVec);
+                for (unsigned int i = 0; i < remain; i++){
+                    y[i + n_intervals * AVX_SIMD_LENGTH] = yVec_remain[i];
+                }
+                delete [] xVec_remain;
+                delete [] yVec_remain;
+            }
+            return Error::SUCCESS;
+        }
+    #else
+        // y = alpha * x + y;
+        template <typename DT, typename GI, typename LI>
+        par::Error aMat<DT,GI,LI>::vec_axpy(DT alpha, DT* x, DT* y, LI n){
+            for (LI i = 0; i < n; i++){
+                y[i] += alpha * x[i];
+            }
+            return Error::SUCCESS;
+        }
+    #endif
 
     // matvec (v = K * u) embeded applying bc by modifying matrix
     template <typename  DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::matvec_ghosted( DT* v, DT* u ) {
 
         LI blocks_dim, num_dofs_per_bolck;
-        DT* ue;
-        DT* ve;
-        EigenMat emat;
 
-        // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumNodesTotal)
-        for (unsigned int i = 0; i < m_uiNodePostGhostEnd; i++){
+        // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumDofsTotal)
+        for (unsigned int i = 0; i < m_uiDofPostGhostEnd; i++){
             v[i] = 0.0;
         }
-
-        /*printf("rank %d, before matvec u = \n",m_uiRank);
-        for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
-            printf("u[%d]= %f\n",i,u[i]);
-        }*/
-
-        // allocate memory for element vectors
-        ue = new DT[m_uiMaxNodesPerElem];
-        ve = new DT[m_uiMaxNodesPerElem];
 
         LI rowID, colID;
 
         // apply BC: save Uc and set u(Uc) = 0 (could be moved to MatMult_mf)
-        const LI numConstraints = ownedConstrainedDofs.size();
         LI local_Id;
-        DT* Uc = new DT [numConstraints];
-        for (LI nid = 0; nid < numConstraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+        for (LI nid = 0; nid < n_owned_constraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             Uc[nid] = u[local_Id];
             u[local_Id] = 0.0;
         }
@@ -2227,7 +2456,9 @@ namespace par {
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
             LI block_row_offset = 0;
             LI block_col_offset = 0;
-            LI num_dofs_per_block;
+
+            // number of dofs per block must be the same for all blocks
+            const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
@@ -2235,50 +2466,27 @@ namespace par {
 
                     LI index = block_i * blocks_dim + block_j;
 
-                    if (m_epMat[eid][index].size() != 0){
+                    if (m_epMat[eid][index] != nullptr){
 
-                        emat = m_epMat[eid][index];
-                        assert(emat.rows() == emat.cols());
-
-                        num_dofs_per_block = emat.rows();
-                        assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
-
-                        // extract block-element vector ue from structure vector u
+                        // extract block-element vector ue from structure vector u, and initialize ve
                         for (LI c = 0; c < num_dofs_per_block; c++) {
                             colID = m_uipLocalMap[eid][block_col_offset + c];
                             ue[c] = u[colID];
+                            ve[c] = 0.0;
                         }
-
-                        // apply bc by modifying matrix according to {Kfc = 0; Kcf = 0; Kcc = I}
-                        // BUG here: Kcc = 1 on diagonals is accumulated, thus at the end it is NOT 1
-                        /*for (LI r = 0; r < num_dofs_per_block; r++){
-                            if (m_uipBdrMap[eid][block_row_offset + r] == 1){
-                                for (LI c = 0; c < num_dofs_per_block; c++){
-                                    if ((c == r) && (block_i == block_j)){
-                                        // set [Kcc] = [I]
-                                        emat(r,c) = 1.0;
-                                    } else {
-                                        // set [Kcf] = [0]
-                                        emat(r,c) = 0.0;
-                                    }
-                                }
-                            } else {
-                                for (LI c = 0; c < num_dofs_per_block; c++){
-                                    if (m_uipBdrMap[eid][block_col_offset + c] == 1){
-                                        // set [Kfc] = [0]
-                                        emat(r,c) = 0.0;
-                                    }
-                                }
-                            }
-                        }*/
-
                         // multiply block-element matrix with block-element vector
                         for (LI i = 0; i < num_dofs_per_block; i++){
-                            ve[i] = 0.0;
-                            for (unsigned int j = 0; j < num_dofs_per_block; j++){
-                                ve[i] += emat(i,j) * ue[j];
-                            }
+                            #ifdef AVX512
+                                avx512_vec_axpy(ue[i], &m_epMat[eid][index][i * num_dofs_per_block], ve, num_dofs_per_block);
+                            #elif AVX256
+                                avx256_vec_axpy(ue[i], &m_epMat[eid][index][i * num_dofs_per_block], ve, num_dofs_per_block);
+                            #else
+                                for (LI j = 0; j < num_dofs_per_block; j++){
+                                    ve[i] += m_epMat[eid][index][(i * num_dofs_per_block) + j] * ue[j];
+                                }
+                            #endif
                         }
+
                         // accumulate element vector ve to structure vector v
                         for (unsigned int r = 0; r < num_dofs_per_block; r++){
                             rowID = m_uipLocalMap[eid][block_row_offset + r];
@@ -2298,20 +2506,11 @@ namespace par {
         ghost_send_end(v);
 
         // apply BC: set v(Uc) = Uc which is saved before doing matvec (could be moved to MatMult_mf)
-        for (LI nid = 0; nid < numConstraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+        for (LI nid = 0; nid < n_owned_constraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             v[local_Id] = Uc[nid];
         }
-        delete [] Uc;
         // end of apply BC
-
-        delete [] ue;
-        delete [] ve;
-
-        /*printf("rank %d, before matvec v = \n",m_uiRank);
-        for (unsigned int i = 0; i < m_uiNumNodesTotal; i++){
-            printf("v[%d]= %f\n",i,v[i]);
-        }*/
 
         return Error::SUCCESS;
     } // matvec_ghosted
@@ -2342,7 +2541,7 @@ namespace par {
         /* const LI numConstraints = ownedConstrainedDofs.size();
         DT* Uc = new DT [numConstraints];
         for (LI nid = 0; nid < numConstraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             Uc[nid] = uug[local_Id];
             uug[local_Id] = 0.0;
         } */
@@ -2353,7 +2552,7 @@ namespace par {
 
         // apply BC: now set V_c = U_c which was saved in U'_c
         /* for (LI nid = 0; nid < numConstraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalNodeScan[m_uiRank] + m_uiNumPreGhostNodes;
+            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             vvg[local_Id] = Uc[nid];
         }
         delete [] Uc; */
@@ -2389,7 +2588,7 @@ namespace par {
 
         // copy ddg (ghosted) into (non-ghosted) dd
         ghost_to_local(dd, ddg);
-        /*for (unsigned int i = 0; i < m_uiNumNodes; i++){
+        /*for (unsigned int i = 0; i < m_uiNumDofs; i++){
             printf("[%d,%d,%f]\n",m_uiRank,i,dd[i]);
         }*/
 
@@ -2436,7 +2635,9 @@ namespace par {
         // create Petsc sequential matrix
         //Mat B;
 
-        MatCreateSeqAIJ(PETSC_COMM_SELF, local_size, local_size, 27, PETSC_NULL, a); // todo: 27 only good for dofs_per_node = 1
+        //printf("local_size = %d, size of ddg = %d\n", local_size, ddg.size());
+
+        MatCreateSeqAIJ(PETSC_COMM_SELF, local_size, local_size, 27*3, PETSC_NULL, a); // todo: 27 only good for dofs_per_node = 1
         //MatSetOption(*(a), MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE);
         //MatSetUp(*(a));
         //MatZeroEntries(B);
@@ -2536,7 +2737,7 @@ namespace par {
 
         PetscInt rowId, colId;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid ++) {
-            num_nodes = m_uiNodesPerElem[eid];
+            num_nodes = m_uiDofsPerElem[eid];
             for (unsigned int r = 0; r < num_nodes; r++) {
                 rowId = m_ulpMap[eid][r];
                 if (m_uipBdrMap[eid][r] == 1) {
@@ -2568,7 +2769,7 @@ namespace par {
         PetscInt rowId;
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiNodesPerElem[eid];
+            num_nodes = m_uiDofsPerElem[eid];
             for (unsigned int r = 0; r < num_nodes; r++){
                 if (m_uipBdrMap[eid][r] == 1){
                     // global row ID
@@ -2588,31 +2789,32 @@ namespace par {
         PetscInt loc_rowId, loc_colId;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
             // total number of dofs per element eid
-            num_nodes = m_uiNodesPerElem[eid];
+            num_nodes = m_uiDofsPerElem[eid];
+            //printf("eid = %d, num_nodes = % d\n", eid, num_nodes);
             // loop on all dofs of element
             for (unsigned int r = 0; r < num_nodes; r++) {
                 loc_rowId = m_uipLocalMap[eid][r];
-                if ((loc_rowId >= m_uiNodeLocalBegin) && (loc_rowId <= m_uiNodeLocalEnd)) {
+                if ((loc_rowId >= m_uiDofLocalBegin) && (loc_rowId <= m_uiDofLocalEnd)) {
                     if (m_uipBdrMap[eid][r] == 1) {
                         for (unsigned int c = 0; c < num_nodes; c++) {
                             loc_colId = m_uipLocalMap[eid][c];
-                            if ((loc_colId >= m_uiNodeLocalBegin) && (loc_colId <= m_uiNodeLocalEnd)) {
+                            if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId <= m_uiDofLocalEnd)) {
                                 if (loc_rowId == loc_colId) {
-                                    MatSetValue(*blkdiagMat, (loc_rowId - m_uiNumPreGhostNodes),
-                                                (loc_colId - m_uiNumPreGhostNodes), 1.0, INSERT_VALUES);
+                                    MatSetValue(*blkdiagMat, (loc_rowId - m_uiNumPreGhostDofs),
+                                                (loc_colId - m_uiNumPreGhostDofs), 1.0, INSERT_VALUES);
                                 } else {
-                                    MatSetValue(*blkdiagMat, (loc_rowId - m_uiNumPreGhostNodes),
-                                                (loc_colId - m_uiNumPreGhostNodes), 0.0, INSERT_VALUES);
+                                    MatSetValue(*blkdiagMat, (loc_rowId - m_uiNumPreGhostDofs),
+                                                (loc_colId - m_uiNumPreGhostDofs), 0.0, INSERT_VALUES);
                                 }
                             }
                         }
                     } else {
                         for (unsigned int c = 0; c < num_nodes; c++) {
                             loc_colId = m_uipLocalMap[eid][c];
-                            if ((loc_colId >= m_uiNodeLocalBegin) && (loc_colId <= m_uiNodeLocalEnd)) {
+                            if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId <= m_uiDofLocalEnd)) {
                                 if (m_uipBdrMap[eid][c] == 1) {
-                                    MatSetValue(*blkdiagMat, (loc_rowId - m_uiNumPreGhostNodes),
-                                                (loc_colId - m_uiNumPreGhostNodes), 0.0, INSERT_VALUES);
+                                    MatSetValue(*blkdiagMat, (loc_rowId - m_uiNumPreGhostDofs),
+                                                (loc_colId - m_uiNumPreGhostDofs), 0.0, INSERT_VALUES);
                                 }
                             }
                         }
@@ -2682,7 +2884,7 @@ namespace par {
             ctx.aMatPtr =  (aMat<DT,GI,LI>*)this; // FIXME: casting away "const", better way to do this?
 
             // create matrix shell
-            MatCreateShell( m_comm, m_uiNumNodes, m_uiNumNodes, PETSC_DETERMINE, PETSC_DETERMINE, &ctx, &pMatFree );
+            MatCreateShell( m_comm, m_uiNumDofs, m_uiNumDofs, PETSC_DETERMINE, PETSC_DETERMINE, &ctx, &pMatFree );
 
             // set operation for matrix-vector multiplication using aMat::MatMult_mf
             MatShellSetOperation( pMatFree, MATOP_MULT, (void(*)(void))aMat_matvec<DT,GI,LI> );
@@ -2708,6 +2910,8 @@ namespace par {
             // could be overwritten at runtime using -ksp_type <type>
             KSPSetType(ksp, KSPCG);
             KSPSetFromOptions(ksp);
+
+            KSPSetTolerances(ksp,1E-12,1E-12,PETSC_DEFAULT, PETSC_DEFAULT);
 
             // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
             // could be overwritten at runtime using -pc_type <type>
@@ -2735,6 +2939,8 @@ namespace par {
             KSPSetType(ksp, KSPCG);
             KSPSetFromOptions(ksp);
 
+            KSPSetTolerances(ksp,1E-12,1E-12,PETSC_DEFAULT, PETSC_DEFAULT);
+
             // set the matrix associated the linear system
             KSPSetOperators(ksp, m_pMat, m_pMat);
 
@@ -2761,7 +2967,7 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_create_matrix_matvec(){
         MatCreate(m_comm, &m_pMat_matvec);
-        MatSetSizes(m_pMat_matvec, m_uiNumNodes, m_uiNumNodes, PETSC_DECIDE, PETSC_DECIDE);
+        MatSetSizes(m_pMat_matvec, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
         if (m_uiSize > 1) {
             MatSetType(m_pMat_matvec, MATMPIAIJ);
             MatMPIAIJSetPreallocation(m_pMat_matvec, 30, PETSC_NULL, 30, PETSC_NULL);
@@ -2862,7 +3068,7 @@ namespace par {
 
         // set elements of vector to the corresponding column of matrix
         colId = global_column;
-        for (unsigned int i = 0; i < m_uiNumNodes; i++){
+        for (unsigned int i = 0; i < m_uiNumDofs; i++){
             value = vec[i];
             //rowId = local_to_global[i];
             rowId = m_ulpLocal2Global[i];
@@ -2879,15 +3085,15 @@ namespace par {
     par::Error aMat<DT,GI,LI>::print_vector( const DT* vec, bool ghosted /* = false */ ){
         if( ghosted ){
             // size of vec includes ghost DoFs, print local DoFs only
-            for (unsigned int i = m_uiNodeLocalBegin; i < m_uiNodeLocalEnd; i++){
-                printf("rank %d, v[%d] = %10.5f \n", m_uiRank, i - m_uiNumPreGhostNodes, vec[i]);
+            for (unsigned int i = m_uiDofLocalBegin; i < m_uiDofLocalEnd; i++){
+                printf("rank %d, v[%d] = %10.5f \n", m_uiRank, i - m_uiNumPreGhostDofs, vec[i]);
             }
         }
         else {
             // vec is only for local DoFs
-            printf("here, rank %d, m_uiNumNodes = %d\n", m_uiRank, m_uiNumNodes);
-            for (unsigned int i = m_uiNodeLocalBegin; i < m_uiNodeLocalEnd; i++){
-                printf("rank %d, v[%d] = %10.5f \n", m_uiRank, i, vec[i-m_uiNumPreGhostNodes]);
+            printf("here, rank %d, m_uiNumDofs = %d\n", m_uiRank, m_uiNumDofs);
+            for (unsigned int i = m_uiDofLocalBegin; i < m_uiDofLocalEnd; i++){
+                printf("rank %d, v[%d] = %10.5f \n", m_uiRank, i, vec[i-m_uiNumPreGhostDofs]);
             }
         }
         return Error::SUCCESS;
@@ -2913,18 +3119,18 @@ namespace par {
     par::Error aMat<DT,GI,LI>::transform_to_petsc_vector(const DT* vec, Vec petsc_vec, bool ghosted) {
         PetscScalar value;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            unsigned int num_nodes = m_uiNodesPerElem[eid];
+            unsigned int num_nodes = m_uiDofsPerElem[eid];
 
             for (unsigned int i = 0; i < num_nodes; i++){
                 const unsigned int nidG = m_ulpMap[eid][i]; // global node
                 unsigned int nidL = m_uipLocalMap[eid][i];  // local node
 
-                if (nidL >= m_uiNumPreGhostNodes && nidL < m_uiNumPreGhostNodes + m_uiNumNodes) {
+                if (nidL >= m_uiNumPreGhostDofs && nidL < m_uiNumPreGhostDofs + m_uiNumDofs) {
                     // nidL is owned by me
                     if (ghosted){
                         value = vec[nidL];
                     } else {
-                        value = vec[nidL - m_uiNumPreGhostNodes];
+                        value = vec[nidL - m_uiNumPreGhostDofs];
                     }
                     VecSetValue(petsc_vec, nidG, value, INSERT_VALUES);
                 }
@@ -2936,7 +3142,7 @@ namespace par {
     // explicitly apply Dirichlet boundary conditions on structure vector
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::set_vector_bc(DT* vec, unsigned int eid, const GI **dirichletBMap){
-        unsigned int num_nodes = m_uiNodesPerElem[eid];
+        unsigned int num_nodes = m_uiDofsPerElem[eid];
         unsigned int rowId, boundrow;
         //for (unsigned int r = 0; r < num_nodes * dof; r++){
         for (unsigned int r = 0; r < num_nodes; r++){
@@ -2953,24 +3159,24 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::mat_get_diagonal_block_seq(DT **diag_blk){
-        //Note: diag_blk is already allocated with size of [m_uiNumNodes][m_uiNumNodes]
+        //Note: diag_blk is already allocated with size of [m_uiNumDofs][m_uiNumDofs]
         unsigned int num_nodes;
         EigenMat e_mat;
         LI rowID, colID;
 
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiNodesPerElem[eid];
+            num_nodes = m_uiDofsPerElem[eid];
             // get element matrix
             e_mat = m_epMat[eid];
             for (unsigned int r = 0; r < num_nodes; r++){
                 rowID = m_uipLocalMap[eid][r];
-                if ((rowID >= m_uiNodeLocalBegin) && (rowID < m_uiNodeLocalEnd)){
+                if ((rowID >= m_uiDofLocalBegin) && (rowID < m_uiDofLocalEnd)){
                     // only assembling if rowID is owned by my rank
                     for (unsigned int c = 0; c < num_nodes; c++) {
                         colID = m_uipLocalMap[eid][c];
-                        if ((colID >= m_uiNodeLocalBegin) && (colID < m_uiNodeLocalEnd)) {
+                        if ((colID >= m_uiDofLocalBegin) && (colID < m_uiDofLocalEnd)) {
                             // only assembling if colID is owned by my rank
-                            diag_blk[rowID - m_uiNumPreGhostNodes][colID - m_uiNumPreGhostNodes] += e_mat(r, c);
+                            diag_blk[rowID - m_uiNumPreGhostDofs][colID - m_uiNumPreGhostDofs] += e_mat(r, c);
                         }
                     }
                 }
@@ -2981,9 +3187,9 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::ghost_to_local_mat(DT** lMat, DT** gMat) const {
-        for (unsigned int r = 0; r < m_uiNumNodes; r++){
-            for (unsigned int c = 0; c < m_uiNumNodes; c++){
-                lMat[r][c] = gMat[r + m_uiNumPreGhostNodes][c + m_uiNumPreGhostNodes];
+        for (unsigned int r = 0; r < m_uiNumDofs; r++){
+            for (unsigned int c = 0; c < m_uiNumDofs; c++){
+                lMat[r][c] = gMat[r + m_uiNumPreGhostDofs][c + m_uiNumPreGhostDofs];
             }
         }
         return Error::SUCCESS;
@@ -2993,7 +3199,7 @@ namespace par {
 
     template <typename DT,typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::petsc_set_element_matrix( LI eid, DT* e_mat, InsertMode mode /* = ADD_VALUES */ ) {
-        unsigned int num_nodes = m_uiNodesPerElem[eid];
+        unsigned int num_nodes = m_uiDofsPerElem[eid];
 
         // now set values ...
         //std::vector<PetscScalar> values(num_nodes * dof);
@@ -3073,7 +3279,7 @@ namespace par {
 
                         // number of dofs per block
                         num_dofs_per_block = e_mat.rows();
-                        assert(num_dofs_per_block == m_uiNodesPerElem[eid]/blocks_dim);
+                        assert(num_dofs_per_block == m_uiDofsPerElem[eid]/blocks_dim);
 
                         for (LI r = 0; r < num_dofs_per_block; r++){
 
@@ -3087,7 +3293,7 @@ namespace par {
                             rank_r = globalId_2_rank(glo_RowId);
 
                             //local ID in that rank (not include ghost nodes)
-                            loc_RowId = (glo_RowId - m_uivLocalNodeScan[rank_r]);
+                            loc_RowId = (glo_RowId - m_uivLocalDofScan[rank_r]);
 
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 // local column Id (include ghost nodes)
@@ -3100,11 +3306,11 @@ namespace par {
                                 rank_c = globalId_2_rank(glo_ColId);
 
                                 // local column Id in that rank (not include ghost nodes)
-                                loc_ColId = (glo_ColId - m_uivLocalNodeScan[rank_c]);
+                                loc_ColId = (glo_ColId - m_uivLocalDofScan[rank_c]);
 
                                 // assemble to block diagonal matrix if both i and j belong to my rank
-                                if ((rowID >= m_uiNodeLocalBegin) && (rowID < m_uiNodeLocalEnd) && (colID >= m_uiNodeLocalBegin) && (colID < m_uiNodeLocalEnd)){
-                                    diag_blk[rowID - m_uiNumPreGhostNodes][colID - m_uiNumPreGhostNodes] += e_mat(r,c);
+                                if ((rowID >= m_uiDofLocalBegin) && (rowID < m_uiDofLocalEnd) && (colID >= m_uiDofLocalBegin) && (colID < m_uiDofLocalEnd)){
+                                    diag_blk[rowID - m_uiNumPreGhostDofs][colID - m_uiNumPreGhostDofs] += e_mat(r,c);
                                 }
 
                                 // set to matrix record when both i and j belong to the same rank
@@ -3154,7 +3360,6 @@ namespace par {
             // move i to the next member
             i++;
         }
-
 
         unsigned int* sendCounts = new unsigned int[m_uiSize];
         unsigned int* recvCounts = new unsigned int[m_uiSize];
@@ -3220,73 +3425,4 @@ namespace par {
 
         return Error::SUCCESS;
     } //mat_get_diagonal_block_dense
-
-    /**@brief ********** FUNCTIONS ARE NO LONGER IN USE, JUST FOR REFERENCE *********************/
-    // e_mat is an array of EigenMat with the size dictated by twin_level (e.g. twin_level = 1, then size of e_mat is 2)
-    template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_element_matrices( LI eid, const EigenMat* e_mat, unsigned int twin_level, InsertMode mode /* = ADD_VALUES */ ) {
-
-        unsigned int num_nodes = m_uiNodesPerElem[eid];
-
-        // number of twinning matrices (e.g. twin_level = 2 then numEMat = 4)
-        unsigned int numEMat = (1u<<twin_level);
-
-        // since e_mat is dynamic, then first casting it to void* so that we can move for each element of e_mat
-        const void* eMat= (const void*)e_mat;
-        for (unsigned int i=0; i<numEMat; i++) {
-            size_t bytes=0;
-            if (num_nodes==4){
-                 bytes = sizeof(Eigen::Matrix<DT,4,4>);
-                 petsc_set_element_matrix(eid,(*(Eigen::Matrix<DT,4,4>*)eMat), i, mode);
-
-            } else if(num_nodes==8) {
-                bytes = sizeof(Eigen::Matrix<DT,8,8>);
-                petsc_set_element_matrix(eid,(*(Eigen::Matrix<DT,8,8>*)eMat), i, mode);
-
-            }else {
-                return Error::UNKNOWN_ELEMENT_TYPE;
-            }
-
-            // move to next block (each block has size of bytes)
-            eMat= (char*)eMat + bytes;
-        }
-        return Error::SUCCESS;
-    } // set_element_matrices
-
-    // used with set_element_matrices for the case of one eid but multiple matrices
-    template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix(LI eid, const EigenMat e_mat, LI e_mat_id, InsertMode mode) {
-
-        unsigned int num_nodes = m_uiNodesPerElem[eid];
-
-        assert(e_mat.rows()==e_mat.cols());
-        unsigned int num_rows = e_mat.rows(); // num_rows = num_nodes * dof
-
-        // copy element matrix
-        m_epMat[eid * AMAT_MAX_EMAT_PER_ELEMENT + e_mat_id ] = e_mat;
-
-        // now set values ...
-        std::vector<PetscScalar> values(num_rows);
-        std::vector<PetscInt> colIndices(num_rows);
-        PetscInt rowId;
-
-        //unsigned int index = 0;
-        for (unsigned int r = 0; r < num_rows; ++r) {
-            //rowId = m_ulpMap[eid][r]; // map in terms of dof
-            //rowId = dof*m_ulpMap[eid][r/dof] + r%dof; // map in terms of nodes, 1 matrix per eid (old version)
-            //rowId = dof*m_ulpMap[eid][e_mat_id * num_nodes + r/dof] + r%dof; // map in terms of nodes, multiple matrices per eid
-            rowId = m_ulpMap[eid][e_mat_id * num_nodes + r]; // map in terms of nodes, multiple matrices per eid
-            for (unsigned int c = 0; c < num_rows; ++c) {
-                //colIndices[c] = m_ulpMap[eid][c];
-                //colIndices[c] = dof*m_ulpMap[eid][c/dof] + c%dof;
-                //colIndices[c] = dof*m_ulpMap[eid][e_mat_id * num_nodes + c/dof] + c%dof;
-                colIndices[c] = m_ulpMap[eid][e_mat_id * num_nodes + c];
-                values[c] = e_mat(r,c);
-            } // c
-            MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
-        } // r
-
-        return Error::SUCCESS;
-    } // petsc_set_element_matrix
-
-} // end namespace par
+} // end of namespace par
