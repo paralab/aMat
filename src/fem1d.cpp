@@ -4,7 +4,7 @@
  * @author Han Duc Tran  hantran@cs.utah.edu
  *
  * @brief Example of solving 1D FEM problem, in parallel using aMat, Petsc and Eigen
- * @brief u''(x) = 0 with BCs u(0) = 0, u(L/2) = 0.7 and u(L) = 20
+ * @brief d^u/dx^2 = 0 with BCs u(0) = 0, u(L) = 1
  *
  * @version 0.1
  * @date 2020-01-03
@@ -209,8 +209,8 @@ int main(int argc, char *argv[]){
         for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
             unsigned long global_Id = globalMap[eid][nid];
             double x = (double)(global_Id * h);
-            //if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001)){
-            if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001) || (std::fabs(x - 0.5*L) < 0.000001)){
+            if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001)){
+            //if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001) || (std::fabs(x - 0.5*L) < 0.000001)){
                 bound_nodes[eid][nid] = 1;
             } else {
                 bound_nodes[eid][nid] = 0;
@@ -220,10 +220,10 @@ int main(int argc, char *argv[]){
                 bound_values[eid][nid] = 0.0;
             } else if (std::fabs(x - L) < 0.000001){
                 // right end
-                //bound_values[eid][nid] = prescribedDispl;
-                bound_values[eid][nid] = 20.0;
-            } else if (std::fabs(x - 0.5*L) < 0.000001){
-                bound_values[eid][nid] = 0.7;
+                bound_values[eid][nid] = 1.0;
+                //bound_values[eid][nid] = 20.0;
+            //} else if (std::fabs(x - 0.5*L) < 0.000001){
+            //    bound_values[eid][nid] = 0.7;
             } else {
                 // free dofs
                 bound_values[eid][nid] = -1000000;
@@ -251,9 +251,10 @@ int main(int argc, char *argv[]){
         double x = (double)(global_Id * h);
         constrainedDofs_ptr[i] = global_Id;
         if (std::fabs(x - L) < 0.000001){
-            prescribedValues_ptr[i] = 20.0;
-        } else if (std::fabs(x - 0.5*L) < 0.000001){
-            prescribedValues_ptr[i] = 0.7;
+            prescribedValues_ptr[i] = 1.0;
+            //prescribedValues_ptr[i] = 20.0;
+        //} else if (std::fabs(x - 0.5*L) < 0.000001){
+        //    prescribedValues_ptr[i] = 0.7;
         } else if (std::fabs(x) < 0.000001){
             prescribedValues_ptr[i] = 0.0;
         } else {
@@ -262,11 +263,9 @@ int main(int argc, char *argv[]){
         }
     }
 
-
     unsigned long start_global_node, end_global_node;
     start_global_node = nnodeOffset[rank];
     end_global_node = start_global_node + (nnode - 1);
-
 
     // declare aMat object
     par::AMAT_TYPE matType;
@@ -321,53 +320,40 @@ int main(int argc, char *argv[]){
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    //stMat.dump_vec(rhs);
-
-    // write results to files
-    /*if (!matFree){
-        stMat.dump_mat("matrix.dat");
-    } else {
-        stMat.print_mepMat();
-    }
-    if (matFree){
-        stMat.dump_vec(rhs,"rhs_mf.dat");
-    } else {
-        stMat.dump_vec(rhs,"rhs.dat");
-    }*/
-
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
 
     // display solution on screen
+    if (!rank) std::cout << "Computed solution = \n";
     stMat.dump_vec(out);
 
-    // following exact solution is only for the problem of u(0) = 0 and u(L) = 1, thus not valid for current test
-    // exact solution: u(x) = (prescribedDispl/L)*x
-    /* Vec sol_exact;
+    // following exact solution is only for the problem of u(0) = 0 and u(L) = 1
+    // exact solution: u(x) = (1/L)*x
+    Vec sol_exact;
     PetscInt rowId;
     stMat.petsc_create_vec(sol_exact);
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
             rowId = globalMap[eid][nid];
             double x = globalMap[eid][nid] * h;
-            PetscScalar u = (prescribedDispl)/L*x;
+            PetscScalar u = 1/L*x;
             VecSetValue(sol_exact,rowId,u,INSERT_VALUES);
         }
     }
     stMat.petsc_init_vec(sol_exact);
-    stMat.petsc_finalize_vec(sol_exact); */
+    stMat.petsc_finalize_vec(sol_exact);
 
     // display exact solution on screen
     //stMat.dump_vec(sol_exact);
 
     // compute the norm of error
-    /* PetscScalar norm, alpha = -1.0;
+    PetscScalar norm, alpha = -1.0;
     VecAXPY(sol_exact, alpha, out);
     VecNorm(sol_exact, NORM_INFINITY, &norm);
 
     if (!rank){
-        printf("L_inf norm= %20.16f\n", norm);
-    } */
+        printf("Inf norm of error = %20.16f\n", norm);
+    }
 
     // free allocated memory...
     for (unsigned int eid = 0; eid < nelem; eid++){

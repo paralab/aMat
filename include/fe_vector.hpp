@@ -33,17 +33,25 @@ void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe);
 /**
  * @brief: element load vector of 8-node hex element for 3D elasticity, due to body force
  * @param[in] xe nodal coordinates
+ * @param[in] bN nodal values of body force
+ * @param[in] GaussPoints coordinates and weights of Gauss points
+ * @param[in] nGauss number of Gauss points in each direction
  * @param[out] fe element load vector
  * @author Han Tran
 * */
-void fe_hex8_iso(Eigen::Matrix<double,24,1> &fe, const double* xe);
+void fe_hex8_iso(Eigen::Matrix<double,24,1> &fe, const double* xe, const double* bN,
+                const double* GaussPoints, unsigned int nGauss);
 
 /**
  * @brief: element load vector of 8-node hex element for 3D elasticity, due to surface traction
  * @param[in] xe nodal coordinates
- * @param[out] fe element load vector
+ * @param[in] tN nodal values of traction
+ * @param[in] GaussPoints coordinates and weights of Gauss points
+ * @param[in] nGauss number of Gauss points in each direction
+ * @param[out] feT element load vector corresponding to nodes on the surface where traction applied
  * @author Han Tran
 * */
-void fe_hex8_iso_surface(Eigen::Matrix<double,24,1> &fe, const double* xe, const unsigned int faceId, const double* faceTrac);
+void feT_hex8_iso(Eigen::Matrix<double,12,1> &feT, const double* xe, const double* tN,
+                const double* GaussPoints, unsigned int nGauss);
 
 #endif //ADAPTIVEMATRIX_KE_MATRIX_H

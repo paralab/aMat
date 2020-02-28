@@ -25,7 +25,7 @@ using Eigen::Matrix;
 * @param[out] double ke_hex8[8*8] element stiffness matrix
 * */
 void ke_hex8(double* ke, const double* xe) {
-    const int NGT = 2; // number of Gauss points in each direction
+    const unsigned int NGT = 2; // number of Gauss points in each direction
     double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
     double *xw;
     double *dN;
@@ -122,7 +122,7 @@ void ke_hex8(double* ke, const double* xe) {
 * */
 void ke_hex8_eig(Matrix<double,8,8> &ke, double *xe){
 
-    const int NGT = 2; // number of Gauss points in each direction
+    const unsigned int NGT = 2; // number of Gauss points in each direction
     double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
     double *xw;
     double *dN;
@@ -212,7 +212,7 @@ void ke_hex8_eig(Matrix<double,8,8> &ke, double *xe){
 }
 
 void ke_quad4_eig(Eigen::Matrix<double,4,4> &ke, double* xe){
-    const int NGT = 2; // number of Gauss points in each direction
+    const unsigned int NGT = 2; // number of Gauss points in each direction
     double x[2], w[2]; // x=[xi,eta], w=[weight_xi, weight_eta]
     double *xw;
     double *dN;
@@ -289,7 +289,7 @@ void ke_quad4_eig(Eigen::Matrix<double,4,4> &ke, double* xe){
 
 /** @brief element stiffness matrix of quad 4-node element of isotropic elastic problem */
 void ke_quad4_iso(Eigen::Matrix<double,8,8> &ke, double* xe, const double E, const double nu){
-    const int NGT = 2; // number of Gauss points in each direction
+    const unsigned int NGT = 2; // number of Gauss points in each direction
     double x[2], w[2]; // x=[xi,eta], w=[weight_xi, weight_eta]
     double *xw;
     double *dN;
@@ -423,7 +423,7 @@ void ke_quad4_iso(Eigen::Matrix<double,8,8> &ke, double* xe, const double E, con
 
 /** @brief element stiffness matrix of hex 8-node element of isotropic elastic problem */
 void ke_hex8_iso(Eigen::Matrix<double,24,24> &ke, double* xe, double E, double nu){
-    const int NGT = 2; // number of Gauss points in each direction
+    const unsigned int NGT = 2; // number of Gauss points in each direction
     double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
     double *xw;
     double *dN;

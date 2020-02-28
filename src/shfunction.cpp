@@ -23,8 +23,7 @@
  * @authors Lin Xiao, Mark Mear (University of Texas at Austin), Han Tran translated to C++
 * */
 
-double* gauss(int n)
-{
+double* gauss(unsigned int n){
     const double EPS = 3.0e-14;
     const double x1 = -1.0;
     const double x2 = 1.0;
@@ -66,9 +65,7 @@ double* gauss(int n)
  * @param[out] N values of shape functions at x
  * @author Han Tran
 * */
-double *basis_hex8 (double xi[])
-
-{
+double* basis_hex8 (double xi[]){
     double *N = new double[8];
 
     N[0] = (1.0 - xi[0]) * (1.0 - xi[1]) * (1.0 - xi[2]) / 8.0;
@@ -90,13 +87,7 @@ double *basis_hex8 (double xi[])
  * @param[out] dN values of derivatives of shape functions at x
  * @author Han Tran
 * */
-double *dfbasis_hex8 (double xi[])
-/*
-Purpose: compute derivatives of shape functions of 8-node linear element
-Input  : double xi[3] natural coordinates
-Output : double *dN[24] values of the derivatives of shape functions
-*/
-{
+double* dfbasis_hex8 (double xi[]){
     double *dN = new double[24];
 
     // dN[0]/dxi, dN[0]/deta, dN[0]/dzeta
@@ -169,8 +160,7 @@ double* basis_quad4(double xi[]) {
  * @param[out] dN values of derivatives of shape functions at x
  * @author Han Tran
 * */
-double* dfbasis_quad4(double xi[])
-{
+double* dfbasis_quad4(double xi[]){
     // allocate memory for dN --> NEED TO FREE MEMORY AFTER dN IS USED
     double* dN = new double[8];
 

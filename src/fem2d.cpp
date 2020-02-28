@@ -7,9 +7,10 @@
  * @author Hari Sundar   hsundar@gmail.com
  * @author Han Duc Tran  hantran@cs.utah.edu
  *
- * @brief Example of solving 2D FEM problem, in parallel using aMat, Petsc and Eigen
- * @brief (d^2)u/d(x^2) + (d^2)u/d(y^2) = 0
- * @brief BCs u(0,y) = u(1,y) = 0; u(x,0) = sin(pi*x); u(x,1) = sin(pi*x)exp(-pi)
+ * @brief Example of solving 2D Laplace problem using FEM :
+ * @brief    (d^2)u/d(x^2) + (d^2)u/d(y^2) = 0
+ * @brief    BCs u(0,y) = u(1,y) = 0; u(x,0) = sin(pi*x); u(x,1) = sin(pi*x)exp(-pi)
+ * @brief Exact solution: u = sin(M_PI * x) * exp(-M_PI * y);
  *
  * @version 0.1
  * @date 2020-01-05
@@ -117,7 +118,6 @@ int main(int argc, char *argv[]){
     unsigned int nelem_y = (emax - emin) + 1;
     unsigned int nelem_x = Nex;
     unsigned int nelem = nelem_x * nelem_y;
-    //printf("rank %d, emin %d, emax %d, nelem %d\n",rank,emin,emax,nelem);
 
     // number of nodes owned by my rank (rank 0 owns 2 boundary nodes, other ranks own right boundary node)
     unsigned int nnode, nnode_y, nnode_x;
@@ -128,7 +128,6 @@ int main(int argc, char *argv[]){
     }
     nnode_x = Nex + 1;
     nnode = nnode_x * nnode_y;
-    //printf("rank %d, owned elements= %d, owned nodes= %d\n",rank, nelem,nnode);
 
     // determine globalMap
     unsigned int* nnode_per_elem = new unsigned int [nelem];
@@ -151,10 +150,6 @@ int main(int argc, char *argv[]){
             globalMap[eid][2] = globalMap[eid][3] + 1;
         }
     }
-
-    /*for (unsigned int eid = 0; eid < nelem; eid++){
-        printf("rank %d, eid %d, globalMap = [%d,%d,%d,%d]\n", rank, eid, globalMap[eid][0], globalMap[eid][1],globalMap[eid][2], globalMap[eid][3]);
-    }*/
 
     // build localMap from globalMap (to adapt the interface of bsamxx)
     unsigned int numPreGhostNodes, numPostGhostNodes, numLocalNodes;
@@ -223,12 +218,6 @@ int main(int argc, char *argv[]){
             local2GlobalMap[localMap[eid][nid]] = gNodeId;
         }
     }
-    /*for (unsigned int eid = 0; eid < nelem; eid++){
-        printf("rank %d, eid %d, localMap= [%d,%d,%d,%d]\n",rank,eid,localMap[eid][0],localMap[eid][1],localMap[eid][2],localMap[eid][3]);
-    }*/
-    /*for (unsigned int nid = 0; nid < numLocalNodes; nid++){
-        printf("rank %d, local node %d --> global node %d\n",rank,nid,local2GlobalMap[nid]);
-    }*/
 
     // compute constrained map
     unsigned int** bound_nodes = new unsigned int* [nelem];
@@ -296,10 +285,6 @@ int main(int argc, char *argv[]){
             prescribedValues_ptr[i] = -1000000; //todo could be a "non-sense" value
         }
     }
-    /*printf("rank %d, number of constraints %d\n",rank,constrainedDofs.size());
-    for (unsigned int i = 0; i < constrainedDofs.size(); i++){
-        printf("rank %d constraint %d, global ID %d, prescribed value %f\n",rank,i,constrainedDofs_ptr[i],prescribedValues_ptr[i]);
-    }*/
 
     unsigned long start_global_node, end_global_node;
     start_global_node = nnodeOffset[rank];
@@ -343,7 +328,6 @@ int main(int argc, char *argv[]){
         }
         // assemble fe
         stMat.petsc_set_element_vec(rhs, eid, fe, 0, ADD_VALUES);
-        //printf("rank %d, xe[%d] = [%f,%f,%f,%f,%f,%f,%f,%f]\n",rank,eid,xe[0],xe[1],xe[2],xe[3],xe[4],xe[5],xe[6],xe[7]);
     }
     delete [] xe;
 
@@ -359,11 +343,6 @@ int main(int argc, char *argv[]){
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    /* if (!matFree) {
-        stMat.dump_mat("matrix_before_bc.dat");
-        stMat.dump_vec(rhs, "rhs_before_bc.dat");
-    } */
-
     // modifying stiffness matrix and load vector to apply dirichlet BCs
     if (!matFree){
         stMat.apply_bc_mat();
@@ -374,22 +353,6 @@ int main(int argc, char *argv[]){
     stMat.apply_bc_rhs(rhs);
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
-    //stMat.dump_vec(rhs);
-
-    /*if (!matFree) {
-        stMat.dump_mat("matrix_after_bc.dat");
-        stMat.dump_vec(rhs, "rhs_after_bc.dat");
-    }*/
-
-
-
-    // write results to files
-    /*if (!matFree){
-        stMat.dump_mat("matrix.dat");
-        stMat.dump_vec(rhs,"rhs.dat");
-    } else {
-        stMat.print_mepMat();
-    }*/
 
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
@@ -398,7 +361,6 @@ int main(int argc, char *argv[]){
     if (!rank){
         printf("L2 norm of computed solution = %f\n",norm);
     }
-    //stMat.dump_vec(out);
 
     // exact solution...
     Vec sol_exact;
@@ -416,8 +378,6 @@ int main(int argc, char *argv[]){
     stMat.petsc_init_vec(sol_exact);
     stMat.petsc_finalize_vec(sol_exact);
 
-    // display exact solution on screen
-    //stMat.dump_vec(sol_exact);
     VecNorm(sol_exact, NORM_2, &norm);
     if (!rank){
         printf("L2 norm of exact solution = %f\n",norm);
@@ -452,7 +412,6 @@ int main(int argc, char *argv[]){
     delete [] nnodeOffset;
     delete [] local2GlobalMap;
     delete [] nnode_per_elem;
-
 
     PetscFinalize();
     return 0;

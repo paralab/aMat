@@ -97,6 +97,12 @@ target_include_directories(ex2 PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(ex2 PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(ex2 ${MPI_LIBRARIES} m)
 
+add_executable(ex3 src/ex3.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+target_include_directories(ex3 PUBLIC include)
+target_include_directories(ex3 PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(ex3 PRIVATE ${EIGEN_HEADER_DIR})
+target_link_libraries(ex3 ${MPI_LIBRARIES} m)
+
 if(BUILD_WITH_PETSC)
     target_include_directories(fem3d PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(fem3d ${PETSC_LIBRARIES})
@@ -115,4 +121,7 @@ if(BUILD_WITH_PETSC)
 
     target_include_directories(ex2 PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(ex2 ${PETSC_LIBRARIES})
+
+    target_include_directories(ex3 PUBLIC ${PETSC_INCLUDES})
+    target_link_libraries(ex3 ${PETSC_LIBRARIES})
 endif()

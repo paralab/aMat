@@ -5,6 +5,9 @@
  * @author Milinda Fernando milinda@cs.utah.edu
  *
  * @brief Example of solving 3D Poisson equation by FEM, in parallel, using Petsc
+ * @brief grad^2(u) + sin(2*M_PI*x) * sin(2*M_PI*y) * sin(2*M_PI*z) = 0
+ * @brief BCs u = 0 on all boundaries
+ * @brief Exact solution: (1.0 / (12.0 * M_PI * M_PI)) * sin(2 * M_PI * x) * sin(2 * M_PI * y) * sin(2 * M_PI * z);
  *
  * @version 0.1
  * @date 2018-11-30

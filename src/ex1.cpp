@@ -126,9 +126,6 @@ int main( int argc, char *argv[] ) {
     // nodal coordinates of element
     double* xe = new double[NDIM * NNODE_PER_ELEM];
 
-    // matrix block
-    double* ke = new double[(NDOF_PER_NODE * NNODE_PER_ELEM) * (NDOF_PER_NODE * NNODE_PER_ELEM)];
-
     // element force vector (contains multiple vector blocks)
     std::vector<Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1>> fee;
     fee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
@@ -430,11 +427,23 @@ int main( int argc, char *argv[] ) {
         prescribedValues_ptr[i] = list_of_constraints[i].get_preVal();
     }
 
-    // ad-hoc: elemental traction vector
+    // elemental traction vector
     Matrix<double, Eigen::Dynamic, 1> * elem_trac;
     elem_trac = new Matrix<double, Eigen::Dynamic, 1> [nelem];
 
-    double area, x4, y4, x6, y6;
+    // nodal traction of the face where traction is applied
+    double nodalTraction [12] = {0.0};
+    // nodal coordinates of the face where traction is applied
+    double xeSt [12];
+    // force vector due to traction
+    Matrix<double, 12, 1> feT;
+    // number of Gauss points in each direction for integration
+    const unsigned int nGauss = 2;
+    // coordinates and weights for Gauss points
+    double* GaussPoints;
+    // generate Gauss points
+    GaussPoints = gauss(nGauss);
+
     for (unsigned int eid = 0; eid < nelem; eid++){
         bool traction = false;
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
@@ -447,23 +456,49 @@ int main( int argc, char *argv[] ) {
             }
         }
         if (traction) {
-            // ad-hoc setting force vector due to uniform traction applied on face 4-5-6-7 of the element
-            // compute area of the top face
-            gNodeId = globalMap[eid][4];
-            x4 = (double)(gNodeId % (Nex + 1)) * hx;
-            y4 = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
-            gNodeId = globalMap[eid][6];
-            x6 = (double)(gNodeId % (Nex + 1)) * hx;
-            y6 = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
-            area = ((x6 - x4)*(y6 - y4));
-            // put into load vector
+            // get coordinates of all nodes
+            for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
+                gNodeId = globalMap[eid][nid];
+                // get node coordinates
+                x = (double)(gNodeId % (Nex + 1)) * hx;
+                y = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
+                z = (double)(gNodeId / ((Nex + 1)*(Ney + 1))) * hz;
+                xe[nid * NDOF_PER_NODE] = x;
+                xe[(nid * NDOF_PER_NODE) + 1] = y;
+                xe[(nid * NDOF_PER_NODE) + 2] = z;
+            }
+
+            // get coordinates of nodes belonging to the face where traction is applied
+            // traction applied on face 4-5-6-7 ==> nodes [4,5,6,7] corresponds to nodes [0,1,2,3] of 2D element
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
+                xeSt[did] = xe[4*NDOF_PER_NODE + did];
+                xeSt[NDOF_PER_NODE + did] = xe[5*NDOF_PER_NODE + did];
+                xeSt[2*NDOF_PER_NODE + did] = xe[6*NDOF_PER_NODE + did];
+                xeSt[3*NDOF_PER_NODE + did] = xe[7*NDOF_PER_NODE + did];
+            }
+
+            // get nodal traction of face where traction is applied (uniform traction t0 = 1.0 applied on top surface)
+            for (unsigned int nid = 0; nid < 4; nid++){
+                nodalTraction[nid*NDOF_PER_NODE + 2] = 1.0;
+            }
+
+            // compute force vector due traction applied on one face of element
+            feT_hex8_iso(feT, xeSt, nodalTraction, GaussPoints, nGauss);
+
+            // put traction force vector into element force vector
             elem_trac[eid].resize(NNODE_PER_ELEM * NDOF_PER_NODE, 1);
             for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
                 for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
-                    if (((nid == 4) || (nid == 5) || (nid == 6) || (nid == 7)) && (did == (NDOF_PER_NODE - 1))){
-                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = area/4;
-                    }
-                    else {
+                    // nodes [4,5,6,7] of 3D element are nodes [0,1,2,3] of 2D element where traction applied
+                    if (nid == 4){
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[did];
+                    } else if (nid == 5){
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[NDOF_PER_NODE + did];
+                    } else if (nid == 6){
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[2*NDOF_PER_NODE + did];
+                    } else if (nid == 7){
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[3*NDOF_PER_NODE + did];
+                    } else {
                         elem_trac[eid]((nid * NDOF_PER_NODE) + did) = 0.0;
                     }
                 }
@@ -534,7 +569,6 @@ int main( int argc, char *argv[] ) {
         
     }
 
-    delete [] ke;
     delete [] xe;
 
     // Pestc begins and completes assembling the global stiffness matrix
@@ -554,7 +588,7 @@ int main( int argc, char *argv[] ) {
         stMat.apply_bc_mat();
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
-        //sprintf(fname,"matrix_%d.dat",size);    
+        //sprintf(fname,"matrix_ex1_%d.dat",size);
         //stMat.dump_mat(fname);
     }
     stMat.apply_bc_rhs(rhs);
@@ -654,6 +688,8 @@ int main( int argc, char *argv[] ) {
     delete [] prescribedValues_ptr;
 
     delete [] elem_trac;
+
+    delete [] GaussPoints;
 
     VecDestroy(&out);
     VecDestroy(&sol_exact);

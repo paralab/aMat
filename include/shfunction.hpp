@@ -12,7 +12,7 @@
 #ifndef ADAPTIVEMATRIX_SHFUNCTION_H
 #define ADAPTIVEMATRIX_SHFUNCTION_H
 
-double *gauss(int n);
+double *gauss(unsigned int n);
 double *basis_hex8 (double p[]);
 double *dfbasis_hex8 (double p[]);
 

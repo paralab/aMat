@@ -1,25 +1,27 @@
 /**
- * @file ex1a.cpp
+ * @file ex3.cpp
  * @author Hari Sundar   hsundar@gmail.com
  * @author Han Duc Tran  hantran@cs.utah.edu
  *
- * @brief Example: A square plate under uniform traction tz = 1 on top surface, and tz = -1 on bottom surface
- * @brief Exact solution (origin at left-bottom corner)
- * @brief    uniform stress s_zz = tz = 1
- * @brief    displacement u = -(nu/E) * tz * x + (nu/E) * tz * (Lx/Ly) * y
- * @brief    displacement v = -(nu/E) * tz * y - (nu/E) * tz * (Lx/Ly) * x
- * @brief    displacement w = (1/E) * tz * z
+ * @brief Example: Stretching of a prismatic bar by its own weight (Timoshenko page 246)
+ * @brief Exact solution (origin at centroid of bottom face)
+ * @brief    uniform stress s_zz = rho * g * z
+ * @brief    displacement u = -(nu * rho * g/E) * x * z
+ * @brief    displacement v = -(nu * rho * g/E) * y * z
+ * @brief    displacement w = (rho * g/2/E)(z^2 - Lz^2) + (nu * rho * g)/2/E(x^2 + y^2)
+ * @brief Boundary condition: traction tz = rho * g * Lz applied on top surface + blocking rigid motions
  * @brief Partition of elements in z direction: owned elements in z direction ~ Nez/(number of ranks)
- * @brief Size of the domain: Lx = Ly = Lz = 1.0
+ * @brief Size of the domain: Lx = Ly = 1; Lz = 4.0
  * 
  * @version 0.1
- * @date 2018-11-30
+ * @date 2020-02-26
  *
  * @copyright Copyright (c) 2018 School of Computing, University of Utah
  *
  */
 
 #include <iostream>
+#include <fstream>
 
 #include <math.h>
 #include <stdio.h>
@@ -88,9 +90,13 @@ int main( int argc, char *argv[] ) {
     const unsigned int NDIM = 3;                // number of dimension
     const unsigned int NNODE_PER_ELEM = 8;      // number of nodes per element
 
-    // material properties
+    // material properties of alumina
+    //const double E = 300.0; // GPa
     const double E = 1.0;
     const double nu = 0.3;
+    //const double rho = 3950;// kg.m^-3
+    const double rho = 1;
+    const double g = 1;   // m.s^-2
 
     // number of (global) elements in x, y and z directions
     const unsigned int Nex = atoi(argv[1]);
@@ -101,7 +107,7 @@ int main( int argc, char *argv[] ) {
     const bool matFree = atoi(argv[5]); // use matrix-free method
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
+    const double Lx = 1.0, Ly = 1.0, Lz = 3.0;
 
     // element sizes
     hx = Lx/double(Nex);// element size in x direction
@@ -122,12 +128,13 @@ int main( int argc, char *argv[] ) {
     std::vector< Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM > > kee;
     kee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT * AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
 
+    // element force vector
+    std::vector<Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1>> fee;
+    fee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
+
     // nodal coordinates of element
     double* xe = new double[NDIM * NNODE_PER_ELEM];
 
-    // element force vector (contains multiple vector blocks)
-    std::vector<Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1>> fee;
-    fee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
 
     if(!rank) {
         std::cout << "============ parameters read  =======================\n";
@@ -140,6 +147,16 @@ int main( int argc, char *argv[] ) {
     if( rank == 0 ) {
         if (size > Nez) {
             printf("The number of processes must be less than or equal Nez, program stops.\n");
+            MPI_Abort(comm, rc);
+            exit(0);
+        }
+    }
+
+    // for fixing rigid motions at centroid of the top/bottom face
+    // number of elements in x and y directions must be even numbers
+    if ((Nex % 2 != 0) || (Ney % 2 != 0)){
+        if (!rank){
+            printf("Number of elements in x and y must be even numbers, program stops.\n");
             MPI_Abort(comm, rc);
             exit(0);
         }
@@ -206,7 +223,7 @@ int main( int argc, char *argv[] ) {
     }
 
     // map from elemental dof to global dof
-    unsigned long int** globalDofMap;
+    unsigned long int* * globalDofMap;
     globalDofMap = new unsigned long int *[nelem];
     for (unsigned int eid = 0; eid < nelem; eid++) {
         globalDofMap[eid] = new unsigned long int[AMAT_MAX_BLOCKSDIM_PER_ELEMENT * NNODE_PER_ELEM * NDOF_PER_NODE];
@@ -347,15 +364,15 @@ int main( int argc, char *argv[] ) {
     unsigned int* * bound_dofs = new unsigned int* [nelem];
     double* * bound_values = new double* [nelem];
     for (unsigned int eid = 0; eid < nelem; eid++) {
-        bound_dofs[eid] = new unsigned int[NNODE_PER_ELEM * NDOF_PER_NODE];
-        bound_values[eid] = new double [NNODE_PER_ELEM * NDOF_PER_NODE];
+        bound_dofs[eid] = new unsigned int[ndofs_per_element[eid]];
+        bound_values[eid] = new double [ndofs_per_element[eid]];
     }
-    
+
     // construct elemental constrained DoFs and prescribed values
     for (unsigned int eid = 0; eid < nelem; eid++) {
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
 
-            // global node id of elemental node nid
+            // global node id of elemental node n
             gNodeId = globalMap[eid][nid];
 
             // compute nodal coordinate
@@ -363,37 +380,40 @@ int main( int argc, char *argv[] ) {
             y = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
             z = (double) (gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
 
-            // fix rigid body motions:
-            if ((std::fabs(x) < zero_number) && (std::fabs(y) < zero_number) && (std::fabs(z) < zero_number)){
-                bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1; // constrained dof
-                bound_dofs[eid][nid * NDOF_PER_NODE] = 1;
+            // translate origin to center of bottom face
+            x = x - Lx/2;
+            y = y - Ly/2;
+
+            // node at centroid of top face: fix all directions
+            if ((std::fabs(x) < zero_number) && (std::fabs(y) < zero_number) && (std::fabs(z-Lz) < zero_number)) {
+                bound_dofs[eid][(nid * NDOF_PER_NODE)] = 1;    
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 1] = 1;
-                bound_values[eid][(nid * NDOF_PER_NODE) + 2] = 0.0; // prescribed value
-                bound_values[eid][nid * NDOF_PER_NODE] = 0.0;
-                bound_values[eid][(nid * NDOF_PER_NODE) + 1] = 0.0;
+                bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1;
+                
+                bound_values[eid][(nid * NDOF_PER_NODE)] = 0.0;     
+                bound_values[eid][(nid * NDOF_PER_NODE) + 1] = 0.0; 
+                bound_values[eid][(nid * NDOF_PER_NODE) + 2] = 0.0; 
             } else {
                 for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
                     bound_dofs[eid][(nid * NDOF_PER_NODE) + did] = 0; // free dof
                     bound_values[eid][(nid * NDOF_PER_NODE) + did] = -1000000;
                 }
             }
-            if ((std::fabs(x - Lx) < zero_number) && (std::fabs(y - Ly) < zero_number) && (std::fabs(z) < zero_number)){
-                // node at (Lx,Ly,0) --> fix in x and z
-                bound_dofs[eid][nid * NDOF_PER_NODE] = 1;    //x
-                bound_dofs[eid][nid * NDOF_PER_NODE + 2] = 1;
+
+            // node at centroid of bottom surface: fix in x and y
+            if ((std::fabs(x) < zero_number) && (std::fabs(y) < zero_number) && (std::fabs(z) < zero_number)){
+                bound_dofs[eid][nid * NDOF_PER_NODE] = 1;
+                bound_dofs[eid][nid * NDOF_PER_NODE + 1] = 1;
+
                 bound_values[eid][nid * NDOF_PER_NODE] = 0.0;
-                bound_values[eid][nid * NDOF_PER_NODE + 2] = 0.0;
+                bound_values[eid][nid * NDOF_PER_NODE + 1] = 0.0;
             }
-            if ((std::fabs(x - Lx) < zero_number) && (std::fabs(y) < zero_number) && (std::fabs(z) < zero_number)){
-                // node at (Lx,0,0) --> fix in z
-                bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1;
-                bound_values[eid][(nid * NDOF_PER_NODE) + 2] = 0.0;
+
+            // node at center of right edge of bottom surface: fix in y
+            if ((std::fabs(x - Lx/2) < zero_number) && (std::fabs(y) < zero_number) && (std::fabs(z) < zero_number)){
+                bound_dofs[eid][(nid * NDOF_PER_NODE) + 1] = 1;
+                bound_values[eid][(nid * NDOF_PER_NODE) + 1] = 0.0;
             }
-            /* if ((std::fabs(x) < zero_number) && (std::fabs(y - Ly) < zero_number) && (std::fabs(z) < zero_number)){
-                // node at (0, Ly, 0) --> fix in z
-                bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1;
-                bound_values[eid][(nid * NDOF_PER_NODE) + 2] = 0.0;
-            } */
         }
     }
 
@@ -427,71 +447,83 @@ int main( int argc, char *argv[] ) {
         prescribedValues_ptr[i] = list_of_constraints[i].get_preVal();
     }
 
-    // ad-hoc: elemental traction vector
+    // elemental traction vector
     Matrix<double, Eigen::Dynamic, 1> * elem_trac;
     elem_trac = new Matrix<double, Eigen::Dynamic, 1> [nelem];
 
-    double area, x0, y0, x2, y2, x4, y4, x6, y6;
+    // nodal traction
+    double nodalTraction [12] = {0.0};
+    // nodal coordinates of tractioned face
+    double xeSt [12];
+    // force vector due to traction
+    Matrix<double, 12, 1> feT;
+    // number of Gauss points in each direction for integration
+    const unsigned int nGauss = 2;
+    // coordinates and weights for Gauss points
+    double* GaussPoints;
+    // generate Gauss points
+    GaussPoints = gauss(nGauss);
+
     for (unsigned int eid = 0; eid < nelem; eid++){
-        bool traction_top = false;
-        bool traction_bot = false;
+        bool traction = false;
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             gNodeId = globalMap[eid][nid];
             z = (double) (gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
             if (std::fabs(z - Lz) < zero_number){
                 // element eid has one face is the top surface with applied traction
-                traction_top = true;
-            } else if (std::fabs(z) < zero_number){
-                // element eid has one face is the bot surface with applied traction
-                traction_bot = true;
+                traction = true;
+                break;
             }
         }
-        
-        if (traction_top || traction_bot) {
-            elem_trac[eid].resize(NNODE_PER_ELEM * NDOF_PER_NODE, 1);
-            for (unsigned int did = 0; did < NNODE_PER_ELEM * NDOF_PER_NODE; did++){
-                elem_trac[eid][did] = 0.0;
-            }
-        }
-        if (traction_top){
-            // ad-hoc setting force vector due to uniform traction applied on face 4-5-6-7 of the element
-            // compute area of the top face
-            gNodeId = globalMap[eid][4];
-            x4 = (double)(gNodeId % (Nex + 1)) * hx;
-            y4 = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
-            gNodeId = globalMap[eid][6];
-            x6 = (double)(gNodeId % (Nex + 1)) * hx;
-            y6 = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
-            area = ((x6 - x4)*(y6 - y4));
-            assert(area > zero_number);
-            
-            // put into load vector
+        if (traction) {
+            // get coordinates of all nodes
             for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
-                for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
-                    if (((nid == 4) || (nid == 5) || (nid == 6) || (nid == 7)) && (did == (NDOF_PER_NODE - 1))){
-                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = area/4;
-                    }
-                }
-            }
-        }
-        
-        if (traction_bot){
-            // ad-hoc setting force vector due to uniform traction applied on face 0-1-2-3 of the element
-            // compute area of the bottom face
-            gNodeId = globalMap[eid][0];
-            x0 = (double)(gNodeId % (Nex + 1)) * hx;
-            y0 = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
-            gNodeId = globalMap[eid][2];
-            x2 = (double)(gNodeId % (Nex + 1)) * hx;
-            y2 = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
-            area = (x2 - x0)*(y2 - y0);
-            assert(area > zero_number);
+                gNodeId = globalMap[eid][nid];
+                // get node coordinates
+                x = (double)(gNodeId % (Nex + 1)) * hx;
+                y = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
+                z = (double)(gNodeId / ((Nex + 1)*(Ney + 1))) * hz;
 
-            // put into load vector
+                x = x - Lx/2;
+                y = y - Ly/2;
+
+                xe[nid * NDOF_PER_NODE] = x;
+                xe[(nid * NDOF_PER_NODE) + 1] = y;
+                xe[(nid * NDOF_PER_NODE) + 2] = z;
+            }
+
+            // get coordinates of nodes belonging to the face where traction is applied
+            // traction applied on face 4-5-6-7 ==> nodes [4,5,6,7] corresponds to nodes [0,1,2,3] of 2D element
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
+                xeSt[did] = xe[4*NDOF_PER_NODE + did];
+                xeSt[NDOF_PER_NODE + did] = xe[5*NDOF_PER_NODE + did];
+                xeSt[2*NDOF_PER_NODE + did] = xe[6*NDOF_PER_NODE + did];
+                xeSt[3*NDOF_PER_NODE + did] = xe[7*NDOF_PER_NODE + did];
+            }
+
+            // get nodal traction of face where traction is applied (uniform traction t3 = rho*g*Lz applied on top surface)
+            for (unsigned int nid = 0; nid < 4; nid++){
+                nodalTraction[nid*NDOF_PER_NODE + 2] = rho * g * Lz;
+            }
+
+            // compute force vector due traction applied on one face of element
+            feT_hex8_iso(feT, xeSt, nodalTraction, GaussPoints, nGauss);
+
+            // put traction force vector into element force vector
+            elem_trac[eid].resize(NNODE_PER_ELEM * NDOF_PER_NODE, 1);
             for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
                 for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
-                    if (((nid == 0) || (nid == 1) || (nid == 2) || (nid == 3)) && (did == (NDOF_PER_NODE - 1))){
-                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = -area/4;
+                    // nodes [4,5,6,7] of 3D element are nodes [0,1,2,3] of 2D element where traction applied
+                    if (nid == 4){
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[did];
+                    } else if (nid == 5){
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[NDOF_PER_NODE + did];
+                    } else if (nid == 6){
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[2*NDOF_PER_NODE + did];
+                    } else if (nid == 7){
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[3*NDOF_PER_NODE + did];
+                    } else {
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = 0.0;
                     }
                 }
             }
@@ -523,7 +555,8 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_create_vec(out);
     stMat.petsc_create_vec(sol_exact);
 
-    // compute element stiffness matrix and assemble global stiffness matrix and load vector
+    // compute element stiffness matrix and force vector, then assemble
+    double beN [24] = {0.0};
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             gNodeId = globalMap[eid][nid];
@@ -531,9 +564,19 @@ int main( int argc, char *argv[] ) {
             x = (double)(gNodeId % (Nex + 1)) * hx;
             y = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
             z = (double)(gNodeId / ((Nex + 1)*(Ney + 1))) * hz;
-            xe[nid * 3] = x;
-            xe[(nid * 3) + 1] = y;
-            xe[(nid * 3) + 2] = z;
+
+            // translate origin
+            x = x - Lx/2;
+            y = y - Ly/2;
+
+            xe[nid * NDOF_PER_NODE] = x;
+            xe[(nid * NDOF_PER_NODE) + 1] = y;
+            xe[(nid * NDOF_PER_NODE) + 2] = z;
+
+            // const body force in z direction
+            beN[(nid * NDOF_PER_NODE)] = 0.0;
+            beN[(nid * NDOF_PER_NODE) + 1] = 0.0;
+            beN[(nid * NDOF_PER_NODE) + 2] = -rho * g;
         }
 
         // compute element stiffness matrix
@@ -552,13 +595,25 @@ int main( int argc, char *argv[] ) {
                 stMat.petsc_set_element_matrix(eid, kee[0], 0, 0, ADD_VALUES);
             }
         } else {
-            std::cout<<"Error: matrix free only works for Eigen matrix"<<std::endl;
+            std::cout<<"Error: assembly matrix only works for Eigen matrix"<<std::endl;
         }
-        // assemble element load vector to global F
+        
+        // compute element force vector due to body force
+        fe_hex8_iso(fee[0], xe, beN, GaussPoints, nGauss);
+
+        /* for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
+                printf("fee[e %d, n %d, d %d]= %f\n",eid,nid,did,fee[0](nid * NDOF_PER_NODE + did));
+            }
+        } */
+
+        // assemble element load vector due to body force
+        stMat.petsc_set_element_vec(rhs, eid, fee[0], 0, ADD_VALUES);
+
+        // assemble element load vector due to traction
         if (elem_trac[eid].size() != 0){
             stMat.petsc_set_element_vec(rhs, eid, elem_trac[eid], 0, ADD_VALUES);
         }
-        
     }
 
     delete [] xe;
@@ -573,19 +628,21 @@ int main( int argc, char *argv[] ) {
     // Pestc begins and completes assembling the global load vector
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
+    //stMat.dump_vec(rhs,"rhs_before.dat");
 
-    char fname[256];
+    //char fname[256];
     // apply dirichlet BCs
     if (!matFree){
         stMat.apply_bc_mat();
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
-        //sprintf(fname,"matrix_ex1a_%d.dat",size);
+        //sprintf(fname,"matrix_%d.dat",size);    
         //stMat.dump_mat(fname);
     }
     stMat.apply_bc_rhs(rhs);
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
+    //stMat.dump_vec(rhs, "rhs.dat");
 
     //sprintf(fname,"rhsVec_%d.dat",size);
     //stMat.dump_vec(rhs,fname);
@@ -595,9 +652,11 @@ int main( int argc, char *argv[] ) {
 
     stMat.petsc_init_vec(out);
     stMat.petsc_finalize_vec(out);
-    //stMat.dump_vec(out);
+    //stMat.dump_vec(out,"out.dat");
 
     PetscScalar norm, alpha = -1.0;
+
+    // compute norm of solution
     VecNorm(out, NORM_2, &norm);
     if (rank == 0){
         printf("L2 norm of computed solution = %20.10f\n",norm);
@@ -613,9 +672,13 @@ int main( int argc, char *argv[] ) {
             y = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
             z = (double)(gNodeId / ((Nex + 1)*(Ney + 1))) * hz;
 
-            disp[0] = -nu*x/E + nu/E*(Lx/Ly)*y;
-            disp[1] = -nu*y/E - nu/E*(Lx/Ly)*x;
-            disp[2] = z/E;
+            // transformed coordinates
+            x = x - Lx/2;
+            y = y - Ly/2;
+
+            disp[0] = (-nu*rho*g/E) * x * z;
+            disp[1] = (-nu*rho*g/E) * y * z;
+            disp[2] = (rho*g/2/E)*(z*z - Lz*Lz) + (nu*rho*g/2/E)*(x*x + y*y);
             
             for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
                 e_exact[(nid * NDOF_PER_NODE) + did] = disp[did];
@@ -626,18 +689,65 @@ int main( int argc, char *argv[] ) {
 
     stMat.petsc_init_vec(sol_exact);
     stMat.petsc_finalize_vec(sol_exact);
+    //stMat.dump_vec(sol_exact,"sol_exact.dat");
 
+    // compute norm of exact solution
     VecNorm(sol_exact, NORM_2, &norm);
     if (rank == 0){
         printf("L2 norm of exact solution = %20.10f\n",norm);
     }
 
+    // subtract sol_exact = sol_exact - out
     VecAXPY(sol_exact, alpha, out);
+
+    // compute norm of error
+    //VecNorm(sol_exact, NORM_INFINITY, &norm);
     VecNorm(sol_exact, NORM_INFINITY, &norm);
     if (rank == 0){
         printf("Inf norm of error = %20.10f\n", norm);
     }
     
+    std::ofstream myfile;
+    if (!rank){
+        myfile.open("ex3.vtk");
+        myfile << "# vtk DataFile Version 2.0 " << std::endl;
+        myfile << "Stress field" << std::endl;
+        myfile << "ASCII" << std::endl;
+        myfile << "DATASET UNSTRUCTURED_GRID" << std::endl;
+        myfile << "POINTS " << nnode << " float" << std::endl;
+        for (unsigned int nid = 0; nid < numLocalNodes; nid++){
+            gNodeId = local2GlobalMap[nid];
+            x = (double)(gNodeId % (Nex + 1)) * hx;
+            y = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
+            z = (double) (gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
+            myfile << x << "  " << y << "  " << z << std::endl;
+        }
+        unsigned int size_cell_list = nelem * 9;
+        myfile << "CELLS " << nelem << " " << size_cell_list << std::endl;
+        for (unsigned int eid = 0; eid < nelem; eid++){
+            myfile << "8 " << globalMap[eid][0] << " " << globalMap[eid][1] << " "
+             << globalMap[eid][2] << " " << globalMap[eid][3] << " "
+              << globalMap[eid][4] << " " << globalMap[eid][5] << " "
+               << globalMap[eid][6] << " " << globalMap[eid][7] << std::endl;
+        }
+        myfile << "CELL_TYPES " << nelem << std::endl;
+        for (unsigned int eid = 0; eid < nelem; eid++){
+            myfile << "12" << std::endl;
+        }
+        myfile << "POINT_DATA " << nnode << std::endl;
+        myfile << "VECTORS " << "displacement " << "float " << std::endl;
+        std::vector<PetscInt> indices (NDOF_PER_NODE);
+        std::vector<PetscScalar> values (NDOF_PER_NODE);
+        for (unsigned int nid = 0; nid < numLocalNodes; nid++){
+            gNodeId = local2GlobalMap[nid];
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++){
+                indices[did] = gNodeId * NDOF_PER_NODE + did;
+                VecGetValues(out, NDOF_PER_NODE, indices.data(), values.data());
+            }
+            myfile << values[0] << " " << values[1] << " " << values[2] << std::endl;
+        }
+        myfile.close();
+    }
 
     for (unsigned int eid = 0; eid < nelem; eid++) {
         delete [] globalMap[eid];
@@ -672,7 +782,7 @@ int main( int argc, char *argv[] ) {
     delete [] constrainedDofs_ptr;
     delete [] prescribedValues_ptr;
 
-    delete [] elem_trac;
+    delete [] GaussPoints;
 
     VecDestroy(&out);
     VecDestroy(&sol_exact);
