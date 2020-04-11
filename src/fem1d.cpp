@@ -28,9 +28,7 @@
 
 #include "Eigen/Dense"
 
-#include "shfunction.hpp"
 #include "ke_matrix.hpp"
-#include "me_matrix.hpp"
 #include "fe_vector.hpp"
 #include "aMat.hpp"
 
@@ -209,20 +207,20 @@ int main(int argc, char *argv[]){
         for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
             unsigned long global_Id = globalMap[eid][nid];
             double x = (double)(global_Id * h);
-            if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001)){
-            //if ((std::fabs(x) < 0.000001) || (std::fabs(x - L) < 0.000001) || (std::fabs(x - 0.5*L) < 0.000001)){
+            if ((fabs(x) < 0.000001) || (fabs(x - L) < 0.000001)){
+            //if ((fabs(x) < 0.000001) || (fabs(x - L) < 0.000001) || (fabs(x - 0.5*L) < 0.000001)){
                 bound_nodes[eid][nid] = 1;
             } else {
                 bound_nodes[eid][nid] = 0;
             }
-            if (std::fabs(x) < 0.000001){
+            if (fabs(x) < 0.000001){
                 // left end
                 bound_values[eid][nid] = 0.0;
-            } else if (std::fabs(x - L) < 0.000001){
+            } else if (fabs(x - L) < 0.000001){
                 // right end
                 bound_values[eid][nid] = 1.0;
                 //bound_values[eid][nid] = 20.0;
-            //} else if (std::fabs(x - 0.5*L) < 0.000001){
+            //} else if (fabs(x - 0.5*L) < 0.000001){
             //    bound_values[eid][nid] = 0.7;
             } else {
                 // free dofs
@@ -250,12 +248,12 @@ int main(int argc, char *argv[]){
         unsigned long global_Id = constrainedDofs[i];
         double x = (double)(global_Id * h);
         constrainedDofs_ptr[i] = global_Id;
-        if (std::fabs(x - L) < 0.000001){
+        if (fabs(x - L) < 0.000001){
             prescribedValues_ptr[i] = 1.0;
             //prescribedValues_ptr[i] = 20.0;
-        //} else if (std::fabs(x - 0.5*L) < 0.000001){
+        //} else if (fabs(x - 0.5*L) < 0.000001){
         //    prescribedValues_ptr[i] = 0.7;
-        } else if (std::fabs(x) < 0.000001){
+        } else if (fabs(x) < 0.000001){
             prescribedValues_ptr[i] = 0.0;
         } else {
             std::cout << "something wrong with the list of constrained dofs...";

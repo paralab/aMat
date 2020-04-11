@@ -34,11 +34,10 @@
 
 #include "Eigen/Dense"
 
-#include "shfunction.hpp"
 #include "ke_matrix.hpp"
-#include "me_matrix.hpp"
 #include "fe_vector.hpp"
 #include "aMat.hpp"
+#include "integration.hpp"
 
 using Eigen::Matrix;
 
@@ -231,15 +230,15 @@ int main(int argc, char *argv[]){
             unsigned long global_Id = globalMap[eid][nid];
             double x = (double)(global_Id % (Nex + 1)) * hx;
             double y = (double)(global_Id / (Nex + 1)) * hy;
-            if ((std::fabs(x) < 0.00000001) || (std::fabs(x - Lx) < 0.00000001)){
+            if ((fabs(x) < 0.00000001) || (fabs(x - Lx) < 0.00000001)){
                 // left or right boundary
                 bound_nodes[eid][nid] = 1;
                 bound_values[eid][nid] = 0.0;
-            } else if (std::fabs(y) < 0.00000001){
+            } else if (fabs(y) < 0.00000001){
                 // bottom boundary
                 bound_nodes[eid][nid] = 1;
                 bound_values[eid][nid] = sin(M_PI * x);
-            } else if (std::fabs(y - Ly) < 0.00000001){
+            } else if (fabs(y - Ly) < 0.00000001){
                 // top boundary
                 bound_nodes[eid][nid] = 1;
                 bound_values[eid][nid] = sin(M_PI * x) * exp(-M_PI);
@@ -271,13 +270,13 @@ int main(int argc, char *argv[]){
         double x = (double)(global_Id % (Nex + 1)) * hx;
         double y = (double)(global_Id / (Nex + 1)) * hy;
         constrainedDofs_ptr[i] = global_Id;
-        if ((std::fabs(x) < 0.00000001) || (std::fabs(x - Lx) < 0.00000001)){
+        if ((fabs(x) < 0.00000001) || (fabs(x - Lx) < 0.00000001)){
             // left or right boundary
             prescribedValues_ptr[i] = 0.0;
-        } else if (std::fabs(y) < 0.00000001){
+        } else if (fabs(y) < 0.00000001){
             // bottom boundary
             prescribedValues_ptr[i] = sin(M_PI * x);
-        } else if (std::fabs(y - Ly) < 0.00000001){
+        } else if (fabs(y - Ly) < 0.00000001){
             // top boundary
             prescribedValues_ptr[i] = sin(M_PI * x) * exp(-M_PI);
         } else {
@@ -308,6 +307,10 @@ int main(int argc, char *argv[]){
     stMat.petsc_create_vec(rhs);
     stMat.petsc_create_vec(out);
 
+    // Gauss points and weights
+    const unsigned int NGT = 2;
+    integration<double> intData(NGT);
+
     // element stiffness matrix, force vector, and assembly...
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
@@ -315,7 +318,7 @@ int main(int argc, char *argv[]){
             xe[nid * 2] = (double)(global_Id % (Nex + 1)) * hx;
             xe[(nid * 2) + 1] = (double)(global_Id / (Nex + 1)) * hy;
         }
-        ke_quad4_eig(ke,xe);
+        ke_quad4_eig(ke, xe, intData.Pts_n_Wts, NGT);
         // for this example, no force vector
         for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
             fe(nid) = 0.0;

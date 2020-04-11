@@ -31,11 +31,10 @@
 
 #include "Eigen/Dense"
 
-#include "shfunction.hpp"
 #include "ke_matrix.hpp"
-#include "me_matrix.hpp"
 #include "fe_vector.hpp"
 #include "aMat.hpp"
+#include "integration.hpp"
 
 using Eigen::MatrixXd;
 using Eigen::Matrix;
@@ -132,6 +131,15 @@ int main( int argc, char *argv[] ) {
     }
     if(!rank && useEigen) { std::cout << "\t\tuseEigen: " << useEigen << "\n"; }
     if(!rank && matFree)  { std::cout << "\t\tmatrix free: " << matFree << "\n"; }
+    #ifdef AVX_512
+    if (!rank) {std::cout << "\t\tRun with AVX_512\n";}
+    #elif AVX_256
+    if (!rank) {std::cout << "\t\tRun with AVX_256\n";}
+    #elif OMP_SIMD
+    if (!rank) {std::cout << "\t\tRun with OMP_SIMD\n";}
+    #else
+    if (!rank) {std::cout << "\t\tRun with no vectorization\n";}
+    #endif
     if(!rank) { std::cout<<"=====================================================\n"; }
 
     if( rank == 0 ) {
@@ -144,7 +152,26 @@ int main( int argc, char *argv[] ) {
 
     // find min & max element index in x direction =================================
     // number of elements in z direction
-    double d = (Nez)/(double)(size);
+    // partition number of elements in z direction
+    unsigned int nelem_z;
+    // minimum number of elements in z-dir for each rank
+    unsigned int nzmin = Nez/size;
+    // remaining
+    unsigned int nRemain = Nez % size;
+    // distribute nRemain uniformly from rank = 0 up to rank = nRemain - 1
+    if (rank < nRemain){
+        nelem_z = nzmin + 1;
+    } else {
+        nelem_z = nzmin;
+    }
+    if (rank < nRemain){
+        emin = rank * nzmin + rank;
+    } else {
+        emin = rank * nzmin + nRemain;
+    }
+    emax = emin + nelem_z - 1;
+
+    /* double d = (Nez)/(double)(size);
     zmin = (rank*d);
     if (rank == 0) zmin = zmin - 0.0001;
     zmax = zmin + d;
@@ -160,10 +187,9 @@ int main( int argc, char *argv[] ) {
             emax = i;
             break;
         }
-    }
+    } */
 
     // number of elements (partition of processes is only in z direction)
-    unsigned int nelem_z = (emax - emin + 1);
     unsigned int nelem_y = Ney;
     unsigned int nelem_x = Nex;
     unsigned int nelem = (nelem_x) * (nelem_y) * (nelem_z);
@@ -322,9 +348,9 @@ int main( int argc, char *argv[] ) {
             z = (double) (nid / ((Nex + 1) * (Ney + 1))) * hz;
 
             // specify boundary nodes
-            if ((std::fabs(x) < tol) || (std::fabs(x - Lx) < tol) ||
-                (std::fabs(y) < tol) || (std::fabs(y - Ly) < tol) ||
-                (std::fabs(z) < tol) || (std::fabs(z - Lz) < tol)) {
+            if ((fabs(x) < tol) || (fabs(x - Lx) < tol) ||
+                (fabs(y) < tol) || (fabs(y - Ly) < tol) ||
+                (fabs(z) < tol) || (fabs(z - Lz) < tol)) {
                 bound_nodes[eid][n] = 1; // boundary
                 bound_values[eid][n] = 0; // prescribed value
             } else {
@@ -364,6 +390,10 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_create_vec(out);
     stMat.petsc_create_vec(sol_exact);
 
+    // Gauss points and weights
+    const unsigned int NGT = 2;
+    integration<double> intData(NGT);
+
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int n = 0; n < NNODE_PER_ELEM; n++){
@@ -380,13 +410,13 @@ int main( int argc, char *argv[] ) {
 
         // compute element stiffness matrix
         if (useEigen) {
-            ke_hex8_eig(kee[0], xe);
+            ke_hex8_eig(kee[0], xe, intData.Pts_n_Wts, NGT);
         } else {
-            ke_hex8(ke, xe);
+            ke_hex8(ke, xe, intData.Pts_n_Wts, NGT);
         }
 
         // compute element force vector
-        fe_hex8_eig(fee[0], xe);
+        fe_hex8_eig(fee[0], xe, intData.Pts_n_Wts, NGT);
 
         // assemble element stiffness matrix to global K
         if (useEigen){

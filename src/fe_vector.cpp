@@ -1,31 +1,9 @@
-/**
- * @file fe_matrix.cpp
- * @author Hari Sundar   hsundar@gmail.com
- * @author Han Duc Tran  hantran@cs.utah.edu
- *
- * @brief functions to compute element load vectors
- *
- * @version 0.1
- * @date 2018-12-07
- */
-#include <iostream>
-#include "../include/shfunction.hpp"
 #include "fe_vector.hpp"
-#include <math.h>
-#include <Eigen/Dense>
 
+void fe_hex8(double* fe,const double* xe, const double* xw, const unsigned int NGT) {
 
-/**
- * @brief: element load vector of 8-node hex element for Poisson equation
- * @param[in] xe nodal coordinates
- * @param[out] fe element load vector
- * @author Han Tran
-* */
-void fe_hex8(double* fe,const double* xe) {
-
-    const int NGT = 2; // number of Gauss points in each direction
-    double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
-    double *xw;
+    // x=[xi, eta, zeta], w=[weight_xi, weight_eta, weight_zeta]
+    double x[3], w[3];
     double *N;
     double *dN;
     double dxds[3], dyds[3], dzds[3];
@@ -37,7 +15,8 @@ void fe_hex8(double* fe,const double* xe) {
         fe[i] = 0.0;
     }
 
-    xw = gauss(NGT); // coordinates and weights of Gauss points, e.g. xw[1]: point 1, xw[2]: weight of point 1
+    // shape functions and their derivaties
+    shape::shapeFunc<double> NdN_object(shape::ELEMTYPE::HEX8);
 
     for (int i = 0; i < NGT; i++){
         x[0] = xw[i*2];                     // xi
@@ -49,8 +28,8 @@ void fe_hex8(double* fe,const double* xe) {
                 x[2] = xw[k*2];             // zeta
                 w[2] = xw[k*2 + 1];         // weight_zeta
 
-                N = basis_hex8(x);
-                dN = dfbasis_hex8(x);
+                N  = NdN_object.Nvalues(x);
+                dN = NdN_object.dNvalues(x);
 
                 // initialize
                 for (int p = 0; p < 3; p++){
@@ -73,7 +52,6 @@ void fe_hex8(double* fe,const double* xe) {
                     printf(" Jacobian is negative!");
                     exit(0);
                 }
-                //jaco = fabs(jaco);
 
                 // physical coordinates of Gauss points
                 xp = 0.0;
@@ -91,25 +69,17 @@ void fe_hex8(double* fe,const double* xe) {
                 for (unsigned int n = 0; n < 8; n++){
                     fe[n] += force * N[n] * jaco * w[2] * w[1] * w[0];
                 }
-                delete [] dN;
-                delete [] N;
+
             } // k integration
         } // j integration
     } // i integration
-    delete [] xw;
-}
+} // fe_hex8
 
-/**
- * @brief: element load vector of 8-node hex element for Poisson equation, use Eigen vector
- * @param[in] xe nodal coordinates
- * @param[out] fe element load vector
- * @author Han Tran
-* */
-void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe) {
 
-    const int NGT = 2; // number of Gauss points in each direction
+
+void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe, const double* xw, const unsigned int NGT) {
+
     double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
-    double *xw;
     double *N;
     double *dN;
     double dxds[3], dyds[3], dzds[3];
@@ -121,7 +91,8 @@ void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe) {
         fe(i) = 0.0;
     }
 
-    xw = gauss(NGT); // coordinates and weights of Gauss points, e.g. xw[1]: point 1, xw[2]: weight of point 1
+    // shape functions and their derivaties
+    shape::shapeFunc<double> NdN_object(shape::ELEMTYPE::HEX8);
 
     for (int i = 0; i < NGT; i++){
         x[0] = xw[i*2];                     // xi
@@ -133,8 +104,8 @@ void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe) {
                 x[2] = xw[k*2];             // zeta
                 w[2] = xw[k*2 + 1];         // weight_zeta
 
-                N = basis_hex8(x);
-                dN = dfbasis_hex8(x);
+                N = NdN_object.Nvalues(x);
+                dN = NdN_object.dNvalues(x);
 
                 // initialize
                 for (int p = 0; p < 3; p++){
@@ -157,7 +128,6 @@ void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe) {
                     printf(" Jacobian is negative!");
                     exit(0);
                 }
-                //jaco = fabs(jaco);
 
                 // physical coordinates of Gauss points
                 xp = 0.0;
@@ -175,16 +145,16 @@ void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe) {
                 for (unsigned int n = 0; n < 8; n++){
                     fe(n) += force * N[n] * jaco * w[2] * w[1] * w[0];
                 }
-                delete [] dN;
-                delete [] N;
+
             } // k integration
         } // j integration
     } // i integration
-    delete [] xw;
-}
+} // fe_hex8_eig
+
+
 
 void fe_hex8_iso(Eigen::Matrix<double,24,1> &fe, const double* xe, const double* bN,
-                const double* GaussPoints, unsigned int nGauss){
+                const double* GaussPoints, const unsigned int nGauss){
 
     const unsigned int NNODES_ELEM = 8; // number of nodes per element
     const unsigned int NDOFS_NODE = 3;  // number of dofs per node
@@ -211,6 +181,9 @@ void fe_hex8_iso(Eigen::Matrix<double,24,1> &fe, const double* xe, const double*
         }
     }
 
+    // shape functions and their derivaties
+    shape::shapeFunc<double> NdN_object(shape::ELEMTYPE::HEX8);
+
     for (unsigned int iGauss = 0; iGauss < nGauss; iGauss++){
         x[0] = GaussPoints[iGauss * 2];                     // xi
         w[0] = GaussPoints[iGauss * 2 + 1];                 // weight_xi
@@ -223,10 +196,11 @@ void fe_hex8_iso(Eigen::Matrix<double,24,1> &fe, const double* xe, const double*
                 x[2] = GaussPoints[kGauss * 2];             // zeta
                 w[2] = GaussPoints[kGauss * 2 + 1];         // weight_zeta
 
-                // get the values of shape functions at Gauss points (memory for N allocated by basis_hex8)
-                N = basis_hex8(x);
-                // get the values of derivatives of shape functions at Gauss points (memory for dN allocated by basis_hex8)
-                dN = dfbasis_hex8(x);
+                // get the values of shape functions at Gauss points
+                N = NdN_object.Nvalues(x);
+                // get the values of derivatives of shape functions at Gauss points
+                dN = NdN_object.dNvalues(x);
+
                 // initialize
                 for (unsigned int p = 0; p < NDIMS; p++){
                     dxds[p] = 0.0;          //[dx/dxi, dx/deta, dx/dzeta]
@@ -252,8 +226,10 @@ void fe_hex8_iso(Eigen::Matrix<double,24,1> &fe, const double* xe, const double*
                     exit(0);
                 }
 
-                // compute fe by direct integrating of body force [bx, by, bz]
-                /* for (unsigned int nid = 0; nid < NNODES_ELEM; nid++){
+                // ah-hoc: compute fe by direct integrating of body force [bx, by, bz]
+                /* double rho = 1.0;
+                double g = 1.0;
+                for (unsigned int nid = 0; nid < NNODES_ELEM; nid++){
                     for (unsigned int did = 0; did < NDOFS_NODE; did++){
                         if (did == 2){
                             fe(nid * NDOFS_NODE + did) += N[nid]*(-rho * g) * jaco * w[2] * w[1] * w[0];
@@ -273,20 +249,15 @@ void fe_hex8_iso(Eigen::Matrix<double,24,1> &fe, const double* xe, const double*
                     }
                 }
 
-                // free memory allocated by basis_hex8
-                delete [] dN;
-
-                // free memory allocated by dfbasis_hex8
-                delete [] N;
-
             } // kGauss integration
         } // jGauss integration
     } // iGauss integration
+} // fe_hex8_iso
 
-}
+
 
 void feT_hex8_iso(Eigen::Matrix<double,12,1> &feT, const double* xe, const double* tN,
-                const double* GaussPoints, unsigned int nGauss){
+                const double* GaussPoints, const unsigned int nGauss){
 
     const unsigned int NNODES_FACE = 4; // number of nodes per surface
     const unsigned int NDOFS_NODE = 3;  // number of dofs per node
@@ -314,6 +285,9 @@ void feT_hex8_iso(Eigen::Matrix<double,12,1> &feT, const double* xe, const doubl
         }
     }
 
+    // shape functions and their derivaties
+    shape::shapeFunc<double> NdN_object(shape::ELEMTYPE::QUAD4);
+
     for (unsigned int iGauss = 0; iGauss < nGauss; iGauss++){
         x[0] = GaussPoints[iGauss * 2];                     // xi
         w[0] = GaussPoints[iGauss * 2 + 1];                 // weight_xi
@@ -322,10 +296,10 @@ void feT_hex8_iso(Eigen::Matrix<double,12,1> &feT, const double* xe, const doubl
             x[1] = GaussPoints[jGauss * 2];                 // eta
             w[1] = GaussPoints[jGauss * 2 + 1];             // weight_eta
 
-            // get the values of shape functions at Gauss points (memory for N allocated by basis_hex8)
-            N = basis_quad4(x);
-            // get the values of derivatives of shape functions at Gauss points (memory for dN allocated by basis_hex8)
-            dN = dfbasis_quad4(x);
+            // get the values of shape functions at Gauss points
+            N = NdN_object.Nvalues(x);
+            // get the values of derivatives of shape functions at Gauss points
+            dN = NdN_object.dNvalues(x);
 
             // initialize
             for (unsigned int p = 0; p < NDIMS_REF; p++){
@@ -358,11 +332,189 @@ void feT_hex8_iso(Eigen::Matrix<double,12,1> &feT, const double* xe, const doubl
                 }
             }
 
-            // free memory allocated by basis_hex8
-            delete [] dN;
+        } // jGauss integration
+    } // iGauss integration
+} // feT_hex8_iso
 
-            // free memory allocated by dfbasis_hex8
-            delete [] N;
+
+void fe_hex20_iso(Eigen::Matrix<double,60,1> &fe, const double* xe, const double* bN,
+                const double* GaussPoints, const unsigned int nGauss){
+
+    const unsigned int NNODES_ELEM = 20; // number of nodes per element
+    const unsigned int NDOFS_NODE = 3;  // number of dofs per node
+    const unsigned int NDIMS_PHY = 3;       // number of physical coordinates
+    const unsigned int NDIMS_REF = 3;   // number of reference coordinates
+
+    // reference coordinates (xi, eta, zeta)
+    double x[NDIMS_REF];
+    // weight (w_xi, w_eta, w_zeta)
+    double w[NDIMS_REF];
+
+    // shape functions evaluated at Gauss points
+    double *N;
+    // derivatives of shape functions at Gauss points
+    double *dN;
+
+    // derivatives of physical coordinates wrt to reference coordinates
+    double dxds[NDIMS_REF], dyds[NDIMS_REF], dzds[NDIMS_REF];
+    // jacobian
+    double jaco;
+
+    for (unsigned int nid = 0; nid < NNODES_ELEM; nid++) {
+        for (unsigned int did = 0; did < NDOFS_NODE; did++){
+            fe(nid * NDOFS_NODE + did) = 0.0;
+        }
+    }
+
+    // shape functions and their derivaties
+    shape::shapeFunc<double> NdN_object(shape::ELEMTYPE::HEX20);
+
+    for (unsigned int iGauss = 0; iGauss < nGauss; iGauss++){
+        x[0] = GaussPoints[iGauss * 2];                     // xi
+        w[0] = GaussPoints[iGauss * 2 + 1];                 // weight_xi
+
+        for (unsigned int jGauss = 0; jGauss < nGauss; jGauss++){
+            x[1] = GaussPoints[jGauss * 2];                 // eta
+            w[1] = GaussPoints[jGauss * 2 + 1];             // weight_eta
+
+            for (unsigned int kGauss = 0; kGauss < nGauss; kGauss++){
+                x[2] = GaussPoints[kGauss * 2];             // zeta
+                w[2] = GaussPoints[kGauss * 2 + 1];         // weight_zeta
+
+                // get the values of shape functions at Gauss points
+                N = NdN_object.Nvalues(x);
+                // get the values of derivatives of shape functions at Gauss points
+                dN = NdN_object.dNvalues(x);
+
+                // initialize
+                for (unsigned int p = 0; p < NDIMS_REF; p++){
+                    dxds[p] = 0.0;          //[dx/dxi, dx/deta, dx/dzeta]
+                    dyds[p] = 0.0;          //[dy/dxi, dy/deta, dy/dzeta]
+                    dzds[p] = 0.0;          //[dz/dxi, dz/deta, dz/dzeta]
+                }
+                for (unsigned int n = 0; n < NNODES_ELEM; n++){
+                    for (unsigned int p = 0; p < NDIMS_REF; p++){
+                        // dx/dxi, dx/deta, dx/dzeta
+                        dxds[p] += xe[NDIMS_PHY * n] * dN[NDIMS_REF * n + p];
+                        // dy/dxi, dy/deta, dy/dzeta
+                        dyds[p] += xe[NDIMS_PHY * n + 1] * dN[NDIMS_REF * n + p];
+                        // dz/dxi, dz/deta, dz/dzeta
+                        dzds[p] += xe[NDIMS_PHY * n + 2] * dN[NDIMS_REF * n + p];
+                    }
+                }
+
+                // jacobian
+                jaco = dxds[0]*(dyds[1]*dzds[2] - dzds[1]*dyds[2]) + dyds[0]*(dzds[1]*dxds[2] - dxds[1]*dzds[2]) +
+                      dzds[0]*(dxds[1]*dyds[2] - dyds[1]*dxds[2]);
+                if (jaco <= 0.0) {
+                    printf(" Jacobian is negative!");
+                    exit(0);
+                }
+
+                // ad hoc: compute fe by direct integrating of body force [bx, by, bz]
+                /* double rho = 1.0;
+                double g = 1.0;
+                for (unsigned int nid = 0; nid < NNODES_ELEM; nid++){
+                    for (unsigned int did = 0; did < NDOFS_NODE; did++){
+                        if (did == 2){
+                            fe(nid * NDOFS_NODE + did) += N[nid]*(-rho * g) * jaco * w[2] * w[1] * w[0];
+                        } else {
+                            fe(nid * NDOFS_NODE + did) = 0.0;
+                        }
+
+                    }
+                } */
+
+                // compute fe by "approximate" body force bx = sum_{i=1}^{N}(N_i*bx_i), by = ...
+                for (unsigned int iDof = 0; iDof < NDOFS_NODE; iDof++){
+                    for (unsigned int iN = 0; iN < NNODES_ELEM; iN++){
+                        for (unsigned int jN = 0; jN < NNODES_ELEM; jN++){
+                            fe(iN * NDOFS_NODE + iDof) += N[iN] * N[jN] * jaco * w[2] * w[1] * w[0] * bN[jN * NDOFS_NODE + iDof];
+                        }
+                    }
+                }
+
+            } // kGauss integration
+        } // jGauss integration
+    } // iGauss integration
+}// fe_hex20_iso
+
+
+void feT_hex20_iso(Eigen::Matrix<double,24,1> &feT, const double* xe, const double* tN,
+                const double* GaussPoints, const unsigned int nGauss){
+
+    const unsigned int NNODES_FACE = 8;   // number of nodes per surface
+    const unsigned int NDOFS_NODE = 3;    // number of dofs per node
+    const unsigned int NDIMS_PHY = 3;     // number of physical coordinates
+    const unsigned int NDIMS_REF = 2;     // number of reference coordinates
+
+    // reference coordinates (xi, eta, zeta)
+    double x[NDIMS_REF];
+    // weight (w_xi, w_eta, w_zeta)
+    double w[NDIMS_REF];
+
+    // shape functions evaluated at Gauss points
+    double *N;
+    // derivatives of shape functions at Gauss points
+    double *dN;
+
+    // derivatives of physical coordinates wrt to reference coordinates
+    double dxds[NDIMS_REF], dyds[NDIMS_REF], dzds[NDIMS_REF];
+    // jacobian
+    double jaco;
+
+    for (unsigned int nid = 0; nid < NNODES_FACE; nid++) {
+        for (unsigned int did = 0; did < NDOFS_NODE; did++){
+            feT(nid * NDOFS_NODE + did) = 0.0;
+        }
+    }
+
+    // shape functions and their derivaties
+    shape::shapeFunc<double> NdN_object(shape::ELEMTYPE::QUAD8);
+
+    for (unsigned int iGauss = 0; iGauss < nGauss; iGauss++){
+        x[0] = GaussPoints[iGauss * 2];                     // xi
+        w[0] = GaussPoints[iGauss * 2 + 1];                 // weight_xi
+
+        for (unsigned int jGauss = 0; jGauss < nGauss; jGauss++){
+            x[1] = GaussPoints[jGauss * 2];                 // eta
+            w[1] = GaussPoints[jGauss * 2 + 1];             // weight_eta
+
+            // get the values of shape functions at Gauss points
+            N = NdN_object.Nvalues(x);
+            // get the values of derivatives of shape functions at Gauss points
+            dN = NdN_object.dNvalues(x);
+
+            // initialize
+            for (unsigned int p = 0; p < NDIMS_REF; p++){
+                dxds[p] = 0.0;          //[dx/dxi, dx/deta]
+                dyds[p] = 0.0;          //[dy/dxi, dy/deta]
+                dzds[p] = 0.0;          //[dz/dxi, dz/deta]
+            }
+            for (unsigned int n = 0; n < NNODES_FACE; n++){
+                for (unsigned int p = 0; p < NDIMS_REF; p++){
+                    // dx/dxi, dx/deta
+                    dxds[p] += xe[NDIMS_PHY * n] * dN[NDIMS_REF * n + p];
+                    // dy/dxi, dy/deta
+                    dyds[p] += xe[NDIMS_PHY * n + 1] * dN[NDIMS_REF * n + p];
+                    // dz/dxi, dz/deta
+                    dzds[p] += xe[NDIMS_PHY * n + 2] * dN[NDIMS_REF * n + p];
+                }
+            }
+
+            // jacobian
+            jaco = (dyds[0]*dzds[1] - dyds[1]*dzds[0]) * (dyds[0]*dzds[1] - dyds[1]*dzds[0]) +
+                   (dzds[0]*dxds[1] - dzds[1]*dxds[0]) * (dzds[0]*dxds[1] - dzds[1]*dxds[0]) +
+                   (dxds[0]*dyds[1] - dxds[1]*dyds[0]) * (dxds[0]*dyds[1] - dxds[1]*dyds[0]);
+            jaco = sqrt(jaco);
+
+            for (unsigned int iDof = 0; iDof < NDOFS_NODE; iDof++){
+                for (unsigned int iN = 0; iN < NNODES_FACE; iN++){
+                    for (unsigned int jN = 0; jN < NNODES_FACE; jN++){
+                        feT(iN * NDOFS_NODE + iDof) += N[iN] * N[jN] * jaco * w[1] * w[0] * tN[jN * NDOFS_NODE + iDof];
+                    }
+                }
+            }
         } // jGauss integration
     } // iGauss integration
 }

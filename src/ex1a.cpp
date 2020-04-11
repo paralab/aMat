@@ -36,9 +36,9 @@
 
 #include "shfunction.hpp"
 #include "ke_matrix.hpp"
-#include "me_matrix.hpp"
 #include "fe_vector.hpp"
 #include "aMat.hpp"
+#include "integration.hpp"
 
 using Eigen::MatrixXd;
 using Eigen::Matrix;
@@ -146,7 +146,26 @@ int main( int argc, char *argv[] ) {
     }
 
     // find min & max element index in z direction
-    double d = (Nez)/(double)(size);
+    // partition number of elements in z direction
+    unsigned int nelem_z;
+    // minimum number of elements in z-dir for each rank
+    unsigned int nzmin = Nez/size;
+    // remaining
+    unsigned int nRemain = Nez % size;
+    // distribute nRemain uniformly from rank = 0 up to rank = nRemain - 1
+    if (rank < nRemain){
+        nelem_z = nzmin + 1;
+    } else {
+        nelem_z = nzmin;
+    }
+    if (rank < nRemain){
+        emin = rank * nzmin + rank;
+    } else {
+        emin = rank * nzmin + nRemain;
+    }
+    emax = emin + nelem_z - 1;
+
+    /* double d = (Nez)/(double)(size);
     zmin = (rank * d);
     if (rank == 0) zmin = zmin - 0.01*(hz);
     zmax = zmin + d;
@@ -162,10 +181,9 @@ int main( int argc, char *argv[] ) {
             emax = i;
             break;
         }
-    }
+    } */
 
     // number of owned elements
-    unsigned int nelem_z = (emax - emin + 1);
     unsigned int nelem_y = Ney;
     unsigned int nelem_x = Nex;
     unsigned int nelem = (nelem_x) * (nelem_y) * (nelem_z);
@@ -364,7 +382,7 @@ int main( int argc, char *argv[] ) {
             z = (double) (gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
 
             // fix rigid body motions:
-            if ((std::fabs(x) < zero_number) && (std::fabs(y) < zero_number) && (std::fabs(z) < zero_number)){
+            if ((fabs(x) < zero_number) && (fabs(y) < zero_number) && (fabs(z) < zero_number)){
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1; // constrained dof
                 bound_dofs[eid][nid * NDOF_PER_NODE] = 1;
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 1] = 1;
@@ -377,19 +395,19 @@ int main( int argc, char *argv[] ) {
                     bound_values[eid][(nid * NDOF_PER_NODE) + did] = -1000000;
                 }
             }
-            if ((std::fabs(x - Lx) < zero_number) && (std::fabs(y - Ly) < zero_number) && (std::fabs(z) < zero_number)){
+            if ((fabs(x - Lx) < zero_number) && (fabs(y - Ly) < zero_number) && (fabs(z) < zero_number)){
                 // node at (Lx,Ly,0) --> fix in x and z
                 bound_dofs[eid][nid * NDOF_PER_NODE] = 1;    //x
                 bound_dofs[eid][nid * NDOF_PER_NODE + 2] = 1;
                 bound_values[eid][nid * NDOF_PER_NODE] = 0.0;
                 bound_values[eid][nid * NDOF_PER_NODE + 2] = 0.0;
             }
-            if ((std::fabs(x - Lx) < zero_number) && (std::fabs(y) < zero_number) && (std::fabs(z) < zero_number)){
+            if ((fabs(x - Lx) < zero_number) && (fabs(y) < zero_number) && (fabs(z) < zero_number)){
                 // node at (Lx,0,0) --> fix in z
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1;
                 bound_values[eid][(nid * NDOF_PER_NODE) + 2] = 0.0;
             }
-            /* if ((std::fabs(x) < zero_number) && (std::fabs(y - Ly) < zero_number) && (std::fabs(z) < zero_number)){
+            /* if ((fabs(x) < zero_number) && (fabs(y - Ly) < zero_number) && (fabs(z) < zero_number)){
                 // node at (0, Ly, 0) --> fix in z
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1;
                 bound_values[eid][(nid * NDOF_PER_NODE) + 2] = 0.0;
@@ -438,10 +456,10 @@ int main( int argc, char *argv[] ) {
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             gNodeId = globalMap[eid][nid];
             z = (double) (gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
-            if (std::fabs(z - Lz) < zero_number){
+            if (fabs(z - Lz) < zero_number){
                 // element eid has one face is the top surface with applied traction
                 traction_top = true;
-            } else if (std::fabs(z) < zero_number){
+            } else if (fabs(z) < zero_number){
                 // element eid has one face is the bot surface with applied traction
                 traction_bot = true;
             }
@@ -524,6 +542,9 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_create_vec(sol_exact);
 
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
+    // Gauss points and weights
+    const unsigned int NGT = 2;
+    integration<double> intData(NGT);
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             gNodeId = globalMap[eid][nid];
@@ -538,7 +559,7 @@ int main( int argc, char *argv[] ) {
 
         // compute element stiffness matrix
         if (useEigen) {
-            ke_hex8_iso(kee[0], xe, E, nu);
+            ke_hex8_iso(kee[0], xe, E, nu, intData.Pts_n_Wts, NGT);
         } else {
             printf("Error: not yet implement element stiffness matrix which is not Eigen matrix format\n");
         }

@@ -19,22 +19,23 @@ if(MPI_LINK_FLAGS)
     set(LINK_FLAGS "${LINK_FLAGS} ${MPI_LINK_FLAGS}")
 endif()
 
-set(INCLUDE_FILES include/shfunction.hpp
+set(INCLUDE_FILES
         include/ke_matrix.hpp
-        include/me_matrix.hpp
         include/fe_vector.hpp
-        include/aMat.hpp)
+        include/aMat.hpp
+        include/integration.hpp
+        include/shapeFunc.hpp)
 
 set(SOURCE_FILES
-        src/shfunction.cpp
         src/ke_matrix.cpp
-        src/me_matrix.cpp
         src/fe_vector.cpp)
 
 # cmake options, which will be visible at ccmake ../
 option(BUILD_WITH_PETSC "Build code with the petsc" ON)
-option(AVX512 "turn on use AVX-512" OFF)
-option(AVX256 "turn on use AVX-256" OFF)
+option(AMAT_PROFILER "turn on the amat profiler counters" OFF)
+option(AVX_512 "turn on use AVX-512" OFF)
+option(AVX_256 "turn on use AVX-256" OFF)
+option(OMP_SIMD "turn on use OMP-SIMD" OFF)
 
 # if BUILD_WITH_PETSC ON , #define BUILD_WITH_PETSC
 if(BUILD_WITH_PETSC)
@@ -44,20 +45,26 @@ if(BUILD_WITH_PETSC)
 endif(BUILD_WITH_PETSC)
 
 
-if(AVX512)
-    add_definitions(-DAVX512)
+if(AVX_512)
+    add_definitions(-DAVX_512)
     #set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=corei7-avx")
     #set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=corei7-avx")
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-endif(AVX512)
+endif(AVX_512)
 
-if(AVX256)
-    add_definitions(-DAVX256)
+if(AVX_256)
+    add_definitions(-DAVX_256)
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-endif(AVX256)
+endif(AVX_256)
 
+if(OMP_SIMD)
+    add_definitions(-DOMP_SIMD)
+endif(OMP_SIMD)
+
+#set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -qopt-report=5 -qopt-report-phase=vec -qopt-report-file=stdout")
+#set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -qopt-report=5 -qopt-report-phase=vec -qopt-report-file=stdout")
 
 set(EIGEN_HEADER_DIR .)
 
@@ -103,6 +110,12 @@ target_include_directories(ex3 PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(ex3 PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(ex3 ${MPI_LIBRARIES} m)
 
+add_executable(ex4 src/ex4.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+target_include_directories(ex4 PUBLIC include)
+target_include_directories(ex4 PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(ex4 PRIVATE ${EIGEN_HEADER_DIR})
+target_link_libraries(ex4 ${MPI_LIBRARIES} m)
+
 if(BUILD_WITH_PETSC)
     target_include_directories(fem3d PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(fem3d ${PETSC_LIBRARIES})
@@ -124,4 +137,7 @@ if(BUILD_WITH_PETSC)
 
     target_include_directories(ex3 PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(ex3 ${PETSC_LIBRARIES})
+
+    target_include_directories(ex4 PUBLIC ${PETSC_INCLUDES})
+    target_link_libraries(ex4 ${PETSC_LIBRARIES})
 endif()

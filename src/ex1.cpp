@@ -35,11 +35,10 @@
 
 #include "Eigen/Dense"
 
-#include "shfunction.hpp"
 #include "ke_matrix.hpp"
-#include "me_matrix.hpp"
 #include "fe_vector.hpp"
 #include "aMat.hpp"
+#include "integration.hpp"
 
 using Eigen::MatrixXd;
 using Eigen::Matrix;
@@ -147,7 +146,26 @@ int main( int argc, char *argv[] ) {
     }
 
     // find min & max element index in z direction
-    double d = (Nez)/(double)(size);
+    // partition number of elements in z direction
+    unsigned int nelem_z;
+    // minimum number of elements in z-dir for each rank
+    unsigned int nzmin = Nez/size;
+    // remaining
+    unsigned int nRemain = Nez % size;
+    // distribute nRemain uniformly from rank = 0 up to rank = nRemain - 1
+    if (rank < nRemain){
+        nelem_z = nzmin + 1;
+    } else {
+        nelem_z = nzmin;
+    }
+    if (rank < nRemain){
+        emin = rank * nzmin + rank;
+    } else {
+        emin = rank * nzmin + nRemain;
+    }
+    emax = emin + nelem_z - 1;
+
+    /* double d = (Nez)/(double)(size);
     zmin = (rank * d);
     if (rank == 0) zmin = zmin - 0.01*(hz);
     zmax = zmin + d;
@@ -163,10 +181,9 @@ int main( int argc, char *argv[] ) {
             emax = i;
             break;
         }
-    }
+    } */
 
     // number of owned elements
-    unsigned int nelem_z = (emax - emin + 1);
     unsigned int nelem_y = Ney;
     unsigned int nelem_x = Nex;
     unsigned int nelem = (nelem_x) * (nelem_y) * (nelem_z);
@@ -365,7 +382,7 @@ int main( int argc, char *argv[] ) {
             z = (double) (gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
 
             // nodes on bottom surface have zero-displacement in z direction
-            if (std::fabs(z) < zero_number) {
+            if (fabs(z) < zero_number) {
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1;   // constrained dof in z-direction
                 bound_dofs[eid][nid * NDOF_PER_NODE] = 0;         // free dof in x dir
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 1] = 0;   // free dof in y dir
@@ -380,7 +397,7 @@ int main( int argc, char *argv[] ) {
             }
 
             // node at origin --> fix in all directions for rigid-body motions
-            if ((std::fabs(x) < zero_number) && (std::fabs(y) < zero_number) && (std::fabs(z) < zero_number)){
+            if ((fabs(x) < zero_number) && (fabs(y) < zero_number) && (fabs(z) < zero_number)){
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1; // constrained dof
                 bound_dofs[eid][nid * NDOF_PER_NODE] = 1;
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 1] = 1;
@@ -390,7 +407,7 @@ int main( int argc, char *argv[] ) {
             }
 
             // node at corner diagonally opposite with origin --> fix in x direction to prevent rotation in z
-            if ((std::fabs(x-Lx) < zero_number) && (std::fabs(y-Ly) < zero_number) && (std::fabs(z) < zero_number)){
+            if ((fabs(x-Lx) < zero_number) && (fabs(y-Ly) < zero_number) && (fabs(z) < zero_number)){
                 bound_dofs[eid][nid * NDOF_PER_NODE] = 1;
                 bound_values[eid][nid * NDOF_PER_NODE] = 0.0;
             }
@@ -437,19 +454,17 @@ int main( int argc, char *argv[] ) {
     double xeSt [12];
     // force vector due to traction
     Matrix<double, 12, 1> feT;
-    // number of Gauss points in each direction for integration
-    const unsigned int nGauss = 2;
-    // coordinates and weights for Gauss points
-    double* GaussPoints;
-    // generate Gauss points
-    GaussPoints = gauss(nGauss);
+
+    // Gauss points and weights
+    const unsigned int NGT = 2;
+    integration<double> intData(NGT);
 
     for (unsigned int eid = 0; eid < nelem; eid++){
         bool traction = false;
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             gNodeId = globalMap[eid][nid];
             z = (double) (gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
-            if (std::fabs(z - Lz) < zero_number){
+            if (fabs(z - Lz) < zero_number){
                 // element eid has one face is the top surface with applied traction
                 traction = true;
                 break;
@@ -483,7 +498,8 @@ int main( int argc, char *argv[] ) {
             }
 
             // compute force vector due traction applied on one face of element
-            feT_hex8_iso(feT, xeSt, nodalTraction, GaussPoints, nGauss);
+            feT_hex8_iso(feT, xeSt, nodalTraction, intData.Pts_n_Wts, NGT);
+            //for (unsigned int i = 0; i < 12; i++) printf("i %d, feT= %f\n", i, feT[i]);
 
             // put traction force vector into element force vector
             elem_trac[eid].resize(NNODE_PER_ELEM * NDOF_PER_NODE, 1);
@@ -546,7 +562,7 @@ int main( int argc, char *argv[] ) {
 
         // compute element stiffness matrix
         if (useEigen) {
-            ke_hex8_iso(kee[0], xe, E, nu);
+            ke_hex8_iso(kee[0], xe, E, nu, intData.Pts_n_Wts, NGT);
         } else {
             printf("Error: not yet implement element stiffness matrix which is not Eigen matrix format\n");
         }
@@ -556,6 +572,7 @@ int main( int argc, char *argv[] ) {
             if (matFree) {
                 // copy element matrix to store in m_epMat[eid]
                 stMat.copy_element_matrix(eid, kee[0], 0, 0, 1);
+
             } else {
                 stMat.petsc_set_element_matrix(eid, kee[0], 0, 0, ADD_VALUES);
             }
@@ -583,20 +600,24 @@ int main( int argc, char *argv[] ) {
     stMat.petsc_finalize_vec(rhs);
 
     char fname[256];
+
+    sprintf(fname,"rhsVec_beforeBC_%d.dat",size);
+    stMat.dump_vec(rhs,fname);
+
     // apply dirichlet BCs
     if (!matFree){
         stMat.apply_bc_mat();
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
-        //sprintf(fname,"matrix_ex1_%d.dat",size);
-        //stMat.dump_mat(fname);
+        sprintf(fname,"matrix_%d.dat",size);
+        stMat.dump_mat(fname);
     }
     stMat.apply_bc_rhs(rhs);
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    //sprintf(fname,"rhsVec_%d.dat",size);
-    //stMat.dump_vec(rhs,fname);
+    sprintf(fname,"rhsVec_%d.dat",size);
+    stMat.dump_vec(rhs,fname);
 
     // solve
     stMat.petsc_solve((const Vec) rhs, out);
@@ -688,8 +709,6 @@ int main( int argc, char *argv[] ) {
     delete [] prescribedValues_ptr;
 
     delete [] elem_trac;
-
-    delete [] GaussPoints;
 
     VecDestroy(&out);
     VecDestroy(&sol_exact);

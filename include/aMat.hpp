@@ -16,6 +16,7 @@
 #include <Eigen/Dense>
 
 #include <mpi.h>
+#include <omp.h>
 
 #include <petsc.h>
 #include <petscvec.h>
@@ -38,8 +39,11 @@
 #define AMAT_MAX_BLOCKSDIM_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL)
 
 //////////////////////////////////////////////////////////////////////////////////////////////
-
 namespace par {
+
+    enum class PROFILE { MATVEC=0, MATVEC_MUL, MATVEC_ACC,
+                         PETSC_ASS, PETSC_MATVEC, 
+                         LAST };
 
     enum class AMAT_TYPE { PETSC_SPARSE, MAT_FREE };
 
@@ -264,21 +268,23 @@ namespace par {
         typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
         typedef Eigen::Matrix<DT, Eigen::Dynamic, 1> EigenVec;
 
-    #ifdef AVX512
-        #define AVX_SIMD_LENGTH 8
-        protected:
-        /**@brief compute y = alpha * x + y using vector register of AVX512, length of x and y is n */
-        par::Error avx512_vec_axpy(double alpha, double* x, double* y, unsigned int n);
-    #elif AVX256
-        #define AVX_SIMD_LENGTH 4
-        protected:
-        /**@brief compute y = alpha * x + y using vector register of AVX256, length of x and y is n */
-        par::Error avx256_vec_axpy(double alpha, double* x, double* y, unsigned int n);
+    // vector length and alignment
+
+    #ifdef AVX_512
+        #define SIMD_LENGTH (512/(sizeof(DT) * 8))
+        #define ALIGNMENT 32
+    #elif AVX_256
+        #define SIMD_LENGTH (256/(sizeof(DT) * 8))
+        #define ALIGNMENT 32
+    #elif OMP_SIMD
+        #define SIMD_LENGTH (512/(sizeof(DT) * 8))
+        #define ALIGNMENT 16
     #else
-        protected:
-        /**@brief compute y = alpha * x + y length of x and y is n */
-        par::Error vec_axpy(DT alpha, DT* x, DT* y, LI n);
+        #define ALIGNMENT 16
     #endif
+
+    // number of nonzero terms in the matrix (used in matrix-base and block Jacobi preconditioning)
+    #define NNZ (81*3) // for the case there are 8 of 20-node quadratic elements sharing the node
 
     protected:
         /**@brief Flag to use matrix-free or matrix-based method*/
@@ -310,7 +316,7 @@ namespace par {
         /**@brief assembled stiffness matrix */
         Mat m_pMat;
 
-        /**@brief storage of element matrices (each block of elemental matrix is an (DT*)) */
+        /**@brief storage of element matrices */
         std::vector< DT* >* m_epMat;
 
         /**@brief map from local DoF of element to global DoF: m_ulpMap[eid][local_id]  = global_id */
@@ -412,15 +418,14 @@ namespace par {
         /**@KfcUc (= Kfc * Uc) used to apply bc for rhs */
         Vec KfcUcVec;
 
-
         /**@brief TEMPORARY VARIABLES FOR DEBUGGING */
         Mat m_pMat_matvec; // matrix created by matvec() to compare with m_pMat
 
     private:
         /**@brief elemental vectors used in matvec */
-        DT* ue;
         DT* ve;
-
+        DT* ue;
+        
         /**@brief used to save constrained dofs when applying BCs in matvec */
         DT* Uc;
         LI n_owned_constraints;
@@ -836,23 +841,20 @@ namespace par {
 
     template <typename DT,typename GI, typename LI>
     aMat<DT,GI,LI>::~aMat() {
-        //delete [] m_epMat;
+
         if (m_MatType == AMAT_TYPE::MAT_FREE){
             if (m_epMat != nullptr){
                 for (LI eid = 0; eid < m_uiNumElems; eid++){
                     for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
                         if (m_epMat[eid][bid] != nullptr){
-                            #ifdef AVX512
-                                free(m_epMat[eid][bid]);
-                            #elif AVX256
-                                free(m_epMat[eid][bid]);
-                            #else
-                                delete [] m_epMat[eid][bid];
-                            #endif
+                            // delete the block matrix bid
+                            free(m_epMat[eid][bid]);
                         }
                     }
+                    // clear the content of vector of DT* and resize to 0
                     m_epMat[eid].clear();
                 }
+                // delete the array point
                 delete [] m_epMat;
             }
         }
@@ -865,8 +867,15 @@ namespace par {
                 }
                 delete [] m_ulpMap;
             }
-            if (ue != nullptr) delete [] ue;
-            if (ve != nullptr) delete [] ve;
+
+            if (ue != nullptr){
+                free(ue);
+            }
+            
+            if (ve != nullptr) {
+                free(ve);
+            }
+
             if (n_owned_constraints > 0) delete [] Uc;
         }
         //else if( m_MatType == AMAT_TYPE::PETSC_SPARSE ) {
@@ -926,11 +935,11 @@ namespace par {
             MatSetSizes(m_pMat, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
             if(m_uiSize > 1) {
                 MatSetType(m_pMat, MATMPIAIJ);
-                MatMPIAIJSetPreallocation( m_pMat, 30, PETSC_NULL, 30, PETSC_NULL );
+                MatMPIAIJSetPreallocation( m_pMat, NNZ, PETSC_NULL, NNZ, PETSC_NULL );
             }
             else {
                 MatSetType(m_pMat, MATSEQAIJ);
-                MatSeqAIJSetPreallocation(m_pMat, 30, PETSC_NULL);
+                MatSeqAIJSetPreallocation(m_pMat, NNZ, PETSC_NULL);
             }
             // this will disable on preallocation errors (but not good for performance)
             MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
@@ -944,13 +953,7 @@ namespace par {
                 for (LI eid = 0; eid < m_uiNumElems; eid++){
                     for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
                         if (m_epMat[eid][bid] != nullptr){
-                            #ifdef AVX512
-                                free(m_epMat[eid][bid]);
-                            #elif AVX256
-                                free(m_epMat[eid][bid]);
-                            #else
-                                delete [] m_epMat[eid][bid];
-                            #endif
+                            free(m_epMat[eid][bid]);
                         }
                     }
                     m_epMat[eid].clear();
@@ -958,8 +961,11 @@ namespace par {
                 delete [] m_epMat;
                 m_epMat = nullptr;
             }
-            //m_epMat = new std::vector<EigenMat> [m_uiNumElems];
-            m_epMat = new std::vector<DT*> [m_uiNumElems]; // we do not know how many blocks and size of blocks for each element at this time
+
+            // we do not know how many blocks and size of blocks for each element at this time
+            if (m_MatType == AMAT_TYPE::MAT_FREE){
+                m_epMat = new std::vector<DT*> [m_uiNumElems];
+            }
 
             // point to provided local Map
             m_uipLocalMap = element_to_rank_map;
@@ -1055,20 +1061,14 @@ namespace par {
                 for (LI eid = 0; eid < m_uiNumElems; eid++){
                     for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
                         if (m_epMat[eid][bid] != nullptr){
-                            #ifdef AVX512
-                                free(m_epMat[eid][bid]);
-                            #elif AVX256
-                                free(m_epMat[eid][bid]);
-                            #else
-                                delete [] m_epMat[eid][bid];
-                            #endif
+                            free(m_epMat[eid][bid]);
                         }
                     }
                     m_epMat[eid].clear();
                 }
                 // we do not delete [] m_epMat because the number of elements do not change when map is updated
             }
-
+            
             // point to new local map
             m_uipLocalMap = element_to_rank_map;
 
@@ -1546,6 +1546,8 @@ namespace par {
             PetscViewer viewer;
             // write to ASCII file
             PetscViewerASCIIOpen( m_comm, filename, &viewer );
+            // write to file readable by Matlab (filename must be name.m)
+            //PetscViewerPushFormat( viewer, PETSC_VIEWER_ASCII_MATLAB ); // comment when what to write in normal ASCII text
             VecView( vec, viewer );
             PetscViewerDestroy( &viewer );
         }
@@ -1648,53 +1650,41 @@ namespace par {
         // allocate memory to store e_mat (e_mat is one of blocks of the elemental matrix of element eid)
         LI num_rows = e_mat.rows();
         assert (num_rows == e_mat.cols());
-        // delete of this memory will be done in aMat destructor and update_map
-        //DT* block = new DT [num_rows * num_rows];
-        DT* block;
-        //aligned_alloc
+        
+        // allocate and align memory for elemental matrices
+        #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
+            void* ptr;
+            posix_memalign(&ptr, ALIGNMENT, (num_rows * num_rows) * sizeof(DT));
+            m_epMat[eid][index] = (DT*)ptr;
 
-        #ifdef AVX512
-            posix_memalign((void **)&block, AVX_SIMD_LENGTH * sizeof(double),(num_rows * num_rows) * sizeof(DT));
-            //block = (DT*)aligned_alloc(AVX_SIMD_LENGTH * sizeof(double), (num_rows * num_rows) * sizeof(DT));
+            // only supported by Intel compiler:
+            //m_epMat[eid][index] = (DT*)_mm_malloc((num_rows * num_rows) * sizeof(DT), ALIGNMENT);
 
-            // store block in column-major
-            LI ind = 0;
+        #else
+            void* ptr;
+            posix_memalign(&ptr, ALIGNMENT, (num_rows * num_rows) * sizeof(DT));
+            m_epMat[eid][index] = (DT*)ptr;
+            //m_epMat[eid][index] = (DT*)malloc((num_rows * num_rows) * sizeof(DT));
+        #endif
+        
+        // store block matrix in column-major for simpd, row-major for non-simd
+        LI ind = 0;
+        #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
             for (LI c = 0; c < num_rows; c++){
                 for (LI r = 0; r < num_rows; r++){
-                    block[ind] = e_mat(r,c);
-                    ind++;
-                }
-            }
-        #elif AVX256
-            posix_memalign((void **)&block, AVX_SIMD_LENGTH * sizeof(double),(num_rows * num_rows) * sizeof(DT));
-            //block = (DT*)aligned_alloc(AVX_SIMD_LENGTH * sizeof(double), (num_rows * num_rows) * sizeof(DT));
-
-            // store block in column-major
-            LI ind = 0;
-            for (LI c = 0; c < num_rows; c++){
-                for (LI r = 0; r < num_rows; r++){
-                    block[ind] = e_mat(r,c);
+                    m_epMat[eid][index][ind] = e_mat(r,c);
                     ind++;
                 }
             }
         #else
-            block = new DT [num_rows * num_rows];
-
-            // store block in row-major
-            LI ind = 0;
             for (LI r = 0; r < num_rows; r++){
                 for (LI c = 0; c < num_rows; c++){
-                    block[ind] = e_mat(r,c);
+                    m_epMat[eid][index][ind] = e_mat(r,c);
                     ind++;
                 }
             }
         #endif
-
-
-
-        // add block (address) to m_epMat[eid]
-        m_epMat[eid][index] = block;
-
+        
         // prepare for bc of rhs
         std::vector<PetscScalar> KfcUcValues;
         std::vector<PetscInt> rowIndices;
@@ -1731,56 +1721,6 @@ namespace par {
         return Error::SUCCESS;
     }// copy_element_matrix
 
-    /* template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) {
-        // resize the vector of blocks for element eid
-        m_epMat[eid].resize(blocks_dim * blocks_dim);
-
-        // 1D-index of (block_i, block_j)
-        LI index = (block_i * blocks_dim) + block_j;
-
-        // copy e_mat to the location of index
-        m_epMat[eid][index] = e_mat;
-
-        // prepare for bc of rhs
-        LI num_rows = e_mat.rows();
-        assert(num_rows == e_mat.cols());
-        std::vector<PetscScalar> KfcUcValues;
-        std::vector<PetscInt> rowIndices;
-        PetscInt rowId;
-        PetscScalar temp;
-        bool bdrFlag, rowFlag;
-
-        // loop over rows of the element matrix (block)
-        for (LI r = 0; r < num_rows; r++){
-            rowFlag = false;
-            // continue if row is associated with a free dof
-            if (m_uipBdrMap[eid][block_i * num_rows + r] == 0){
-                rowId = m_ulpMap[eid][block_i * num_rows + r];
-                temp = 0;
-                // loop over columns of the element matrix (block)
-                for (LI c = 0; c < num_rows; c++){
-                    // continue if column is associated with a constrained dof
-                    if (m_uipBdrMap[eid][block_j * num_rows + c] == 1){
-                        // accumulate Kfc[r,c]*Uc[c]
-                        temp += e_mat(r,c) * m_dtPresValMap[eid][block_j * num_rows + c];
-                        rowFlag = true; // this rowId has constrained column dof
-                        bdrFlag = true; // this element matrix has KfcUc
-                    }
-                }
-                if (rowFlag){
-                    rowIndices.push_back(rowId);
-                    KfcUcValues.push_back(-1.0*temp);
-                }
-            }
-        }
-
-        if (bdrFlag){
-            VecSetValues(KfcUcVec, rowIndices.size(), rowIndices.data(), KfcUcValues.data(), ADD_VALUES);
-        }
-
-        return Error::SUCCESS;
-    } */// copy_element_matrix
 
     template <typename DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::mat_get_diagonal(DT* diag, bool isGhosted){
@@ -1800,22 +1740,30 @@ namespace par {
     par::Error aMat<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
         LI rowID;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+
             // number of blocks in each direction (i.e. blocks_dim)
             LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            
             // number of block must be a square of blocks_dim
             assert((blocks_dim*blocks_dim) == m_epMat[eid].size());
+            
             // number of dofs per block, must be the same for all blocks
             const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
+            
             LI block_row_offset = 0;
             for (LI block_i = 0; block_i < blocks_dim; block_i++) {
+
                 // only get diagonals of diagonal blocks
                 LI index = block_i * blocks_dim + block_i;
+
                 // diagonal block must be non-zero
                 assert (m_epMat[eid][index] != nullptr);
+
                 for (LI r = 0; r < num_dofs_per_block; r++){
                     // local (rank) row ID
                     rowID = m_uipLocalMap[eid][block_row_offset + r];
-                    // accumulate the diagonal term
+
+                    // diagonals are the same for both simd and non-simd cases
                     diag[rowID] += m_epMat[eid][index][r * num_dofs_per_block + r];
                 }
                 block_row_offset += num_dofs_per_block;
@@ -1915,15 +1863,12 @@ namespace par {
                                     matr.setRank(rank_r);
                                     matr.setRowId(loc_RowId);
                                     matr.setColId(loc_ColId);
-                                    #ifdef AVX512
-                                    // elemental block matrix stored in column-major
-                                    matr.setVal(m_epMat[eid][index][(c * num_dofs_per_block) + r]);
-                                    #elif AVX256
-                                    // elemental block matrix stored in column-major
-                                    matr.setVal(m_epMat[eid][index][(c * num_dofs_per_block) + r]);
+                                    #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD) 
+                                        // elemental block matrix stored in column-major
+                                        matr.setVal(m_epMat[eid][index][(c * num_dofs_per_block) + r]);
                                     #else
-                                    // elemental block matrix stored in row-major
-                                    matr.setVal(m_epMat[eid][index][(r * num_dofs_per_block) + c]);
+                                        // elemental block matrix stored in row-major
+                                        matr.setVal(m_epMat[eid][index][(r * num_dofs_per_block) + c]);
                                     #endif
 
                                     if ((rowID >= m_uiDofLocalBegin) && (rowID < m_uiDofLocalEnd) && (colID >= m_uiDofLocalBegin) && (colID < m_uiDofLocalEnd)){
@@ -1978,7 +1923,6 @@ namespace par {
             // move i to the next member
             ind++;
         }
-
 
         unsigned int* sendCounts = new unsigned int[m_uiSize];
         unsigned int* recvCounts = new unsigned int[m_uiSize];
@@ -2085,10 +2029,20 @@ namespace par {
             if (max_dpe < num_dofs) max_dpe = num_dofs;
         }
         m_uiMaxDofsPerElem = max_dpe;
-
-        // allocate memory for ue and ve
-        ue = new DT [m_uiMaxDofsPerElem];
-        ve = new DT [m_uiMaxDofsPerElem];
+        
+        // allocate ue and ve: to benefit "omp parallel for" ue and ve should not be one shared among threads
+        #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
+            void* ptr;
+            posix_memalign(&ptr, ALIGNMENT, m_uiMaxDofsPerElem * sizeof(DT));
+            ve= (DT*)ptr;
+            posix_memalign(&ptr, ALIGNMENT, m_uiMaxDofsPerElem * sizeof(DT));
+            ue = (DT*)ptr;
+        #else
+            //ue = new DT [m_uiMaxDofsPerElem];
+            //ve = new DT [m_uiMaxDofsPerElem];
+            ue = (DT*)malloc(m_uiMaxDofsPerElem * sizeof(DT));
+            ve = (DT*)malloc(m_uiMaxDofsPerElem * sizeof(DT));
+        #endif
 
         return Error::SUCCESS;
     }// get_max_dof_per_elem
@@ -2157,7 +2111,7 @@ namespace par {
         if (total_recv > 0){
             ctx.allocateRecvBuffer(sizeof(DT) * total_recv);
             DT* recv_buf = (DT*) ctx.getRecvBuffer();
-
+            
             for (unsigned int r = 0; r < m_uivRecvRankIds.size(); r++){
                 unsigned int i = m_uivRecvRankIds[r];
                 MPI_Request* req = new MPI_Request();
@@ -2238,9 +2192,10 @@ namespace par {
                 ctx.getRequestList().push_back(req);
             }
         }
-
+        
         // send data of ghost DoFs to ranks owning the DoFs
         if (total_send > 0){
+            
             ctx.allocateSendBuffer(sizeof(DT) * total_send);
             DT* send_buf = (DT*) ctx.getSendBuffer();
 
@@ -2301,7 +2256,8 @@ namespace par {
     } // ghost_send_end
 
     template <typename  DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::matvec( DT* v, const DT* u, bool isGhosted /* = false */ ) {
+    par::Error aMat<DT,GI,LI>::matvec(DT* v, const DT* u, bool isGhosted) {
+
         if( isGhosted ) {
             // std::cout << "GHOSTED MATVEC" << std::endl;
             matvec_ghosted(v, (DT*)u);
@@ -2324,112 +2280,14 @@ namespace par {
             delete[] gu;
         }
         return Error::SUCCESS;
-    } // matvec
 
-    #ifdef AVX512
-        // y = alpha * x + y;
-        template <typename DT, typename GI, typename LI>
-        par::Error aMat<DT,GI,LI>::avx512_vec_axpy(double alpha, double* x, double* y, unsigned int n){
-            unsigned int remain = n % AVX_SIMD_LENGTH;
-            unsigned int n_intervals = n / AVX_SIMD_LENGTH;
-            // broadcast alpha to form alpha vector
-            __m512d alphaVec = _mm512_set1_pd(alpha);
-            for (LI i = 0; i < n_intervals; i++){
-                // load components of x to xVec
-                __m512d xVec = _mm512_loadu_pd(&x[AVX_SIMD_LENGTH * i]);
-                // load components of y to yVec
-                __m512d yVec = _mm512_loadu_pd(&y[AVX_SIMD_LENGTH * i]);
-                // vector multiplication tVec = alphaVec * xVec
-                __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
-                // accumulate tVec to yVec
-                yVec = _mm512_add_pd(tVec, yVec);
-                // store yVec to y
-                _mm512_storeu_pd(&y[AVX_SIMD_LENGTH * i], yVec);
-            }
-            if (remain != 0){
-                double* xVec_remain = new double[AVX_SIMD_LENGTH];
-                double* yVec_remain = new double[AVX_SIMD_LENGTH];
-                for (unsigned int i = 0; i < remain; i++){
-                    xVec_remain[i] = x[i + n_intervals * AVX_SIMD_LENGTH];
-                    yVec_remain[i] = y[i + n_intervals * AVX_SIMD_LENGTH];
-                }
-                for (unsigned int i = remain; i < AVX_SIMD_LENGTH; i++){
-                    xVec_remain[i] = 0.0;
-                    yVec_remain[i] = 0.0;
-                }
-                __m512d xVec = _mm512_loadu_pd(&xVec_remain[0]);
-                __m512d yVec = _mm512_loadu_pd(&yVec_remain[0]);
-                __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
-                yVec = _mm512_add_pd(tVec, yVec);
-                _mm512_storeu_pd(&yVec_remain[0], yVec);
-                for (unsigned int i = 0; i < remain; i++){
-                    y[i + n_intervals * AVX_SIMD_LENGTH] = yVec_remain[i];
-                }
-                delete [] xVec_remain;
-                delete [] yVec_remain;
-            }
-            return Error::SUCCESS;
-        }
-    #elif AVX256
-        // y = alpha * x + y;
-        template <typename DT, typename GI, typename LI>
-        par::Error aMat<DT,GI,LI>::avx256_vec_axpy(double alpha, double* x, double* y, unsigned int n){
-            unsigned int remain = n % AVX_SIMD_LENGTH;
-            unsigned int n_intervals = n / AVX_SIMD_LENGTH;
-            // broadcast alpha to form alpha vector
-            __m256d alphaVec = _mm256_set1_pd(alpha);
-            for (LI i = 0; i < n_intervals; i++){
-                // load components of x to xVec
-                __m256d xVec = _mm256_load_pd(&x[AVX_SIMD_LENGTH * i]);
-                // load components of y to yVec
-                __m256d yVec = _mm256_load_pd(&y[AVX_SIMD_LENGTH * i]);
-                // vector multiplication tVec = alphaVec * xVec
-                __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
-                // accumulate tVec to yVec
-                yVec = _mm256_add_pd(tVec, yVec);
-                // store yVec to y
-                _mm256_storeu_pd(&y[AVX_SIMD_LENGTH * i], yVec);
-            }
-            if (remain != 0){
-                double* xVec_remain = new double[AVX_SIMD_LENGTH];
-                double* yVec_remain = new double[AVX_SIMD_LENGTH];
-                for (unsigned int i = 0; i < remain; i++){
-                    xVec_remain[i] = x[i + n_intervals * AVX_SIMD_LENGTH];
-                    yVec_remain[i] = y[i + n_intervals * AVX_SIMD_LENGTH];
-                }
-                for (unsigned int i = remain; i < AVX_SIMD_LENGTH; i++){
-                    xVec_remain[i] = 0.0;
-                    yVec_remain[i] = 0.0;
-                }
-                __m256d xVec = _mm256_load_pd(&xVec_remain[0]);
-                __m256d yVec = _mm256_load_pd(&yVec_remain[0]);
-                __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
-                yVec = _mm256_add_pd(tVec, yVec);
-                _mm256_storeu_pd(&yVec_remain[0], yVec);
-                for (unsigned int i = 0; i < remain; i++){
-                    y[i + n_intervals * AVX_SIMD_LENGTH] = yVec_remain[i];
-                }
-                delete [] xVec_remain;
-                delete [] yVec_remain;
-            }
-            return Error::SUCCESS;
-        }
-    #else
-        // y = alpha * x + y;
-        template <typename DT, typename GI, typename LI>
-        par::Error aMat<DT,GI,LI>::vec_axpy(DT alpha, DT* x, DT* y, LI n){
-            for (LI i = 0; i < n; i++){
-                y[i] += alpha * x[i];
-            }
-            return Error::SUCCESS;
-        }
-    #endif
+    } // matvec
 
     // matvec (v = K * u) embeded applying bc by modifying matrix
     template <typename  DT, typename GI, typename LI>
     par::Error aMat<DT,GI,LI>::matvec_ghosted( DT* v, DT* u ) {
 
-        LI blocks_dim, num_dofs_per_bolck;
+        LI blocks_dim, num_dofs_per_block;
 
         // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumDofsTotal)
         for (unsigned int i = 0; i < m_uiDofPostGhostEnd; i++){
@@ -2456,36 +2314,142 @@ namespace par {
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
             LI block_row_offset = 0;
             LI block_col_offset = 0;
-
+            
             // number of dofs per block must be the same for all blocks
-            const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
+            num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
                 for (LI block_j = 0; block_j < blocks_dim; block_j++){
 
-                    LI index = block_i * blocks_dim + block_j;
-
-                    if (m_epMat[eid][index] != nullptr){
-
+                    LI block_ID = block_i * blocks_dim + block_j;
+                    
+                    if (m_epMat[eid][block_ID] != nullptr){
                         // extract block-element vector ue from structure vector u, and initialize ve
                         for (LI c = 0; c < num_dofs_per_block; c++) {
                             colID = m_uipLocalMap[eid][block_col_offset + c];
                             ue[c] = u[colID];
                             ve[c] = 0.0;
                         }
-                        // multiply block-element matrix with block-element vector
-                        for (LI i = 0; i < num_dofs_per_block; i++){
-                            #ifdef AVX512
-                                avx512_vec_axpy(ue[i], &m_epMat[eid][index][i * num_dofs_per_block], ve, num_dofs_per_block);
-                            #elif AVX256
-                                avx256_vec_axpy(ue[i], &m_epMat[eid][index][i * num_dofs_per_block], ve, num_dofs_per_block);
-                            #else
-                                for (LI j = 0; j < num_dofs_per_block; j++){
-                                    ve[i] += m_epMat[eid][index][(i * num_dofs_per_block) + j] * ue[j];
+
+                        // ve = elemental matrix * ue
+                        #ifdef AVX_512
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
+                                unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
+                                DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                const DT alpha = ue[c];
+                                DT* y = ve;
+                                // broadcast alpha to form alpha vector
+                                __m512d alphaVec = _mm512_set1_pd(alpha);
+                                // vector operation y += alpha * x;
+                                for (LI j = 0; j < n_intervals; j++){
+                                    // load components of x to xVec
+                                    __m512d xVec = _mm512_loadu_pd(&x[SIMD_LENGTH * j]);
+                                    // load components of y to yVec
+                                    __m512d yVec = _mm512_loadu_pd(&y[SIMD_LENGTH * j]);
+                                    // vector multiplication tVec = alphaVec * xVec
+                                    __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
+                                    // accumulate tVec to yVec
+                                    yVec = _mm512_add_pd(tVec, yVec);
+                                    // store yVec to y
+                                    _mm512_storeu_pd(&y[SIMD_LENGTH * j], yVec);
                                 }
-                            #endif
-                        }
+                                // scalar operation for the remainder
+                                if (remain != 0){
+                                    double* xVec_remain = new double[SIMD_LENGTH];
+                                    double* yVec_remain = new double[SIMD_LENGTH];
+                                    for (LI j = 0; j < remain; j++){
+                                        xVec_remain[j] = x[j + n_intervals * SIMD_LENGTH];
+                                        yVec_remain[j] = y[j + n_intervals * SIMD_LENGTH];
+                                    }
+                                    for (unsigned int j = remain; j < SIMD_LENGTH; j++){
+                                        xVec_remain[j] = 0.0;
+                                        yVec_remain[j] = 0.0;
+                                    }
+                                    __m512d xVec = _mm512_loadu_pd(&xVec_remain[0]);
+                                    __m512d yVec = _mm512_loadu_pd(&yVec_remain[0]);
+                                    __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
+                                    yVec = _mm512_add_pd(tVec, yVec);
+                                    _mm512_storeu_pd(&yVec_remain[0], yVec);
+                                    for (unsigned int j = 0; j < remain; j++){
+                                        y[j + n_intervals * SIMD_LENGTH] = yVec_remain[j];
+                                    }
+                                    delete [] xVec_remain;
+                                    delete [] yVec_remain;
+                                }
+                            }
+                            
+                        #elif AVX_256
+                        
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                
+                                unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
+                                unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
+                                DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                const DT alpha = ue[c];
+                                DT* y = ve;
+                                // broadcast alpha to form alpha vector
+                                __m256d alphaVec = _mm256_set1_pd(alpha);
+                                // vector operation y += alpha * x;
+                                for (LI i = 0; i < n_intervals; i++){
+                                    // load components of x to xVec
+                                    __m256d xVec = _mm256_load_pd(&x[SIMD_LENGTH * i]);
+                                    
+                                    // load components of y to yVec
+                                    __m256d yVec = _mm256_load_pd(&y[SIMD_LENGTH * i]);
+                                    // vector multiplication tVec = alphaVec * xVec
+                                    __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
+                                    // accumulate tVec to yVec
+                                    yVec = _mm256_add_pd(tVec, yVec);
+                                    // store yVec to y
+                                    _mm256_storeu_pd(&y[SIMD_LENGTH * i], yVec);
+                                }
+                                
+                                // scalar operation for the remainder
+                                if (remain != 0){
+                                    
+                                    double* xVec_remain = new double[SIMD_LENGTH];
+                                    double* yVec_remain = new double[SIMD_LENGTH];
+                                    for (unsigned int i = 0; i < remain; i++){
+                                        xVec_remain[i] = x[i + n_intervals * SIMD_LENGTH];
+                                        yVec_remain[i] = y[i + n_intervals * SIMD_LENGTH];
+                                    }
+                                    for (unsigned int i = remain; i < SIMD_LENGTH; i++){
+                                        xVec_remain[i] = 0.0;
+                                        yVec_remain[i] = 0.0;
+                                    }
+                                    __m256d xVec = _mm256_load_pd(&xVec_remain[0]);
+                                    __m256d yVec = _mm256_load_pd(&yVec_remain[0]);
+                                    __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
+                                    yVec = _mm256_add_pd(tVec, yVec);
+                                    _mm256_storeu_pd(&yVec_remain[0], yVec);
+                                    for (unsigned int i = 0; i < remain; i++){
+                                        y[i + n_intervals * SIMD_LENGTH] = yVec_remain[i];
+                                    }
+                                    delete [] xVec_remain;
+                                    delete [] yVec_remain;
+                                }
+                            }
+                        #elif OMP_SIMD
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                const DT alpha = ue[c];
+                                const DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                DT* y = ve;
+                                #pragma omp simd aligned(x, y : ALIGNMENT) safelen(512)
+                                for (LI r = 0; r < num_dofs_per_block; r++){
+                                    y[r] += alpha * x[r];
+                                }
+                            }
+                        #else
+                            #pragma novector noparallel nounroll
+                            for (LI r = 0; r < num_dofs_per_block; r++){
+                                #pragma novector noparallel nounroll
+                                for (LI c = 0; c < num_dofs_per_block; c++){
+                                    ve[r] += m_epMat[eid][block_ID][(r * num_dofs_per_block) + c] * ue[c];
+                                }
+                            }
+                        #endif
 
                         // accumulate element vector ve to structure vector v
                         for (unsigned int r = 0; r < num_dofs_per_block; r++){
@@ -2637,7 +2601,7 @@ namespace par {
 
         //printf("local_size = %d, size of ddg = %d\n", local_size, ddg.size());
 
-        MatCreateSeqAIJ(PETSC_COMM_SELF, local_size, local_size, 27*3, PETSC_NULL, a); // todo: 27 only good for dofs_per_node = 1
+        MatCreateSeqAIJ(PETSC_COMM_SELF, local_size, local_size, NNZ, PETSC_NULL, a); // todo: 27 only good for dofs_per_node = 1
         //MatSetOption(*(a), MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE);
         //MatSetUp(*(a));
         //MatZeroEntries(B);
@@ -2692,6 +2656,12 @@ namespace par {
         MatAssemblyBegin((*a), MAT_FINAL_ASSEMBLY);
         MatAssemblyEnd((*a), MAT_FINAL_ASSEMBLY);
 
+        /* PetscViewer viewer;
+        const char filename [256] = "blkmatrix.dat";
+        PetscViewerASCIIOpen(m_comm, filename, &viewer);
+        MatView((*a),viewer);
+        PetscViewerDestroy(&viewer); */
+
         /*char filename[1024];
         sprintf(filename, "Bmatrix_%d.dat", m_uiRank);
         PetscViewer viewer;
@@ -2727,7 +2697,7 @@ namespace par {
         MatDestroy(&B);*/
 
         return 0;
-    }
+    } //MatGetDiagonalBlock_mf
 
 
     // apply Dirichlet bc by modifying matrix, only used in matrix-based approach

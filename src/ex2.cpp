@@ -40,9 +40,9 @@
 
 #include "shfunction.hpp"
 #include "ke_matrix.hpp"
-#include "me_matrix.hpp"
 #include "fe_vector.hpp"
 #include "aMat.hpp"
+#include "integration.hpp"
 
 using Eigen::Matrix;
 
@@ -327,7 +327,7 @@ int main(int argc, char *argv[]){
             double y = (double)(gNodeId / (Nex + 1)) * hy;
 
             // nodes on bottom surface have roller supports in y direction
-            if (std::fabs(y) < zero_number){
+            if (fabs(y) < zero_number){
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 1] = 1;
                 bound_dofs[eid][(nid * NDOF_PER_NODE)] = 0; 
                 bound_values[eid][(nid * NDOF_PER_NODE) + 1] = 0.0;
@@ -338,7 +338,7 @@ int main(int argc, char *argv[]){
                     bound_values[eid][(nid * NDOF_PER_NODE) + did] = -1000000;
                 }
             }
-            if ((std::fabs(x) < zero_number) && (std::fabs(y) < zero_number)){
+            if ((fabs(x) < zero_number) && (fabs(y) < zero_number)){
                 bound_dofs[eid][nid * NDOF_PER_NODE] = 1;
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 1] = 1;
                 bound_values[eid][nid * NDOF_PER_NODE] = 0.0;
@@ -391,7 +391,7 @@ int main(int argc, char *argv[]){
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             gNodeId = globalMap[eid][nid];
             double y = (double)(gNodeId / (Nex + 1)) * hy;
-            if (std::fabs(y - Ly) < zero_number){
+            if (fabs(y - Ly) < zero_number){
                 // element eid has one face is the top surface with applied traction
                 traction = true;
                 break;
@@ -449,6 +449,9 @@ int main(int argc, char *argv[]){
     stMat.petsc_create_vec(sol_exact);
 
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
+    // Gauss points and weights
+    const unsigned int NGT = 2;
+    integration<double> intData(NGT);
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             gNodeId = globalMap[eid][nid];
@@ -459,7 +462,7 @@ int main(int argc, char *argv[]){
         }
 
         // compute element stiffness matrix
-        ke_quad4_iso(ke,xe,E,nu);
+        ke_quad4_iso(ke, xe, E, nu, intData.Pts_n_Wts, NGT);
         /* for (unsigned int row = 0; row < NNODE_PER_ELEM*NDOF_PER_NODE; row++){
             printf("[e %d, r %d]= %f,%f,%f,%f,%f,%f,%f,%f\n",eid,row,ke(row,0),ke(row,1)
             ,ke(row,2),ke(row,3),ke(row,4),ke(row,5),ke(row,6),ke(row,7));
