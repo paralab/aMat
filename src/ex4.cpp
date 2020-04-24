@@ -125,7 +125,7 @@ int main( int argc, char *argv[] ) {
 
     // material properties of alumina
     //const double E = 300.0; // GPa
-    const double E = 1.0;
+    const double E = 1.0E6;
     //const double nu = 0.2;
     const double nu = 0.3;
     //const double rho = 3950;// kg.m^-3
@@ -142,7 +142,7 @@ int main( int argc, char *argv[] ) {
     const bool matFree = atoi(argv[5]); // use matrix-free method
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
+    const double Lx = 1.0, Ly = 1.0, Lz = 100.0;
 
     // element sizes
     hx = Lx/double(Nex);// element size in x direction
@@ -170,10 +170,22 @@ int main( int argc, char *argv[] ) {
     // nodal coordinates of element
     double* xe = new double[NDIM * NNODE_PER_ELEM];
 
+    // timing variables
+    profiler_t aMat_time;
+    profiler_t petsc_time;
+    profiler_t total_time;
+    if (matFree){
+        aMat_time.clear();
+    } else {
+        petsc_time.clear();
+    }
+    total_time.clear();
+
     if(!rank) {
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
         std::cout<<"\t\tRunning with: "<< size << " ranks \n";
+        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
     }
     if(!rank && useEigen) { std::cout << "\t\tuseEigen: " << useEigen << "\n"; }
     if(!rank && matFree)  { std::cout << "\t\tmatrix free: " << matFree << "\n"; }
@@ -225,24 +237,6 @@ int main( int argc, char *argv[] ) {
         emin = rank * nzmin + nRemain;
     }
     emax = emin + nelem_z - 1;
-
-    /* double d = (Nez)/(double)(size);
-    zmin = (rank * d);
-    if (rank == 0) zmin = zmin - 0.01*(hz);
-    zmax = zmin + d;
-    if (rank == size) zmax = zmax + 0.01*(hz);
-    for (unsigned int i = 0; i < Nez; i++) {
-        if (i >= zmin) {
-            emin = i;
-            break;
-        }
-    }
-    for (unsigned int i = (Nez-1); i >= 0; i--) {
-        if (i < zmax) {
-            emax = i;
-            break;
-        }
-    } */
 
     // number of owned elements
     unsigned int nelem_y = Ney;
@@ -369,6 +363,7 @@ int main( int argc, char *argv[] ) {
     ndofs_total = nnode_total * NDOF_PER_NODE;
     if (rank == 0) printf("Total dofs = %d\n",ndofs_total);
     
+
     // build global map from local map
     unsigned long gNodeId;
     unsigned long int* * globalMap;
@@ -662,6 +657,8 @@ int main( int argc, char *argv[] ) {
         }
     } */
 
+    total_time.start();
+
     // declare aMat object
     par::AMAT_TYPE matType;
     if (matFree) {
@@ -724,10 +721,14 @@ int main( int argc, char *argv[] ) {
         // assemble element stiffness matrix to global K
         if (useEigen){
             if (matFree) {
+                aMat_time.start();
                 // copy element matrix to store in m_epMat[eid]
                 stMat.copy_element_matrix(eid, kee[0], 0, 0, 1);
+                aMat_time.stop();
             } else {
+                petsc_time.start();
                 stMat.petsc_set_element_matrix(eid, kee[0], 0, 0, ADD_VALUES);
+                petsc_time.stop();
             }
         } else {
             std::cout<<"Error: assembly matrix only works for Eigen matrix"<<std::endl;
@@ -742,11 +743,31 @@ int main( int argc, char *argv[] ) {
         } */
 
         // assemble element load vector due to body force
+        if (matFree){
+            aMat_time.start();
+        } else {
+            petsc_time.start();
+        }
         stMat.petsc_set_element_vec(rhs, eid, fee[0], 0, ADD_VALUES);
+        if (matFree){
+            aMat_time.stop();
+        } else {
+            petsc_time.stop();
+        }
 
         // assemble element load vector due to traction
         if (elem_trac[eid].size() != 0){
+            if (matFree){
+                aMat_time.start();
+            } else {
+                petsc_time.start();
+            }
             stMat.petsc_set_element_vec(rhs, eid, elem_trac[eid], 0, ADD_VALUES);
+            if (matFree){
+                aMat_time.stop();
+            } else {
+                petsc_time.stop();
+            }
         }
     }
 
@@ -754,34 +775,91 @@ int main( int argc, char *argv[] ) {
 
     // Pestc begins and completes assembling the global stiffness matrix
     if (!matFree){
+        petsc_time.start();
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+        petsc_time.stop();
     }
 
     // Pestc begins and completes assembling the global load vector
+    if (matFree){
+        aMat_time.start();
+    } else {
+        petsc_time.start();
+    }
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
+    if (matFree){
+        aMat_time.stop();
+    } else {
+        petsc_time.stop();
+    }
 
     //char fname[256];
     // apply dirichlet BCs
     if (!matFree){
+        petsc_time.start();
         stMat.apply_bc_mat();
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
-        //sprintf(fname,"matrix_%d.dat",size);    
+        petsc_time.stop();
+        //sprintf(fname,"matrix_%d.dat",size);
         //stMat.dump_mat(fname);
+    }
+    if (matFree){
+        aMat_time.start();
+    } else {
+        petsc_time.start();
     }
     stMat.apply_bc_rhs(rhs);
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
+    if (matFree){
+        aMat_time.stop();
+    } else {
+        petsc_time.stop();
+    }
 
     //sprintf(fname,"rhsVec_%d.dat",size);
     //stMat.dump_vec(rhs,fname);
 
     // solve
+    if (matFree) {
+        aMat_time.start();
+    } else {
+        petsc_time.start();
+    }
     stMat.petsc_solve((const Vec) rhs, out);
     stMat.petsc_init_vec(out);
     stMat.petsc_finalize_vec(out);
+    if (matFree){
+        aMat_time.stop();
+    } else {
+        petsc_time.stop();
+    }
+
+    total_time.stop();
+
+    // display timing
+    if (matFree){
+        long double aMat_maxTime;
+        MPI_Reduce(&aMat_time.seconds, &aMat_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+        if (rank == 0){
+            std::cout << "aMat time = " << aMat_maxTime << "\n";
+        }
+    } else {
+        long double petsc_maxTime;
+        MPI_Reduce(&petsc_time.seconds, &petsc_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+        if (rank == 0){
+            std::cout << "PETSC time = " << petsc_maxTime << "\n";
+        }
+    }
+    long double total_time_max;
+    MPI_Reduce(&total_time.seconds, &total_time_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+    if (rank == 0){
+        std::cout << "total time = " << total_time_max << "\n";
+    }
+
 
     //stMat.dump_vec(out,"out_ex4.dat");
 
@@ -929,9 +1007,9 @@ int main( int argc, char *argv[] ) {
 
     delete [] elem_trac;
 
-    //VecDestroy(&out);
-    //VecDestroy(&sol_exact);
-    //VecDestroy(&rhs);
+    VecDestroy(&out);
+    VecDestroy(&sol_exact);
+    VecDestroy(&rhs);
 
     PetscFinalize();
     return 0;
