@@ -49,13 +49,14 @@ usage()
 {
     cout << "\n";
     cout << "Usage:\n";
-    cout << "  fem3d <Nex> <Ney> <Nez> <use eigen> <use matrix-free>\n";
+    cout << "  fem3d <Nex> <Ney> <Nez> <use eigen> <use matrix-free> <bc method>\n";
     cout << "\n";
     cout << "     Nex: Number of elements in X\n";
     cout << "     Ney: Number of elements in y\n";
     cout << "     Nez: Number of elements in z\n";
     cout << "     use eigen: 1 => yes (0 => no)\n";
     cout << "     use matrix-free: 1 => yes.  0 => matrix-based method.\n";
+    cout << "     use identity-matrix: 0    use penalty method: 1 \n";
     cout << "\n";
     exit( 0 ) ;
 }
@@ -69,7 +70,7 @@ int main( int argc, char *argv[] ) {
     //                flag1 - 1 use Eigen, 0 not use Eigen
     //                flag2 - 1 matrix-free method, 0 matrix-based method
 
-    if( argc < 5 ) {
+    if( argc < 6 ) {
         usage();
     }
 
@@ -92,6 +93,7 @@ int main( int argc, char *argv[] ) {
 
     const bool useEigen = atoi(argv[4]); // use Eigen matrix
     const bool matFree = atoi(argv[5]);
+    const unsigned int bcMethod = atoi(argv[6]); // method of applying BC
 
     // element matrix (contains multiple matrix blocks)
     std::vector< Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM > > kee;
@@ -128,6 +130,9 @@ int main( int argc, char *argv[] ) {
     if(!rank) {
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
+        std::cout << "\t\tLx : "<< Lx << " Ly: " << Ly << " Lz: " << Lz << "\n";
+        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
+        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
     }
     if(!rank && useEigen) { std::cout << "\t\tuseEigen: " << useEigen << "\n"; }
     if(!rank && matFree)  { std::cout << "\t\tmatrix free: " << matFree << "\n"; }
@@ -140,7 +145,7 @@ int main( int argc, char *argv[] ) {
     #else
     if (!rank) {std::cout << "\t\tRun with no vectorization\n";}
     #endif
-    if(!rank) { std::cout<<"=====================================================\n"; }
+
 
     if( rank == 0 ) {
         if (size > Nez) {
@@ -328,7 +333,7 @@ int main( int argc, char *argv[] ) {
         matType = par::AMAT_TYPE::PETSC_SPARSE;
     }
 
-    par::aMat<double, unsigned long, unsigned int> stMat(matType);
+    par::aMat<double, unsigned long, unsigned int> stMat(matType, (par::BC_METH)bcMethod);
 
     // set communicator
     stMat.set_comm(comm);
@@ -445,19 +450,24 @@ int main( int argc, char *argv[] ) {
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
 
-    // Pestc begins and completes assembling the global load vector
+    // These are needed because we used ADD_VALUES for rhs when assembling
+    // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    // modifying stiffness matrix and load vector to apply dirichlet BCs
+    // apply bc for rhs: this must be done before applying bc for the matrix
+    // because we use the original matrix to compute KfcUc in matrix-based method
+    stMat.apply_bc_rhs(rhs);
+    stMat.petsc_init_vec(rhs);
+    stMat.petsc_finalize_vec(rhs);
+
+    // apply bc to the matrix
     if (!matFree){
         stMat.apply_bc_mat();
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
-    stMat.apply_bc_rhs(rhs);
-    stMat.petsc_init_vec(rhs);
-    stMat.petsc_finalize_vec(rhs);
+
 
     // solve
     stMat.petsc_solve((const Vec) rhs, out);

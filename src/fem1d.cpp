@@ -34,12 +34,28 @@
 
 using Eigen::Matrix;
 
-int main(int argc, char *argv[]){
+void usage()
+{
+    std::cout << "\n";
+    std::cout << "Usage:\n";
+    std::cout << "  fem2d <Nex> <use matrix-free> <bc method>\n";
+    std::cout << "\n";
+    std::cout << "     Nex: Number of elements in X\n";
+    std::cout << "     use matrix-free: 1 => yes.  0 => matrix-based method.\n";
+    std::cout << "     use identity-matrix: 0    use penalty method: 1 \n";
+    std::cout << "\n";
+    std::exit( 0 ) ;
+}
 
+int main(int argc, char *argv[]){
     // User provides: Ne = number of elements
     //                flag = 1 --> matrix-free method; 0 --> matrix-based method
+    if( argc < 3 ) {
+        usage();
+    }
     const unsigned int Ne = atoi(argv[1]);
     const bool matFree = atoi(argv[2]);
+    const unsigned int bcMethod = atoi(argv[3]); // method of applying BC
 
     // element matrix and force vector
     Matrix<double,2,2> ke;
@@ -50,6 +66,8 @@ int main(int argc, char *argv[]){
 
     // element size
     const double h = L/double(Ne);
+
+    const double tol = 0.0001;
 
     // MPI initialize
     PetscInitialize(&argc, &argv, NULL, NULL);
@@ -62,10 +80,20 @@ int main(int argc, char *argv[]){
         std::cout<<"============ parameters read  =======================\n";
         std::cout << "\t\tNumber of elements Ne = " << Ne << "\n";
         std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matFree << "\n";
-        std::cout << "=====================================================\n";
+        std::cout << "\t\tL : "<< L << "\n";
+        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
+        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
     }
+    #ifdef AVX_512
+    if (!rank) {std::cout << "\t\tRun with AVX_512\n";}
+    #elif AVX_256
+    if (!rank) {std::cout << "\t\tRun with AVX_256\n";}
+    #elif OMP_SIMD
+    if (!rank) {std::cout << "\t\tRun with OMP_SIMD\n";}
+    #else
+    if (!rank) {std::cout << "\t\tRun with no vectorization\n";}
+    #endif
 
-    // partition...
     int rc;
     if (size > Ne){
         if (!rank){
@@ -74,9 +102,29 @@ int main(int argc, char *argv[]){
             exit(0);
         }
     }
+
+    // partition in x direction...
+    unsigned int emin = 0, emax = 0;
+    unsigned int nelem;
+    // minimum number of elements in x-dir for each rank
+    unsigned int nxmin = Ne/size;
+    // remaining
+    unsigned int nRemain = Ne % size;
+    // distribute nRemain uniformly from rank = 0 up to rank = nRemain - 1
+    if (rank < nRemain){
+        nelem = nxmin + 1;
+    } else {
+        nelem = nxmin;
+    }
+    if (rank < nRemain){
+        emin = rank * nxmin + rank;
+    } else {
+        emin = rank * nxmin + nRemain;
+    }
+    emax = emin + nelem - 1;
+
     // determine number of elements owned my rank
-    const double tol = 0.0001;
-    double d = Ne/(double)(size);
+    /* double d = Ne/(double)(size);
     double xmin = rank * d;
     if (rank == 0){
         xmin -= tol;
@@ -98,9 +146,7 @@ int main(int argc, char *argv[]){
             emax = i;
             break;
         }
-    }
-    // number of elements owned by my rank
-    unsigned int nelem = (emax - emin) + 1;
+    } */
 
     // number of nodes owned by my rank (rank 0 owns 2 boundary nodes, other ranks own right boundary node)
     unsigned int nnode;
@@ -265,7 +311,7 @@ int main(int argc, char *argv[]){
     start_global_node = nnodeOffset[rank];
     end_global_node = start_global_node + (nnode - 1);
 
-    // declare aMat object
+    // declare aMat object =================================
     par::AMAT_TYPE matType;
     if (matFree){
         matType = par::AMAT_TYPE::MAT_FREE;
@@ -273,7 +319,7 @@ int main(int argc, char *argv[]){
         matType = par::AMAT_TYPE::PETSC_SPARSE;
     }
 
-    par::aMat<double, unsigned long, unsigned int> stMat(matType);
+    par::aMat<double, unsigned long, unsigned int> stMat(matType, (par::BC_METH)bcMethod);
     stMat.set_comm(comm);
     stMat.set_map(nelem, localMap, nnode_per_elem, numLocalNodes, local2GlobalMap, start_global_node, end_global_node, nnode_total);
     stMat.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, constrainedDofs.size());
@@ -304,19 +350,23 @@ int main(int argc, char *argv[]){
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
 
-    // Pestc begins and completes assembling the global load vector
+    // These are needed because we used ADD_VALUES for rhs when assembling
+    // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    // modifying stiffness matrix and load vector to apply dirichlet BCs
+    // apply bc for rhs: this must be done before applying bc for the matrix
+    // because we use the original matrix to compute KfcUc in matrix-based method
+    stMat.apply_bc_rhs(rhs);
+    stMat.petsc_init_vec(rhs);
+    stMat.petsc_finalize_vec(rhs);
+
+    // apply bc for matrix
     if (!matFree){
         stMat.apply_bc_mat();
         stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
-    stMat.apply_bc_rhs(rhs);
-    stMat.petsc_init_vec(rhs);
-    stMat.petsc_finalize_vec(rhs);
 
     // solve
     stMat.petsc_solve((const Vec) rhs, out);

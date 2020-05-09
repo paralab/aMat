@@ -38,6 +38,7 @@ option(AMAT_PROFILER "turn on the amat profiler counters" OFF)
 option(AVX_512 "turn on use AVX-512" OFF)
 option(AVX_256 "turn on use AVX-256" OFF)
 option(OMP_SIMD "turn on use OMP-SIMD" OFF)
+option(USE_OMP "turn on use OMP" OFF)
 
 # if BUILD_WITH_PETSC ON , #define BUILD_WITH_PETSC
 if(BUILD_WITH_PETSC)
@@ -64,6 +65,10 @@ endif(AVX_256)
 if(OMP_SIMD)
     add_definitions(-DOMP_SIMD)
 endif(OMP_SIMD)
+
+if(USE_OMP)
+    add_definitions(-DUSE_OMP)
+endif(USE_OMP)
 
 #set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -qopt-report=5 -qopt-report-phase=vec -qopt-report-file=stdout")
 #set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -qopt-report=5 -qopt-report-phase=vec -qopt-report-file=stdout")

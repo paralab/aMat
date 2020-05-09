@@ -40,22 +40,23 @@ using Eigen::MatrixXd;
 using Eigen::Matrix;
 using Eigen::VectorXd;
 
-using namespace std;
+//using namespace std;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void
 usage()
 {
-    cout << "\n";
-    cout << "Usage:\n";
-    cout << "  fem3d <Nex> <Ney> <Nez> <use eigen> <use matrix-free>\n";
-    cout << "\n";
-    cout << "     Nex: Number of elements in X\n";
-    cout << "     Ney: Number of elements in y\n";
-    cout << "     Nez: Number of elements in z\n";
-    cout << "     use eigen: 1 => yes\n";
-    cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
+    std::cout << "\n";
+    std::cout << "Usage:\n";
+    std::cout << "  ex4 <Nex> <Ney> <Nez> <use eigen> <use matrix-free> <bc-method>\n";
+    std::cout << "\n";
+    std::cout << "     Nex: Number of elements in X\n";
+    std::cout << "     Ney: Number of elements in y\n";
+    std::cout << "     Nez: Number of elements in z\n";
+    std::cout << "     use eigen: 1 => yes\n";
+    std::cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
+    std::cout << "     use identity-matrix: 0    use penalty method: 1 \n";
     exit( 0) ;
 }
 
@@ -107,7 +108,7 @@ int main( int argc, char *argv[] ) {
     //                flag1 - 1 use Eigen, 0 not use Eigen
     //                flag2 - 1 matrix-free method, 0 matrix-based method
 
-    if( argc < 5 ) {
+    if( argc < 6 ) {
         usage();
     }
 
@@ -125,7 +126,7 @@ int main( int argc, char *argv[] ) {
 
     // material properties of alumina
     //const double E = 300.0; // GPa
-    const double E = 1.0E6;
+    const double E = 1.0;
     //const double nu = 0.2;
     const double nu = 0.3;
     //const double rho = 3950;// kg.m^-3
@@ -140,14 +141,16 @@ int main( int argc, char *argv[] ) {
 
     const bool useEigen = atoi(argv[4]); // use Eigen matrix
     const bool matFree = atoi(argv[5]); // use matrix-free method
+    const unsigned int bcMethod = atoi(argv[6]); // method of applying BC
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 100.0;
+    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
 
     // element sizes
     hx = Lx/double(Nex);// element size in x direction
     hy = Ly/double(Ney);// element size in y direction
     hz = Lz/double(Nez);// element size in z direction
+
 
     const double zero_number = 1E-12;
 
@@ -184,8 +187,10 @@ int main( int argc, char *argv[] ) {
     if(!rank) {
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
+        std::cout << "\t\tLx : "<< Lx << " Ly: " << Ly << " Lz: " << Lz << "\n";
         std::cout<<"\t\tRunning with: "<< size << " ranks \n";
         std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
+
     }
     if(!rank && useEigen) { std::cout << "\t\tuseEigen: " << useEigen << "\n"; }
     if(!rank && matFree)  { std::cout << "\t\tmatrix free: " << matFree << "\n"; }
@@ -666,7 +671,7 @@ int main( int argc, char *argv[] ) {
     } else {
         matType = par::AMAT_TYPE::PETSC_SPARSE;
     }
-    par::aMat<double, unsigned long int, unsigned int> stMat(matType);
+    par::aMat<double, unsigned long int, unsigned int> stMat(matType, (par::BC_METH)bcMethod);
 
     // set communicator
     stMat.set_comm(comm);
@@ -787,6 +792,24 @@ int main( int argc, char *argv[] ) {
     } else {
         petsc_time.start();
     }
+    // These are needed because we used ADD_VALUES for rhs when assembling
+    // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
+    stMat.petsc_init_vec(rhs);
+    stMat.petsc_finalize_vec(rhs);
+    if (matFree){
+        aMat_time.stop();
+    } else {
+        petsc_time.stop();
+    }
+
+    if (matFree){
+        aMat_time.start();
+    } else {
+        petsc_time.start();
+    }
+    // apply bc for rhs: this must be done before applying bc for the matrix
+    // because we use the original matrix to compute KfcUc in matrix-based method
+    stMat.apply_bc_rhs(rhs);
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
     if (matFree){
@@ -796,7 +819,7 @@ int main( int argc, char *argv[] ) {
     }
 
     //char fname[256];
-    // apply dirichlet BCs
+    // apply dirichlet BCs to the matrix
     if (!matFree){
         petsc_time.start();
         stMat.apply_bc_mat();
@@ -806,19 +829,7 @@ int main( int argc, char *argv[] ) {
         //sprintf(fname,"matrix_%d.dat",size);
         //stMat.dump_mat(fname);
     }
-    if (matFree){
-        aMat_time.start();
-    } else {
-        petsc_time.start();
-    }
-    stMat.apply_bc_rhs(rhs);
-    stMat.petsc_init_vec(rhs);
-    stMat.petsc_finalize_vec(rhs);
-    if (matFree){
-        aMat_time.stop();
-    } else {
-        petsc_time.stop();
-    }
+
 
     //sprintf(fname,"rhsVec_%d.dat",size);
     //stMat.dump_vec(rhs,fname);
@@ -860,8 +871,8 @@ int main( int argc, char *argv[] ) {
         std::cout << "total time = " << total_time_max << "\n";
     }
 
-
-    //stMat.dump_vec(out,"out_ex4.dat");
+    //sprintf(fname,"outVec_%d.dat",size);
+    //stMat.dump_vec(out,fname);
 
     PetscScalar norm, alpha = -1.0;
 
@@ -899,8 +910,9 @@ int main( int argc, char *argv[] ) {
 
     stMat.petsc_init_vec(sol_exact);
     stMat.petsc_finalize_vec(sol_exact);
-    //stMat.dump_vec(sol_exact,"sol_exact_ex4.dat");
-    
+
+    //sprintf(fname,"exactVec_%d.dat",size);
+    //stMat.dump_vec(sol_exact,fname);
 
     // compute norm of exact solution
     VecNorm(sol_exact, NORM_2, &norm);

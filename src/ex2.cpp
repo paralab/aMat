@@ -46,14 +46,37 @@
 
 using Eigen::Matrix;
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void usage()
+{
+    std::cout << "\n";
+    std::cout << "Usage:\n";
+    std::cout << "  ex2 <Nex> <Ney> <use matrix-free> <bc-method>\n";
+    std::cout << "\n";
+    std::cout << "     Nex: Number of elements in X\n";
+    std::cout << "     Ney: Number of elements in y\n";
+    std::cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
+    std::cout << "     use identity-matrix: 0    use penalty method: 1 \n";
+    exit( 0) ;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
 int main(int argc, char *argv[]){
 
     // User provides: Nex = number of elements in x direction
     //                Ney = number of elements in y direction
     //                flag = 1 --> matrix-free method; 0 --> matrix-based method
+
+    if( argc < 4 ) {
+        usage();
+    }
+
     const unsigned int Nex = atoi(argv[1]);
     const unsigned int Ney = atoi(argv[2]);
     const bool matFree = atoi(argv[3]);
+    const unsigned int bcMethod = atoi(argv[4]); // method of applying BC
 
     const unsigned int NDOF_PER_NODE = 2;       // number of dofs per node
     const unsigned int NDIM = 2;                // number of dimension
@@ -91,8 +114,19 @@ int main(int argc, char *argv[]){
         std::cout<<"============ parameters read  =======================\n";
         std::cout << "\t\tNumber of elements Nex = " << Nex << "; Ney = " << Ney << "\n";
         std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matFree << "\n";
-        std::cout << "=====================================================\n";
+        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
+        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
     }
+    if(!rank && matFree)  { std::cout << "\t\tmatrix free: " << matFree << "\n"; }
+    #ifdef AVX_512
+    if (!rank) {std::cout << "\t\tUse AVX_512\n";}
+    #elif AVX_256
+    if (!rank) {std::cout << "\t\tUse AVX_256\n";}
+    #elif OMP_SIMD
+    if (!rank) {std::cout << "\t\tUse OMP_SIMD\n";}
+    #else
+    if (!rank) {std::cout << "\t\tNo vectorization\n";}
+    #endif
 
     // partition in y direction...
     int rc;
@@ -431,7 +465,7 @@ int main(int argc, char *argv[]){
     } else {
         matType = par::AMAT_TYPE::PETSC_SPARSE;
     }
-    par::aMat<double, unsigned long, unsigned int> stMat(matType);
+    par::aMat<double, unsigned long, unsigned int> stMat(matType, (par::BC_METH)bcMethod);
 
     // set communicator
     stMat.set_comm(comm);
@@ -489,13 +523,18 @@ int main(int argc, char *argv[]){
         stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
 
-    // Pestc begins and completes assembling the global load vector
+    // These are needed because we used ADD_VALUES for rhs when assembling
+    // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
     stMat.petsc_init_vec(rhs);
     stMat.petsc_finalize_vec(rhs);
 
-    //stMat.dump_vec(rhs);
+    // apply bc for rhs: this must be done before applying bc for the matrix
+    // because we use the original matrix to compute KfcUc in matrix-based method
+    stMat.apply_bc_rhs(rhs);
+    stMat.petsc_init_vec(rhs);
+    stMat.petsc_finalize_vec(rhs);
 
-    char fname[256];
+    //char fname[256];
 
     // apply dirichlet BCs
     if (!matFree){
@@ -505,10 +544,6 @@ int main(int argc, char *argv[]){
         //sprintf(fname,"matrix_%d.dat",size);    
         //stMat.dump_mat(fname);
     }
-
-    stMat.apply_bc_rhs(rhs);
-    stMat.petsc_init_vec(rhs);
-    stMat.petsc_finalize_vec(rhs);
 
     //sprintf(fname,"rhsVec_%d.dat",size);
     //stMat.dump_vec(rhs,fname);
