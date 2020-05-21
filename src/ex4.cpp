@@ -36,28 +36,32 @@
 #include "aMat.hpp"
 #include "integration.hpp"
 
+#include "profiler.hpp"
+
 using Eigen::MatrixXd;
 using Eigen::Matrix;
 using Eigen::VectorXd;
 
-//using namespace std;
+// number of cracks allowed in 1 element
+#define AMAT_MAX_CRACK_LEVEL 0
+
+// max number of block dimensions in one cracked element
+#define AMAT_MAX_BLOCKSDIM_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL)
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void
-usage()
+void usage()
 {
     std::cout << "\n";
     std::cout << "Usage:\n";
-    std::cout << "  ex4 <Nex> <Ney> <Nez> <use eigen> <use matrix-free> <bc-method>\n";
+    std::cout << "  ex4 <Nex> <Ney> <Nez> <matrix based/free> <bc-method>\n";
     std::cout << "\n";
     std::cout << "     Nex: Number of elements in X\n";
     std::cout << "     Ney: Number of elements in y\n";
     std::cout << "     Nez: Number of elements in z\n";
-    std::cout << "     use eigen: 1 => yes\n";
     std::cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
     std::cout << "     use identity-matrix: 0    use penalty method: 1 \n";
-    exit( 0) ;
+    exit(0);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -105,9 +109,8 @@ int main( int argc, char *argv[] ) {
     // User provides: Nex - number of elements (global) in x direction
     //                Ney - number of elements (global) in y direction
     //                Nez - number of elements (global) in z direction
-    //                flag1 - 1 use Eigen, 0 not use Eigen
-    //                flag2 - 1 matrix-free method, 0 matrix-based method
-
+    //                flag1 - 1 matrix-free method, 0 matrix-based method
+    //                bcMethod = 0 --> identity matrix method; 1 --> penalty method
     if( argc < 6 ) {
         usage();
     }
@@ -139,9 +142,11 @@ int main( int argc, char *argv[] ) {
     const unsigned int Ney = atoi(argv[2]);
     const unsigned int Nez = atoi(argv[3]);
 
-    const bool useEigen = atoi(argv[4]); // use Eigen matrix
-    const bool matFree = atoi(argv[5]); // use matrix-free method
-    const unsigned int bcMethod = atoi(argv[6]); // method of applying BC
+    //05.19.20 only use Eigen matrix
+    const bool useEigen = true;
+
+    const unsigned int matType = atoi(argv[4]);  // approach (matrix based/free)
+    const unsigned int bcMethod = atoi(argv[5]); // method of applying BC
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
     const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
@@ -150,7 +155,6 @@ int main( int argc, char *argv[] ) {
     hx = Lx/double(Nex);// element size in x direction
     hy = Ly/double(Ney);// element size in y direction
     hz = Lz/double(Nez);// element size in z direction
-
 
     const double zero_number = 1E-12;
 
@@ -177,7 +181,7 @@ int main( int argc, char *argv[] ) {
     profiler_t aMat_time;
     profiler_t petsc_time;
     profiler_t total_time;
-    if (matFree){
+    if (matType != 0){
         aMat_time.clear();
     } else {
         petsc_time.clear();
@@ -188,12 +192,12 @@ int main( int argc, char *argv[] ) {
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
         std::cout << "\t\tLx : "<< Lx << " Ly: " << Ly << " Lz: " << Lz << "\n";
+        std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
+        std::cout << "\t\tBC method: " << bcMethod << "\n";
         std::cout<<"\t\tRunning with: "<< size << " ranks \n";
         std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
-
     }
-    if(!rank && useEigen) { std::cout << "\t\tuseEigen: " << useEigen << "\n"; }
-    if(!rank && matFree)  { std::cout << "\t\tmatrix free: " << matFree << "\n"; }
+
     #ifdef AVX_512
     if (!rank) {std::cout << "\t\tUse AVX_512\n";}
     #elif AVX_256
@@ -223,7 +227,6 @@ int main( int argc, char *argv[] ) {
         }
     }
 
-    // find min & max element index in z direction
     // partition number of elements in z direction
     unsigned int nelem_z;
     // minimum number of elements in z-dir for each rank
@@ -664,31 +667,30 @@ int main( int argc, char *argv[] ) {
 
     total_time.start();
 
-    // declare aMat object
-    par::AMAT_TYPE matType;
-    if (matFree) {
-        matType = par::AMAT_TYPE::MAT_FREE;
+    /// declare aMat object =================================
+    par::aMat<double, unsigned long, unsigned int> * stMat;
+    if (matType == 0){
+        stMat = new par::aMatBased<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
     } else {
-        matType = par::AMAT_TYPE::PETSC_SPARSE;
+        stMat = new par::aMatFree<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
     }
-    par::aMat<double, unsigned long int, unsigned int> stMat(matType, (par::BC_METH)bcMethod);
 
     // set communicator
-    stMat.set_comm(comm);
+    stMat->set_comm(comm);
 
     // set global dof map
-    stMat.set_map(nelem, localDofMap, ndofs_per_element, numLocalDofs, local2GlobalDofMap, start_global_dof,
+    stMat->set_map(nelem, localDofMap, ndofs_per_element, numLocalDofs, local2GlobalDofMap, start_global_dof,
                   end_global_dof, ndofs_total);
 
     // set boundary map
-    stMat.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
+    stMat->set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
 
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact, error;
-    stMat.petsc_create_vec(rhs);
-    stMat.petsc_create_vec(out);
-    stMat.petsc_create_vec(sol_exact);
-    stMat.petsc_create_vec(error);
+    stMat->petsc_create_vec(rhs);
+    stMat->petsc_create_vec(out);
+    stMat->petsc_create_vec(sol_exact);
+    stMat->petsc_create_vec(error);
 
     // compute element stiffness matrix and force vector, then assemble
     // nodal value of body force
@@ -724,20 +726,11 @@ int main( int argc, char *argv[] ) {
         }
 
         // assemble element stiffness matrix to global K
-        if (useEigen){
-            if (matFree) {
-                aMat_time.start();
-                // copy element matrix to store in m_epMat[eid]
-                stMat.copy_element_matrix(eid, kee[0], 0, 0, 1);
-                aMat_time.stop();
-            } else {
-                petsc_time.start();
-                stMat.petsc_set_element_matrix(eid, kee[0], 0, 0, ADD_VALUES);
-                petsc_time.stop();
-            }
-        } else {
-            std::cout<<"Error: assembly matrix only works for Eigen matrix"<<std::endl;
-        }
+        if (matType == 0) petsc_time.start();
+        else aMat_time.start();
+        stMat->set_element_matrix(eid, kee[0], 0, 0, 1);
+        if (matType == 0) petsc_time.stop();
+        else aMat_time.stop();
         
         // compute element force vector due to body force
         fe_hex20_iso(fee[0], xe, beN, intData.Pts_n_Wts, NGT);
@@ -748,71 +741,58 @@ int main( int argc, char *argv[] ) {
         } */
 
         // assemble element load vector due to body force
-        if (matFree){
-            aMat_time.start();
-        } else {
-            petsc_time.start();
-        }
-        stMat.petsc_set_element_vec(rhs, eid, fee[0], 0, ADD_VALUES);
-        if (matFree){
-            aMat_time.stop();
-        } else {
-            petsc_time.stop();
-        }
+        if (matType == 0) petsc_time.start();
+        else aMat_time.start();
+        stMat->petsc_set_element_vec(rhs, eid, fee[0], 0, ADD_VALUES);
+        if (matType == 0) petsc_time.stop();
+        else aMat_time.stop();
 
         // assemble element load vector due to traction
         if (elem_trac[eid].size() != 0){
-            if (matFree){
-                aMat_time.start();
-            } else {
-                petsc_time.start();
-            }
-            stMat.petsc_set_element_vec(rhs, eid, elem_trac[eid], 0, ADD_VALUES);
-            if (matFree){
-                aMat_time.stop();
-            } else {
-                petsc_time.stop();
-            }
+            if (matType == 0) petsc_time.start();
+            else aMat_time.start();
+            stMat->petsc_set_element_vec(rhs, eid, elem_trac[eid], 0, ADD_VALUES);
+            if (matType == 0) petsc_time.stop();
+            else aMat_time.stop();
         }
     }
-
     delete [] xe;
 
     // Pestc begins and completes assembling the global stiffness matrix
-    if (!matFree){
+    if (matType == 0){
         petsc_time.start();
-        stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
-        stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+        stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
+        stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
         petsc_time.stop();
     }
 
     // Pestc begins and completes assembling the global load vector
-    if (matFree){
+    if (matType != 0){
         aMat_time.start();
     } else {
         petsc_time.start();
     }
     // These are needed because we used ADD_VALUES for rhs when assembling
     // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
-    stMat.petsc_init_vec(rhs);
-    stMat.petsc_finalize_vec(rhs);
-    if (matFree){
+    VecAssemblyBegin(rhs);
+    VecAssemblyEnd(rhs);
+    if (matType != 0){
         aMat_time.stop();
     } else {
         petsc_time.stop();
     }
 
-    if (matFree){
+    if (matType != 0){
         aMat_time.start();
     } else {
         petsc_time.start();
     }
     // apply bc for rhs: this must be done before applying bc for the matrix
     // because we use the original matrix to compute KfcUc in matrix-based method
-    stMat.apply_bc_rhs(rhs);
-    stMat.petsc_init_vec(rhs);
-    stMat.petsc_finalize_vec(rhs);
-    if (matFree){
+    stMat->apply_bc(rhs);
+    VecAssemblyBegin(rhs);
+    VecAssemblyEnd(rhs);
+    if (matType != 0){
         aMat_time.stop();
     } else {
         petsc_time.stop();
@@ -820,11 +800,11 @@ int main( int argc, char *argv[] ) {
 
     //char fname[256];
     // apply dirichlet BCs to the matrix
-    if (!matFree){
+    if (matType == 0){
         petsc_time.start();
-        stMat.apply_bc_mat();
-        stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
-        stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+        //stMat.apply_bc_mat();
+        stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
+        stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
         petsc_time.stop();
         //sprintf(fname,"matrix_%d.dat",size);
         //stMat.dump_mat(fname);
@@ -835,15 +815,15 @@ int main( int argc, char *argv[] ) {
     //stMat.dump_vec(rhs,fname);
 
     // solve
-    if (matFree) {
+    if (matType != 0) {
         aMat_time.start();
     } else {
         petsc_time.start();
     }
-    stMat.petsc_solve((const Vec) rhs, out);
-    stMat.petsc_init_vec(out);
-    stMat.petsc_finalize_vec(out);
-    if (matFree){
+    stMat->petsc_solve((const Vec) rhs, out);
+    VecAssemblyBegin(out);
+    VecAssemblyEnd(out);
+    if (matType != 0){
         aMat_time.stop();
     } else {
         petsc_time.stop();
@@ -852,7 +832,7 @@ int main( int argc, char *argv[] ) {
     total_time.stop();
 
     // display timing
-    if (matFree){
+    if (matType != 0){
         long double aMat_maxTime;
         MPI_Reduce(&aMat_time.seconds, &aMat_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
         if (rank == 0){
@@ -905,11 +885,11 @@ int main( int argc, char *argv[] ) {
                 e_exact[(nid * NDOF_PER_NODE) + did] = disp[did];
             }
         }
-        stMat.petsc_set_element_vec(sol_exact, eid, e_exact, 0, INSERT_VALUES);
+        stMat->petsc_set_element_vec(sol_exact, eid, e_exact, 0, INSERT_VALUES);
     }
 
-    stMat.petsc_init_vec(sol_exact);
-    stMat.petsc_finalize_vec(sol_exact);
+    VecAssemblyBegin(sol_exact);
+    VecAssemblyEnd(sol_exact);
 
     //sprintf(fname,"exactVec_%d.dat",size);
     //stMat.dump_vec(sol_exact,fname);

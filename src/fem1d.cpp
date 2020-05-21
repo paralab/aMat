@@ -38,7 +38,7 @@ void usage()
 {
     std::cout << "\n";
     std::cout << "Usage:\n";
-    std::cout << "  fem2d <Nex> <use matrix-free> <bc method>\n";
+    std::cout << "  fem1d <Nex> <use matrix/free> <bc method>\n";
     std::cout << "\n";
     std::cout << "     Nex: Number of elements in X\n";
     std::cout << "     use matrix-free: 1 => yes.  0 => matrix-based method.\n";
@@ -49,12 +49,18 @@ void usage()
 
 int main(int argc, char *argv[]){
     // User provides: Ne = number of elements
-    //                flag = 1 --> matrix-free method; 0 --> matrix-based method
-    if( argc < 3 ) {
+    //                matType = 0 --> matrix-based method; 1 --> matrix-free method
+    //                bcMethod = 0 --> identity matrix method; 1 --> penalty method
+    if( argc < 4 ) {
         usage();
     }
+
+    const unsigned int NDOF_PER_NODE = 1;       // number of dofs per node
+    const unsigned int NDIM = 1;                // number of dimension
+    const unsigned int NNODE_PER_ELEM = 2;      // number of nodes per element
+
     const unsigned int Ne = atoi(argv[1]);
-    const bool matFree = atoi(argv[2]);
+    const unsigned int matType = atoi(argv[2]);
     const unsigned int bcMethod = atoi(argv[3]); // method of applying BC
 
     // element matrix and force vector
@@ -67,7 +73,7 @@ int main(int argc, char *argv[]){
     // element size
     const double h = L/double(Ne);
 
-    const double tol = 0.0001;
+    const double zero_number = 1E-12;
 
     // MPI initialize
     PetscInitialize(&argc, &argv, NULL, NULL);
@@ -79,7 +85,7 @@ int main(int argc, char *argv[]){
     if(!rank) {
         std::cout<<"============ parameters read  =======================\n";
         std::cout << "\t\tNumber of elements Ne = " << Ne << "\n";
-        std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matFree << "\n";
+        std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
         std::cout << "\t\tL : "<< L << "\n";
         std::cout<<"\t\tRunning with: "<< size << " ranks \n";
         std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
@@ -123,31 +129,6 @@ int main(int argc, char *argv[]){
     }
     emax = emin + nelem - 1;
 
-    // determine number of elements owned my rank
-    /* double d = Ne/(double)(size);
-    double xmin = rank * d;
-    if (rank == 0){
-        xmin -= tol;
-    }
-    double xmax = xmin + d;
-    if (rank == size){
-        xmax += tol;
-    }
-    // begin and end element count
-    unsigned int emin = 0, emax = 0;
-    for (unsigned int i = 0; i < Ne; i++){
-        if (i >= xmin){
-            emin = i;
-            break;
-        }
-    }
-    for (unsigned int i = (Ne - 1); i >= 0; i--){
-        if (i < xmax){
-            emax = i;
-            break;
-        }
-    } */
-
     // number of nodes owned by my rank (rank 0 owns 2 boundary nodes, other ranks own right boundary node)
     unsigned int nnode;
     if (rank == 0){
@@ -159,7 +140,7 @@ int main(int argc, char *argv[]){
     // determine globalMap
     unsigned int* nnode_per_elem = new unsigned int [nelem];
     for (unsigned int eid = 0; eid < nelem; eid++){
-        nnode_per_elem[eid] = 2; //linear 2-node element
+        nnode_per_elem[eid] = NNODE_PER_ELEM; //linear 2-node element
     }
 
     unsigned long int** globalMap;
@@ -172,7 +153,6 @@ int main(int argc, char *argv[]){
         globalMap[eid][0] = (emin + eid);
         globalMap[eid][1] = globalMap[eid][0] + 1;
     }
-
 
     // build localMap from globalMap (to adapt the interface of bsamxx)
     unsigned int numPreGhostNodes, numPostGhostNodes, numLocalNodes;
@@ -201,6 +181,7 @@ int main(int argc, char *argv[]){
             }
         }
     }
+
     // sort in ascending order
     std::sort(preGhostGIds.begin(), preGhostGIds.end());
     std::sort(postGhostGIds.begin(), postGhostGIds.end());
@@ -243,68 +224,62 @@ int main(int argc, char *argv[]){
     }
 
     // compute constrained map
-    unsigned int** bound_nodes = new unsigned int* [nelem];
+    unsigned int** bound_dofs = new unsigned int* [nelem];
     double** bound_values = new double* [nelem];
     for (unsigned int eid = 0; eid < nelem; eid++){
-        bound_nodes[eid] = new unsigned int [nnode_per_elem[eid]];
+        bound_dofs[eid] = new unsigned int [nnode_per_elem[eid]];
         bound_values[eid] = new double [nnode_per_elem[eid]];
     }
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
             unsigned long global_Id = globalMap[eid][nid];
             double x = (double)(global_Id * h);
-            if ((fabs(x) < 0.000001) || (fabs(x - L) < 0.000001)){
-            //if ((fabs(x) < 0.000001) || (fabs(x - L) < 0.000001) || (fabs(x - 0.5*L) < 0.000001)){
-                bound_nodes[eid][nid] = 1;
+            if ((fabs(x) < zero_number) || (fabs(x - L) < zero_number)){
+                bound_dofs[eid][nid] = 1;
             } else {
-                bound_nodes[eid][nid] = 0;
+                bound_dofs[eid][nid] = 0;
             }
-            if (fabs(x) < 0.000001){
+            if (fabs(x) < zero_number){
                 // left end
                 bound_values[eid][nid] = 0.0;
-            } else if (fabs(x - L) < 0.000001){
+            } else if (fabs(x - L) < zero_number){
                 // right end
                 bound_values[eid][nid] = 1.0;
-                //bound_values[eid][nid] = 20.0;
-            //} else if (fabs(x - 0.5*L) < 0.000001){
-            //    bound_values[eid][nid] = 0.7;
             } else {
                 // free dofs
                 bound_values[eid][nid] = -1000000;
             }
         }
     }
-    // create lists of constrained dofs (for new interface of set_bdr_map)
-    std::vector<unsigned long> constrainedDofs;
-    for (unsigned int eid = 0; eid < nelem; eid++){
-        for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
-            if (bound_nodes[eid][nid] == 1){
-                constrainedDofs.push_back(globalMap[eid][nid]);
+
+    // create lists of constrained dofs
+    std::vector< par::ConstrainedRecord<double, unsigned long int> > list_of_constraints;
+    par::ConstrainedRecord<double, unsigned long int> cdof;
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++) {
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
+                if (bound_dofs[eid][(nid * NDOF_PER_NODE) + did] == 1) {
+                    // save the global id of constrained dof
+                    cdof.set_dofId( globalMap[eid][(nid * NDOF_PER_NODE) + did] );
+                    cdof.set_preVal( bound_values[eid][(nid * NDOF_PER_NODE) + did] );
+                    list_of_constraints.push_back(cdof);
+                }
             }
         }
     }
-    std::sort(constrainedDofs.begin(),constrainedDofs.end());
-    constrainedDofs.erase(std::unique(constrainedDofs.begin(),constrainedDofs.end()),constrainedDofs.end());
 
-    unsigned long * constrainedDofs_ptr;
-    double * prescribedValues_ptr;
-    constrainedDofs_ptr = new unsigned long [constrainedDofs.size()];
-    prescribedValues_ptr = new double [constrainedDofs.size()];
-    for (unsigned int i = 0; i < constrainedDofs.size(); i++){
-        unsigned long global_Id = constrainedDofs[i];
-        double x = (double)(global_Id * h);
-        constrainedDofs_ptr[i] = global_Id;
-        if (fabs(x - L) < 0.000001){
-            prescribedValues_ptr[i] = 1.0;
-            //prescribedValues_ptr[i] = 20.0;
-        //} else if (fabs(x - 0.5*L) < 0.000001){
-        //    prescribedValues_ptr[i] = 0.7;
-        } else if (fabs(x) < 0.000001){
-            prescribedValues_ptr[i] = 0.0;
-        } else {
-            std::cout << "something wrong with the list of constrained dofs...";
-            return 0;
-        }
+    // sort to prepare for deleting repeated constrained dofs in the list
+    std::sort(list_of_constraints.begin(), list_of_constraints.end());
+    list_of_constraints.erase(std::unique(list_of_constraints.begin(),list_of_constraints.end()),list_of_constraints.end());
+
+    // transform vector data to pointer (to be conformed with the aMat interface)
+    unsigned long int* constrainedDofs_ptr;
+    double* prescribedValues_ptr;
+    constrainedDofs_ptr = new unsigned long int [list_of_constraints.size()];
+    prescribedValues_ptr = new double [list_of_constraints.size()];
+    for (unsigned int i = 0; i < list_of_constraints.size(); i++) {
+        constrainedDofs_ptr[i] = list_of_constraints[i].get_dofId();
+        prescribedValues_ptr[i] = list_of_constraints[i].get_preVal();
     }
 
     unsigned long start_global_node, end_global_node;
@@ -312,21 +287,20 @@ int main(int argc, char *argv[]){
     end_global_node = start_global_node + (nnode - 1);
 
     // declare aMat object =================================
-    par::AMAT_TYPE matType;
-    if (matFree){
-        matType = par::AMAT_TYPE::MAT_FREE;
+    par::aMat<double, unsigned long, unsigned int> * stMat;
+    if (matType == 0){
+        stMat = new par::aMatBased<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
     } else {
-        matType = par::AMAT_TYPE::PETSC_SPARSE;
+        stMat = new par::aMatFree<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
     }
 
-    par::aMat<double, unsigned long, unsigned int> stMat(matType, (par::BC_METH)bcMethod);
-    stMat.set_comm(comm);
-    stMat.set_map(nelem, localMap, nnode_per_elem, numLocalNodes, local2GlobalMap, start_global_node, end_global_node, nnode_total);
-    stMat.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, constrainedDofs.size());
+    stMat->set_comm(comm);
+    stMat->set_map(nelem, localMap, nnode_per_elem, numLocalNodes, local2GlobalMap, start_global_node, end_global_node, nnode_total);
+    stMat->set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
 
     Vec rhs, out;
-    stMat.petsc_create_vec(rhs);
-    stMat.petsc_create_vec(out);
+    stMat->petsc_create_vec(rhs);
+    stMat->petsc_create_vec(out);
 
     // element stiffness matrix and assembly
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -334,52 +308,48 @@ int main(int argc, char *argv[]){
         ke(0,1) = -1.0/h;
         ke(1,0) = -1.0/h;
         ke(1,1) = 1.0/h;
-        if (matFree){
-            stMat.copy_element_matrix(eid, ke, 0, 0, 1);
-        } else {
-            stMat.petsc_set_element_matrix(eid, ke, 0, 0, ADD_VALUES);
-        }
+        stMat->set_element_matrix(eid, ke, 0, 0, 1);
         fe(0) = 0.0;
         fe(1) = 0.0;
-        stMat.petsc_set_element_vec(rhs, eid, fe, 0, ADD_VALUES);
+        stMat->petsc_set_element_vec(rhs, eid, fe, 0, ADD_VALUES);
     }
 
     // Pestc begins and completes assembling the global stiffness matrix
-    if (!matFree){
-        stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
-        stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+    if (matType == 0){
+        stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
+        stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
 
     // These are needed because we used ADD_VALUES for rhs when assembling
     // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
-    stMat.petsc_init_vec(rhs);
-    stMat.petsc_finalize_vec(rhs);
+    VecAssemblyBegin(rhs);
+    VecAssemblyEnd(rhs);
 
     // apply bc for rhs: this must be done before applying bc for the matrix
     // because we use the original matrix to compute KfcUc in matrix-based method
-    stMat.apply_bc_rhs(rhs);
-    stMat.petsc_init_vec(rhs);
-    stMat.petsc_finalize_vec(rhs);
+    stMat->apply_bc(rhs);  // this includes applying bc for matrix in matrix-based approach
+    VecAssemblyBegin(rhs);
+    VecAssemblyEnd(rhs);
 
-    // apply bc for matrix
-    if (!matFree){
-        stMat.apply_bc_mat();
-        stMat.petsc_init_mat(MAT_FINAL_ASSEMBLY);
-        stMat.petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+    // communication for matrix-based approach
+    if (matType == 0){
+        //stMat->apply_bc_mat();
+        stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
+        stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
 
     // solve
-    stMat.petsc_solve((const Vec) rhs, out);
+    stMat->petsc_solve((const Vec) rhs, out);
 
     // display solution on screen
     if (!rank) std::cout << "Computed solution = \n";
-    stMat.dump_vec(out);
+    stMat->petsc_dump_vec(out);
 
     // following exact solution is only for the problem of u(0) = 0 and u(L) = 1
     // exact solution: u(x) = (1/L)*x
     Vec sol_exact;
     PetscInt rowId;
-    stMat.petsc_create_vec(sol_exact);
+    stMat->petsc_create_vec(sol_exact);
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++){
             rowId = globalMap[eid][nid];
@@ -388,8 +358,8 @@ int main(int argc, char *argv[]){
             VecSetValue(sol_exact,rowId,u,INSERT_VALUES);
         }
     }
-    stMat.petsc_init_vec(sol_exact);
-    stMat.petsc_finalize_vec(sol_exact);
+    VecAssemblyBegin(sol_exact);
+    VecAssemblyEnd(sol_exact);
 
     // display exact solution on screen
     //stMat.dump_vec(sol_exact);
@@ -405,10 +375,10 @@ int main(int argc, char *argv[]){
 
     // free allocated memory...
     for (unsigned int eid = 0; eid < nelem; eid++){
-        delete [] bound_nodes[eid];
+        delete [] bound_dofs[eid];
         delete [] bound_values[eid];
     }
-    delete [] bound_nodes;
+    delete [] bound_dofs;
     delete [] bound_values;
 
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -425,9 +395,8 @@ int main(int argc, char *argv[]){
     delete [] local2GlobalMap;
     delete [] nnode_per_elem;
     VecDestroy(&out);
-    //VecDestroy(&sol_exact);
+    VecDestroy(&sol_exact);
     VecDestroy(&rhs);
-
 
     PetscFinalize();
     return 0;

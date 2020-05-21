@@ -48,6 +48,10 @@ if(BUILD_WITH_PETSC)
 endif(BUILD_WITH_PETSC)
 
 
+if(AMAT_PROFILER)
+    add_definitions(-DAMAT_PROFILER)
+endif(AMAT_PROFILER)
+
 if(AVX_512)
     add_definitions(-DAVX_512)
     #set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=corei7-avx")

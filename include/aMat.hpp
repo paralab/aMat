@@ -26,22 +26,11 @@
 #include <vector>
 #include <fstream>
 #include <algorithm>
-#include "profiler.hpp"
 
 #include <stdio.h>
 #include <immintrin.h>
 #include <stdlib.h>
-#include <stdlib.h>
-
-//////////////////////////////////////////////////////////////////////////////////////////////
-// number of cracks allowed in 1 element
-#define AMAT_MAX_CRACK_LEVEL 0
-
-// max number of block dimensions in one cracked element
-#define AMAT_MAX_BLOCKSDIM_PER_ELEMENT (1u<<AMAT_MAX_CRACK_LEVEL)
-
-// magnify factor for penalty method in applying BC
-#define PENALTY_FACTOR 100
+#include <iostream>
 
 // vector length and alignment
 #ifdef AVX_512
@@ -58,19 +47,19 @@
 #endif
 
 // number of nonzero terms in the matrix (used in matrix-base and block Jacobi preconditioning)
-#define NNZ (81*3) // for the case there are 8 of 20-node quadratic elements sharing the node
+// e.g. in a structure mesh, eight of 20-node quadratic elements sharing the node
+// --> 81 nodes (3 dofs/node) constitue one row of the stiffness matrix
+#define NNZ (81*3)
 
-//////////////////////////////////////////////////////////////////////////////////////////////
+// weight factor for penalty method in applying BC
+#define PENALTY_FACTOR 100
+
 namespace par {
 
-    enum class PROFILE { MATVEC=0, MATVEC_MUL, MATVEC_ACC,
-                         PETSC_ASS, PETSC_MATVEC, PETSC_KfcUc,
-                         LAST };
-
-    enum class AMAT_TYPE { PETSC_SPARSE, MAT_FREE };
-
+    /**@brief method of applying boundary conditions */
     enum class BC_METH { BC_IMATRIX, BC_PENALTY };
 
+    /**@brief types of error used in functions of aMat class */
     enum class Error { SUCCESS,
                        INDEX_OUT_OF_BOUNDS,
                        UNKNOWN_ELEMENT_TYPE,
@@ -81,17 +70,24 @@ namespace par {
                        WRONG_COMMUNICATION,
                        UNKNOWN_DOF_TYPE,
                        UNKNOWN_CONSTRAINT,
-                       UNKNOWN_BC_METH };
+                       UNKNOWN_BC_METH,
+                       NOT_IMPLEMENTED};
 
+    /**@brief  */
     enum class DOF_TYPE { FREE, PRESCRIBED, UNDEFINED };
 
-    //////////////////////////////////////////////////////////////////////////////////////////////
+    /**@brief timers for profiling */
+    enum class PROFILER { MATVEC = 0, MATVEC_MUL, MATVEC_ACC,
+                        PETSC_ASS, PETSC_MATVEC, PETSC_KfcUc,
+                        LAST };
+
+
+
+    //==============================================================================================================
     // Class AsyncExchangeCtx is downloaded from Dendro-5.0 with permission from the author (Milinda Fernando)
     // Dendro-5.0 is written by Milinda Fernando and Hari Sundar;
     class AsyncExchangeCtx {
-
     private:
-
         /** pointer to the variable which perform the ghost exchange */
         void* m_uiBuffer;
 
@@ -105,7 +101,6 @@ namespace par {
         std::vector<MPI_Request*> m_uiRequests;
 
     public:
-
         /**@brief creates an async ghost exchange context*/
         AsyncExchangeCtx( const void* var ) {
             m_uiBuffer  = (void*)var;
@@ -115,34 +110,34 @@ namespace par {
         }
 
         /**@brief allocates send buffer for ghost exchange */
-        inline void allocateSendBuffer(size_t bytes) { m_uiSendBuf = malloc(bytes); }
+        void allocateSendBuffer(size_t bytes) { m_uiSendBuf = malloc(bytes); }
 
         /**@brief allocates recv buffer for ghost exchange */
-        inline void allocateRecvBuffer(size_t bytes) { m_uiRecvBuf = malloc(bytes); }
+        void allocateRecvBuffer(size_t bytes) { m_uiRecvBuf = malloc(bytes); }
 
         /**@brief allocates send buffer for ghost exchange */
-        inline void deAllocateSendBuffer() {
+        void deAllocateSendBuffer() {
             free( m_uiSendBuf );
             m_uiSendBuf = nullptr;
         }
 
         /**@brief allocates recv buffer for ghost exchange */
-        inline void deAllocateRecvBuffer() {
+        void deAllocateRecvBuffer() {
             free( m_uiRecvBuf );
             m_uiRecvBuf = nullptr;
         }
 
         /**@brief */
-        inline void* getSendBuffer() { return m_uiSendBuf; }
+        void* getSendBuffer() { return m_uiSendBuf; }
 
         /**@brief */
-        inline void* getRecvBuffer() { return m_uiRecvBuf; }
+        void* getRecvBuffer() { return m_uiRecvBuf; }
 
         /**@brief */
-        inline const void* getBuffer() { return m_uiBuffer; }
+        const void* getBuffer() { return m_uiBuffer; }
 
         /**@brief */
-        inline std::vector<MPI_Request*>& getRequestList() { return m_uiRequests; }
+        std::vector<MPI_Request*>& getRequestList() { return m_uiRequests; }
 
         /**@brief */
         bool operator== (AsyncExchangeCtx other) const { return( m_uiBuffer == other.m_uiBuffer ); }
@@ -157,10 +152,11 @@ namespace par {
         }
     }; // class AsyncExchangeCtx
 
-    //////////////////////////////////////////////////////////////////////////////////////////////
+
+
+    //==============================================================================================================
     // Class MatRecord
     //      DT => type of data stored in matrix (eg: double). LI => size of local index.
-
     template <typename Dt, typename Li>
     class MatRecord {
     private:
@@ -182,39 +178,29 @@ namespace par {
             m_dtVal = val;
         }
 
-        inline unsigned int getRank() const { return m_uiRank; }
-        inline Li getRowId() const { return m_uiRowId; }
-        inline Li getColId() const { return m_uiColId; }
-        inline Dt getVal()   const { return m_dtVal; }
+        unsigned int getRank() const { return m_uiRank; }
+        Li getRowId() const { return m_uiRowId; }
+        Li getColId() const { return m_uiColId; }
+        Dt getVal()   const { return m_dtVal; }
 
-        inline void setRank(  unsigned int rank ) { m_uiRank = rank; }
-        inline void setRowId( Li rowId ) { m_uiRowId = rowId; }
-        inline void setColId( Li colId ) { m_uiColId = colId; }
-        inline void setVal(   Dt val ) {   m_dtVal = val; }
+        void setRank(  unsigned int rank ) { m_uiRank = rank; }
+        void setRowId( Li rowId ) { m_uiRowId = rowId; }
+        void setColId( Li colId ) { m_uiColId = colId; }
+        void setVal(   Dt val ) {   m_dtVal = val; }
 
         bool operator == (MatRecord const &other) const {
             return ((m_uiRank == other.getRank())&&(m_uiRowId == other.getRowId())&&(m_uiColId == other.getColId()));
         }
 
         bool operator < (MatRecord const &other) const {
-            if (m_uiRank < other.getRank()) {
-                return true;
-            }
+            if (m_uiRank < other.getRank()) return true;
             else if (m_uiRank == other.getRank()) {
-                if (m_uiRowId < other.getRowId()) {
-                    return true;
-                }
+                if (m_uiRowId < other.getRowId()) return true;
                 else if (m_uiRowId == other.getRowId()) {
-                    if (m_uiColId < other.getColId()) {
-                        return true;
-                    }
-                    else {
-                        return false;
-                    }
+                    if (m_uiColId < other.getColId()) return true;
+                    else return false;
                 }
-                else {
-                    return false;
-                }
+                else return false;
             }
             else {
                 return false;
@@ -224,14 +210,13 @@ namespace par {
         bool operator <= (MatRecord const &other) const { return (((*this) < other) || (*this) == other); }
 
         ~MatRecord() {}
-
     }; // class MatRecord
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////
-    //
+
+
+    //==============================================================================================================
     // DT => type of data stored in matrix (eg: double). LI => size of local index.
     // class is used to define MPI_Datatype for MatRecord
-
     template <typename dt, typename li>
     class MPI_datatype_matrecord{
     public:
@@ -247,8 +232,10 @@ namespace par {
         }
     }; // class MPI_datatype_matrecord
 
-    //////////////////////////////////////////////////////////////////////////////////////////////
-    // Class ElemMat: elemental matrix
+
+
+    //==============================================================================================================
+    // Class ConstrainedRecord
     //      DT => type of data stored in matrix (eg: double)
     template <typename DT, typename GI>
     class ConstrainedRecord {
@@ -262,11 +249,11 @@ namespace par {
             preVal = 0.0;
         }
 
-        inline GI get_dofId() const { return dofId; }
-        inline DT get_preVal() const {return preVal; }
+        GI get_dofId() const { return dofId; }
+        DT get_preVal() const {return preVal; }
 
-        inline void set_dofId(GI id) { dofId = id; }
-        inline void set_preVal(DT value) { preVal = value; }
+        void set_dofId(GI id) { dofId = id; }
+        void set_preVal(DT value) { preVal = value; }
 
         bool operator == (ConstrainedRecord const &other) const {
             return (dofId == other.get_dofId());
@@ -281,27 +268,130 @@ namespace par {
 
         ~ConstrainedRecord() {}
     };// class ConstrainedDof
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////
-    //
-    // Class aMat
-    //
-    // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
 
+
+
+    //==============================================================================================================
+    // Class profiler_t is downloaded from Dendro-5.0 with permission from the author (Milinda Fernando)
+    // Dendro-5.0 is written by Milinda Fernando and Hari Sundar;
+    class profiler_t {
+        public:
+            long double	seconds;  // openmp wall time
+            long long p_flpops; // papi floating point operations
+            long double snap; // snap shot of the cumilative time.
+            long long num_calls; // number of times the timer stop function called.
+
+        protected:
+            long double	  _pri_seconds;  // openmp wall time
+            long long _pri_p_flpops; // papi floating point operations
+
+        public:
+            profiler_t (){
+                seconds  = 0.0;   // openmp wall time
+                p_flpops =   0;   // papi floating point operations
+                snap =0.0;
+                num_calls=0;
+
+                _pri_seconds  = 0.0;
+                _pri_p_flpops =   0;
+            }
+            virtual ~profiler_t () {}
+
+            void start(){
+                _pri_seconds = omp_get_wtime();
+                flops_papi();
+            }
+            void stop(){
+                seconds -= _pri_seconds;
+                p_flpops -= _pri_p_flpops;
+                snap-=_pri_seconds;
+
+                _pri_seconds = omp_get_wtime();
+                flops_papi();
+
+                seconds  += _pri_seconds;
+                p_flpops += _pri_p_flpops;
+                snap     += _pri_seconds;
+                //num_calls++;
+            }
+            void clear(){
+                seconds  = 0.0;
+                p_flpops =   0;
+                snap=0.0;
+                num_calls=0;
+
+                _pri_seconds  = 0.0;
+                _pri_p_flpops =   0;
+            }
+            void snapreset(){
+                snap=0.0;
+                num_calls=0;
+            }
+
+        private:
+            void  flops_papi(){
+                #ifdef HAVE_PAPI
+                    int 		retval;
+                    float rtime, ptime, mflops;
+                    retval  = PAPI_flops(&rtime, &ptime, &_pri_p_flpops, &mflops);
+                    // assert (retval == PAPI_OK);
+                #else
+                    _pri_p_flpops =   0;
+                #endif
+            }
+    };
+
+
+
+    //==============================================================================================================
+    // Class aMat
+    // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
     template <typename DT, typename GI, typename LI>
     class aMat {
 
+        #ifdef AMAT_PROFILER
+        public:
+        /**@brief list of profilers for timing different tasks */
+        std::vector<profiler_t> timing_aMat = std::vector<profiler_t>(static_cast<int>(PROFILER::LAST));
+
+        /**@brief reset variables for timing*/
+        void reset_profile_counters(){
+            for( unsigned int i = 0; i < timing_aMat.size(); i++){
+                //printf("i= %d\n",i);
+                timing_aMat[i].clear();
+                timing_aMat[i].start();
+            }
+        }
+
+        /**@brief print out timing */
+        void profile_dump(std::ostream& s){
+
+            long double t_rank, t_max;
+
+            // get the time of task
+            t_rank = timing_aMat[static_cast<int>(PROFILER::MATVEC)].seconds;
+
+            // get the max time among all ranks
+            MPI_Reduce(&t_rank, &t_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, m_comm);
+
+            // display the time
+            if (m_uiRank == 0){
+                s << "time of matvec: = " << t_max << "\n";
+            }
+        }
+        #endif
+
+        public:
         typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
         typedef Eigen::Matrix<DT, Eigen::Dynamic, 1> EigenVec;
 
-
-    protected:
-        /**@brief Flag to use matrix-free or matrix-based method*/
-        AMAT_TYPE m_MatType;
-
+        protected:
         /**@brief communicator used within aMat */
         MPI_Comm m_comm;
+
         /**@brief my rank */
         unsigned int m_uiRank;
+
         /**@brief total number of ranks */
         unsigned int m_uiSize;
 
@@ -310,31 +400,169 @@ namespace par {
 
         /**@brief (local) number of DoFs owned by rank */
         LI m_uiNumDofs;
+
         /**@brief (global) number of DoFs owned by all ranks */
         GI m_ulNumDofsGlobal;
-        /**@brief start of global ID of owned dofs, just for assertion */
-        GI m_ulGlobalDofStart_assert;
-        /**@brief end of global ID of owned dofs, just for assertion */
-        GI m_ulGlobalDofEnd_assert;
-        /**@brief total dofs inclulding ghost, just for assertion */
-        LI m_uiTotalDofs_assert;
+
+        /**@brief start of global ID of owned dofs */
+        GI m_ulGlobalDofStart;
+
+        /**@brief end of global ID of owned dofs (# owned dofs = m_ulGlobalDofEnd - m_ulGlobalDofStart + 1) */
+        GI m_ulGlobalDofEnd;
+
+        /**@brief total dofs inclulding ghost */
+        LI m_uiNumDofsTotal;
+
         /**@brief (local) number of elements owned by rank */
         LI m_uiNumElems;
+
         /**@brief max number of DoFs per element*/
         LI m_uiMaxDofsPerElem;
-
-
-        /**@brief assembled stiffness matrix */
-        Mat m_pMat;
-
-        /**@brief storage of element matrices */
-        std::vector< DT* >* m_epMat;
 
         /**@brief map from local DoF of element to global DoF: m_ulpMap[eid][local_id]  = global_id */
         GI** m_ulpMap;
 
         /**@brief number of dofs per element */
         const LI* m_uiDofsPerElem;
+
+        /**@brief map of constrained DOFs: 0 = free dof; 1 = constrained dof */
+        unsigned int** m_uipBdrMap;
+
+        /**@brief map of values prescribed on constrained DOFs */
+        DT** m_dtPresValMap;
+
+        /**@brief list of constrained DOFs owned by my rank */
+        std::vector<GI> ownedConstrainedDofs;
+
+        /**@brief list of values prescribed at constrained DOFs owned by my rank */
+        std::vector<DT> ownedPrescribedValues;
+
+        /**@brief list of free DOFs owned by my rank */
+        std::vector<GI> ownedFreeDofs;
+
+        /**@brief KfcUc = Kfc * Uc, used to apply bc for rhs */
+        Vec KfcUcVec;
+
+        //**@brief penalty number */
+        DT m_dtTraceK;
+
+        public:
+        /**@brief constructor to initialize variables of aMat */
+        aMat( BC_METH bcType = BC_METH::BC_IMATRIX);
+
+        /**@brief destructor of aMat */
+        ~aMat();
+
+        /**@brief set communicator for aMat */
+        Error set_comm(MPI_Comm comm){
+            m_comm = comm;
+            MPI_Comm_rank(comm, (int*)&m_uiRank);
+            MPI_Comm_size(comm, (int*)&m_uiSize);
+            return Error::SUCCESS;
+        }
+
+        /**@brief set mapping from element local node to global node */
+        virtual Error set_map( const LI      n_elements_on_rank,
+                                const LI* const * element_to_rank_map,
+                                const LI        * dofs_per_element,
+                                const LI          n_all_dofs_on_rank, // Note: includes ghost dofs
+                                const GI        * rank_to_global_map,
+                                const GI          owned_global_dof_range_begin,
+                                const GI          owned_global_dof_range_end,
+                                const GI          n_global_dofs ) = 0;
+
+        /**@brief update map when cracks created */
+        virtual Error update_map(const LI* new_to_old_rank_map,
+                                const LI old_n_all_dofs_on_rank,
+                                const GI* old_rank_to_global_map,
+                                const LI n_elements_on_rank,
+                                const LI* const * element_to_rank_map,
+                                const LI* dofs_per_element,
+                                const LI n_all_dofs_on_rank,
+                                const GI* rank_to_global_map,
+                                const GI owned_global_dof_range_begin,
+                                const GI owned_global_dof_range_end,
+                                const GI n_global_dofs) = 0;
+
+        /**@brief assemble element matrix to global matrix */
+        virtual Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) = 0;
+
+        /**@brief assembly load vector to global vector: same for both matrix-free and matrix-based */
+        Error petsc_set_element_vec( Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode = ADD_VALUES );
+
+        /**@brief set boundary data, numConstraints is the global number of constrains */
+        virtual Error set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints) = 0;
+
+        /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs and matrix */
+        virtual Error apply_bc( Vec rhs ) = 0;
+
+        /**@brief invoke basic PETSc solver, "out" is solution vector */
+        virtual Error petsc_solve( const Vec rhs, Vec out ) const = 0;
+
+        /**@brief allocate memory for a PETSc vector "vec", initialized by alpha */
+        Error petsc_create_vec( Vec &vec, PetscScalar alpha = 0.0 ) const;
+
+        /**@brief free memory allocated for PETSc vector*/
+        Error petsc_destroy_vec( Vec & vec ) const {
+            VecDestroy( &vec );
+            return Error::SUCCESS;
+        }
+
+        /**@brief write PETSc vector "vec" to filename "fvec" */
+        Error petsc_dump_vec( Vec vec, const char* filename = nullptr ) const;
+
+        /**@brief begin assembling the matrix  */
+        virtual Error petsc_init_mat( MatAssemblyType mode ) const = 0;
+
+        /**@brief complete assembling the matrix  */
+        virtual Error petsc_finalize_mat( MatAssemblyType mode ) const = 0;
+
+        /**@brief write global matrix to filename "fvec", matrix-free --> not yet implemented */
+        virtual Error petsc_dump_mat( const char* filename = nullptr ) = 0;
+
+    }; // class aMat
+
+
+
+    //==============================================================================================================
+    // class aMatFree derived from base class aMat
+    // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
+    template <typename DT, typename GI, typename LI>
+    class aMatFree : public aMat<DT,GI,LI> {
+        public:
+        using typename aMat<DT,GI,LI>::EigenMat;
+        using typename aMat<DT,GI,LI>::EigenVec;
+
+        using aMat<DT,GI,LI>::m_comm;
+        using aMat<DT,GI,LI>::m_uiRank;
+        using aMat<DT,GI,LI>::m_uiSize;
+        using aMat<DT,GI,LI>::m_BcMeth;
+
+        using aMat<DT,GI,LI>::m_uiNumDofs;
+        using aMat<DT,GI,LI>::m_ulNumDofsGlobal;
+        using aMat<DT,GI,LI>::m_ulGlobalDofStart;
+        using aMat<DT,GI,LI>::m_ulGlobalDofEnd;
+        using aMat<DT,GI,LI>::m_uiNumDofsTotal;
+        using aMat<DT,GI,LI>::m_uiNumElems;
+        using aMat<DT,GI,LI>::m_uiMaxDofsPerElem;
+
+        using aMat<DT,GI,LI>::m_ulpMap;
+        using aMat<DT,GI,LI>::m_uiDofsPerElem;
+        using aMat<DT,GI,LI>::m_uipBdrMap;
+        using aMat<DT,GI,LI>::m_dtPresValMap;
+        using aMat<DT,GI,LI>::ownedConstrainedDofs;
+        using aMat<DT,GI,LI>::ownedPrescribedValues;
+        using aMat<DT,GI,LI>::ownedFreeDofs;
+        using aMat<DT,GI,LI>::KfcUcVec;
+        using aMat<DT,GI,LI>::m_dtTraceK;
+
+        #ifdef AMAT_PROFILER
+        using aMat<DT,GI,LI>::timing_aMat;
+        #endif
+
+        protected:
+        /**@brief storage of element matrices */
+        std::vector< DT* >* m_epMat;
 
         /**@brief map from local DoF of element to local DoF: m_uiMap[eid][element_node]  = local node-ID */
         const LI* const*  m_uipLocalMap;
@@ -400,7 +628,7 @@ namespace par {
         LI m_uiDofPostGhostEnd;
 
         /**@brief total number of dofs including ghost dofs and dofs owned by me */
-        LI m_uiNumDofsTotal;
+        //LI m_uiNumDofsTotal;
 
         /**@brief MPI communication tag*/
         int m_iCommTag;
@@ -411,31 +639,12 @@ namespace par {
         /**@brief matrix record for block jacobi matrix*/
         std::vector<MatRecord<DT,LI>> m_vMatRec;
 
-        /**@brief map of constrained DOFs: 0 = free dof; 1 = constrained dof */
-        unsigned int** m_uipBdrMap;
+        /**@brief used to save constrained dofs when applying BCs in matvec */
+        DT* Uc;
 
-        /**@brief map of values prescribed on constrained DOFs */
-        DT** m_dtPresValMap;
+        /**@brief number of owned constraints */
+        LI n_owned_constraints;
 
-        /**@brief list of constrained DOFs owned by my rank */
-        std::vector<GI> ownedConstrainedDofs;
-
-        /**@brief list of values prescribed at constrained DOFs owned by my rank */
-        std::vector<DT> ownedPrescribedValues;
-
-        /**@brief list of free DOFs owned by my rank */
-        std::vector<GI> ownedFreeDofs;
-
-        /**@brief KfcUc (= Kfc * Uc) used to apply bc for rhs */
-        Vec KfcUcVec;
-
-        //**@brief penalty number */
-        DT m_dtTraceK;
-
-        /**@brief TEMPORARY VARIABLES FOR DEBUGGING */
-        Mat m_pMat_matvec; // matrix created by matvec() to compare with m_pMat
-
-    private:
         #ifdef USE_OMP
             /**@brief max number of omp threads */
             unsigned int m_uiNumThreads;
@@ -448,223 +657,71 @@ namespace par {
             DT* ue;
         #endif
 
-        /**@brief used to save constrained dofs when applying BCs in matvec */
-        DT* Uc;
-        LI n_owned_constraints;
 
-    public:
+        public:
+        /**@brief constructor to initialize variables of aMatFree */
+        aMatFree(BC_METH bcType = BC_METH::BC_IMATRIX);
 
-        /**@brief constructor to initialize variables of aMat */
-        aMat( AMAT_TYPE matType, BC_METH bcType = BC_METH::BC_IMATRIX);
+        /**@brief destructor of aMatFree */
+        ~aMatFree();
 
-        /**@brief destructor of aMat */
-        ~aMat();
+        /**@brief overidden version of aMat::set_map */
+        Error set_map( const LI       n_elements_on_rank,
+                    const LI* const * element_to_rank_map,
+                    const LI        * dofs_per_element,
+                    const LI          n_all_dofs_on_rank, // Note: includes ghost dofs
+                    const GI        * rank_to_global_map,
+                    const GI          owned_global_dof_range_begin,
+                    const GI          owned_global_dof_range_end,
+                    const GI          n_global_dofs );
 
-        inline par::Error set_comm(MPI_Comm comm){
-            m_comm = comm;
-            MPI_Comm_rank(comm, (int*)&m_uiRank);
-            MPI_Comm_size(comm, (int*)&m_uiSize);
+        /**@brief overidden version of aMat::update_map */
+        Error update_map(const LI* new_to_old_rank_map,
+                        const LI old_n_all_dofs_on_rank,
+                        const GI* old_rank_to_global_map,
+                        const LI n_elements_on_rank,
+                        const LI* const * element_to_rank_map,
+                        const LI* dofs_per_element,
+                        const LI n_all_dofs_on_rank,
+                        const GI* rank_to_global_map,
+                        const GI owned_global_dof_range_begin,
+                        const GI owned_global_dof_range_end,
+                        const GI n_global_dofs);
+
+        /**@brief overidden version of aMatFree */
+        Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim );
+
+        /**@brief overidden version of aMat::set_bdr_map */
+        Error set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints);
+
+        /**@brief overidden version of aMat::apply_bc */
+        Error apply_bc( Vec rhs ){
+            apply_bc_rhs(rhs);
             return Error::SUCCESS;
         }
 
-        /**@brief set mapping from element local node to global node */
-        par::Error set_map( const LI          n_elements_on_rank,
-                            const LI* const * element_to_rank_map,
-                            const LI        * dofs_per_element,
-                            const LI          n_all_dofs_on_rank, // Note: includes ghost dofs
-                            const GI        * rank_to_global_map,
-                            const GI          owned_global_dof_range_begin,
-                            const GI          owned_global_dof_range_end,
-                            const GI          n_global_dofs );
+        /**@brief overidden version of aMat::petsc_solve */
+        Error petsc_solve( const Vec rhs, Vec out ) const;
 
-        /**@brief update map when cracks created */
-        par::Error update_map(const LI* new_to_old_rank_map, const LI old_n_all_dofs_on_rank, const LI* old_rank_to_global_map,
-                              const LI n_elements_on_rank, const GI* const * element_to_rank_map, const LI* dofs_per_element,
-                              const LI n_all_dofs_on_rank, const LI* rank_to_global_map, const GI owned_global_dof_range_begin,
-                              const GI owned_global_dof_range_end, const GI n_global_dofs);
-
-        /**@brief build scatter-gather map (used for communication) and local-to-local map (used for matvec) */
-        par::Error buildScatterMap();
-
-        /**@brief return number of DoFs owned by this rank*/
-        unsigned int get_local_num_nodes() const {
-            return m_uiNumDofs;
-        }
-        /**@brief return total number of DoFs (owned DoFs + ghost DoFs)*/
-        unsigned int get_total_local_num_nodes() const {
-            return m_uiNumDofsTotal;
-        }
-        /**@brief return number of elements owned by this rank*/
-        unsigned int get_local_num_elements() const {
-            return m_uiNumElems;
-        }
-        /**@brief return number of nodes of element eid */
-        unsigned int get_nodes_per_element (unsigned int eid) const {
-            return m_uiDofsPerElem[eid];
-        }
-        /**@brief return the map from DoF of element to local ID of vector (included ghost DoFs) */
-        const LI * const * get_e2local_map() const {
-            return m_uipLocalMap;
-        }
-        /**@brief return the map from DoF of element to global ID */
-        GI** get_e2global_map() const {
-            return m_ulpMap;
-        }
-        /**@brief return the ID of first pre-ghost DoF */
-        unsigned int get_pre_ghost_begin() const {
-            return m_uiDofPreGhostBegin;
-        }
-        /**@brief return the ID that is 1 bigger than last pre-ghost DoF */
-        unsigned int get_pre_ghost_end() const {
-            return m_uiDofPreGhostEnd;
-        }
-        /**@brief return the ID of first post-ghost DoF */
-        unsigned int get_post_ghost_begin() const {
-            return m_uiDofPostGhostBegin;
-        }
-        /**@brief return the ID that is 1 bigger than last post-ghost DoF */
-        unsigned int get_post_ghost_end() const {
-            return m_uiDofPostGhostEnd;
-        }
-        /**@brief return the ID of first DoF owned by this rank*/
-        unsigned int get_local_begin() const {
-            return m_uiDofLocalBegin;
-        }
-        /**@brief return the Id that is 1 bigger than last DoF owned by this rank*/
-        unsigned int get_local_end() const {
-            return m_uiDofLocalEnd;
-        }
-        /**@brief return true if DoF "enid" of element "eid" is owned by this rank, false otherwise */
-        bool is_local_node(unsigned int eid, unsigned int enid) const {
-            const unsigned int nid = (const unsigned int)m_uipLocalMap[eid][enid];
-            if( nid >= m_uiDofLocalBegin && nid < m_uiDofLocalEnd ) {
-                return true;
-            }
-            else {
-                return false;
-            }
+        /**@brief */
+        Error petsc_init_mat( MatAssemblyType mode ) const {
+            printf("petsc_init_mat is not applied for matrix-free\n");
+            return Error::NOT_IMPLEMENTED;
         }
 
-        /**@brief begin assembling the matrix "m_pMat", called after MatSetValues */
-        par::Error petsc_init_mat( MatAssemblyType mode ) const {
-            MatAssemblyBegin( m_pMat, mode );
-            return Error::SUCCESS;
-        }
-        /**@brief complete assembling the matrix "m_pMat", called before using the matrix */
-        par::Error petsc_finalize_mat( MatAssemblyType mode ) const {
-            MatAssemblyEnd( m_pMat, mode );
-            return Error::SUCCESS;
-        }
-        /**@brief begin assembling the petsc vec (defined outside aMat) */
-        par::Error petsc_init_vec( Vec vec ) const {
-            VecAssemblyBegin( vec );
-            return Error::SUCCESS;
-        }
-        /**@brief end assembling the petsc vec (defined outside aMat) */
-        par::Error petsc_finalize_vec( Vec vec ) const {
-            VecAssemblyEnd( vec );
-            return Error::SUCCESS;
+        /**@brief */
+        Error petsc_finalize_mat( MatAssemblyType mode ) const {
+            printf("petsc_finalize_mat is not applied for matrix-free\n");
+            return Error::NOT_IMPLEMENTED;
         }
 
-        /**@brief allocate memory for a PETSc vector "vec", initialized by alpha */
-        par::Error petsc_create_vec( Vec &vec, PetscScalar alpha = 0.0 ) const;
-
-        /**@brief assembly global load vector */
-        par::Error petsc_set_element_vec( Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode = ADD_VALUES );
-
-        /**@brief assembly element matrix to structural matrix (for matrix-based method) */
-        par::Error petsc_set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, InsertMode = ADD_VALUES );
-
-        /**@brief: write PETSc matrix "m_pMat" to "filename"
-         * @param[in] filename: name of file to write matrix to.  If nullptr, then write to stdout.
-         */
-        par::Error dump_mat( const char* filename = nullptr ); // Note: can't be 'const' because may call matvec which may need MPI data to be stored...
-
-        /**@brief: write PETSc vector "vec" to filename "fvec"
-         * @param[in] vec      : petsc vector to write to file
-         * @param[in] filename : name of file to write vector to.  If nullptr, then dump to std out.
-         */
-        par::Error dump_vec( Vec vec, const char* filename = nullptr ) const;
-
-        /**@brief get diagonal of m_pMat and put to vec */
-        par::Error petsc_get_diagonal( const Vec & vec ) const;
-
-        /**@brief free memory allocated for PETSc vector*/
-        par::Error petsc_destroy_vec( Vec & vec ) const;
-
-        /**@brief allocate memory for "vec", size includes ghost DoFs if isGhosted=true, initialized by alpha */
-        par::Error create_vec( DT* &vec, bool isGhosted = false, DT alpha = (DT)0.0 ) const;
-
-        /**@brief allocate memory for "mat", size includes ghost DoFs if isGhosted=true, initialized by alpha */
-        par::Error create_mat( DT** &mat, bool isGhosted = false, DT alpha = (DT)0.0 );
-
-        /**@brief copy local to corresponding positions of gVec (size including ghost DoFs) */
-        par::Error local_to_ghost(DT*  gVec, const DT* local) const;
-
-        /**@brief copy gVec (size including ghost DoFs) to local (size of local DoFs) */
-        par::Error ghost_to_local(DT* local, const DT* gVec) const;
-
-        /**@brief copy element matrix and store in m_mats, used for matrix-free method */
-        par::Error copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim );
-
-        /**@brief get diagonal terms of structure matrix by accumulating diagonal of element matrices */
-        par::Error mat_get_diagonal(DT* diag, bool isGhosted = false);
-
-        /**@brief get diagonal terms with ghosted vector diag */
-        par::Error mat_get_diagonal_ghosted(DT* diag);
-
-        /**@brief compute the rank who owns gId */
-        unsigned int globalId_2_rank(GI gId) const;
-
-        /**@brief get diagonal block matrix (sparse matrix) */
-        par::Error mat_get_diagonal_block(std::vector<MatRecord<DT,LI>> &diag_blk);
-
-        /**@brief get max number of DoF per element*/
-        par::Error get_max_dof_per_elem();
-
-        /**@brief free memory allocated for vec and set vec to null */
-        par::Error destroy_vec(DT* &vec);
-
-        /**@brief free memory allocated for matrix mat and set mat to null */
-        par::Error destroy_mat(DT** &mat, const unsigned int nrow);
-
-        /**@brief begin: owned DoFs send, ghost DoFs receive, called before matvec() */
-        par::Error ghost_receive_begin(DT* vec);
-
-        /**@brief end: ghost DoFs receive, called before matvec() */
-        par::Error ghost_receive_end(DT* vec);
-
-        /**@brief begin: ghost DoFs send, owned DoFs receive and accumulate to current data, called after matvec() */
-        par::Error ghost_send_begin(DT* vec);
-
-        /**@brief end: ghost DoFs send, owned DoFs receive and accumulate to current data, called after matvec() */
-        par::Error ghost_send_end(DT* vec);
-
-        /**@brief v = K * u (K is not assembled, but directly using elemental K_e's).  v (the result) must be allocated by the caller.
-         * @param[in] isGhosted = true, if v and u are of size including ghost DoFs
-         * @param[in] isGhosted = false, if v and u are of size NOT including ghost DoFs
-         * */
-        par::Error matvec(DT* v, const DT* u, bool isGhosted = false);
-
-        // FIXME: internal only call (move to private)?  Use matvec instead?
-        /**@brief v = K * u; v and u are of size including ghost DoFs. */
-        #ifdef USE_OMP
-            par::Error matvec_ghosted_OMP(DT* v, DT* u);
-        #else
-            par::Error matvec_ghosted_noOMP(DT* v, DT* u);
-        #endif
-
-        /**@brief matrix-free version of MatMult of PETSc */
-        PetscErrorCode MatMult_mf(Mat A, Vec u, Vec v);
-
-        /**@brief matrix-free version of MatGetDiagonal of PETSc */
-        PetscErrorCode MatGetDiagonal_mf( Mat A, Vec d );
-
-        /**@brief matrix-free version of MatGetDiagonalBlock of PETSc */
-        PetscErrorCode MatGetDiagonalBlock_mf( Mat A, Mat* a );
+        Error petsc_dump_mat( const char* filename ){
+            printf("petsc_dump_mat is not yet implemented for matrix-free approach\n");
+            return Error::NOT_IMPLEMENTED;
+        }
 
         /**@brief pointer function points to MatMult_mt */
-        inline std::function<PetscErrorCode(Mat,Vec,Vec)>* get_MatMult_func(){
+        std::function<PetscErrorCode(Mat,Vec,Vec)>* get_MatMult_func(){
 
             std::function<PetscErrorCode(Mat,Vec,Vec)>* f= new std::function<PetscErrorCode(Mat, Vec, Vec)>();
 
@@ -676,7 +733,7 @@ namespace par {
         }
 
         /**@brief pointer function points to MatGetDiagonal_mf */
-        inline std::function<PetscErrorCode(Mat,Vec)>* get_MatGetDiagonal_func(){
+        std::function<PetscErrorCode(Mat,Vec)>* get_MatGetDiagonal_func(){
 
             std::function<PetscErrorCode(Mat,Vec)>* f= new std::function<PetscErrorCode(Mat, Vec)>();
 
@@ -688,7 +745,7 @@ namespace par {
         }
 
         /**@brief pointer function points to MatGetDiagonalBlock_mf */
-        inline std::function<PetscErrorCode(Mat, Mat*)>* get_MatGetDiagonalBlock_func(){
+        std::function<PetscErrorCode(Mat, Mat*)>* get_MatGetDiagonalBlock_func(){
 
             std::function<PetscErrorCode(Mat,Mat*)>* f= new std::function<PetscErrorCode(Mat, Mat*)>();
 
@@ -699,23 +756,92 @@ namespace par {
             return f;
         }
 
-        /**@brief set boundary data, numConstraints is the global number of constrains */
-        par::Error set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints);
+        protected:
+        /**@brief apply Dirichlet BCs to the rhs vector */
+        Error apply_bc_rhs( Vec rhs );
 
-        /**@brief apply Dirichlet BCs by modifying the matrix "m_pMat" */
-        par::Error apply_bc_mat();
+        /**@brief build scatter-gather map (used for communication) and local-to-local map (used for matvec) */
+        Error buildScatterMap();
+
+        /**@brief return true if DoF "enid" of element "eid" is owned by this rank, false otherwise */
+        bool is_local_node(LI eid, LI enid) const {
+            const LI nid = m_uipLocalMap[eid][enid];
+            if( nid >= m_uiDofLocalBegin && nid < m_uiDofLocalEnd ) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        /**@brief allocate memory for "vec", size includes ghost DoFs if isGhosted=true, initialized by alpha */
+        Error create_vec( DT* &vec, bool isGhosted = false, DT alpha = (DT)0.0 ) const;
+
+        /**@brief free memory allocated for vec and set vec to null */
+        Error destroy_vec(DT* &vec);
+
+        /**@brief copy local (size = m_uiNumDofs) to corresponding positions of gVec (size = m_uiNumDofsTotal) */
+        Error local_to_ghost(DT*  gVec, const DT* local) const;
+
+        /**@brief copy gVec (size = m_uiNumDofsTotal) to local (size = m_uiNumDofs) */
+        Error ghost_to_local(DT* local, const DT* gVec) const;
+
+        /**@brief matrix-free version of set_element_matrix: copy element matrix and store in m_pMat */
+        Error copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim );
+
+        /**@brief get diagonal terms of structure matrix by accumulating diagonal of element matrices */
+        Error mat_get_diagonal(DT* diag, bool isGhosted = false);
+
+        /**@brief get diagonal terms with ghosted vector diag */
+        Error mat_get_diagonal_ghosted(DT* diag);
+
+        /**@brief return the rank who owns gId */
+        unsigned int globalId_2_rank(GI gId) const;
+
+        /**@brief get diagonal block matrix (sparse matrix) */
+        Error mat_get_diagonal_block(std::vector<MatRecord<DT,LI>> &diag_blk);
+
+        /**@brief get max number of DoF per element and put to m_uiMaxDofsPerElem */
+        Error get_max_dof_per_elem();
+
+        /**@brief begin: owned DoFs send, ghost DoFs receive, called before matvec() */
+        Error ghost_receive_begin(DT* vec);
+
+        /**@brief end: ghost DoFs receive, called before matvec() */
+        Error ghost_receive_end(DT* vec);
+
+        /**@brief begin: ghost DoFs send, owned DoFs receive and accumulate to current data, called after matvec() */
+        Error ghost_send_begin(DT* vec);
+
+        /**@brief end: ghost DoFs send, owned DoFs receive and accumulate to current data, called after matvec() */
+        Error ghost_send_end(DT* vec);
+
+        /**@brief v = K * u (K is not assembled, but directly using elemental K_e's).  v (the result) must be allocated by the caller.
+         * @param[in] isGhosted = true, if v and u are of size including ghost DoFs
+         * @param[in] isGhosted = false, if v and u are of size NOT including ghost DoFs
+         * */
+        Error matvec(DT* v, const DT* u, bool isGhosted = false);
+
+        /**@brief v = K * u; v and u are of size including ghost DoFs. */
+        #ifdef USE_OMP
+            Error matvec_ghosted_OMP(DT* v, DT* u);
+        #else
+            Error matvec_ghosted_noOMP(DT* v, DT* u);
+        #endif
+
+        /**@brief matrix-free version of MatMult of PETSc */
+        PetscErrorCode MatMult_mf(Mat A, Vec u, Vec v);
+
+        /**@brief matrix-free version of MatGetDiagonal of PETSc */
+        PetscErrorCode MatGetDiagonal_mf( Mat A, Vec d );
+
+        /**@brief matrix-free version of MatGetDiagonalBlock of PETSc */
+        PetscErrorCode MatGetDiagonalBlock_mf( Mat A, Mat* a );
 
         /**@brief apply Dirichlet BCs to diagonal vector used for Jacobi preconditioner */
-        par::Error apply_bc_diagonal(Vec rhs);
+        Error apply_bc_diagonal(Vec rhs);
 
         /**@brief apply Dirichlet BCs to block diagonal matrix */
-        par::Error apply_bc_blkdiag(Mat* blkdiagMat);
-
-        /**@brief apply Dirichlet BCs by modifying the rhs vector, also used for diagonal vector in Jacobi precondition*/
-        par::Error apply_bc_rhs( Vec rhs );
-
-        /**@brief: invoke basic PETSc solver, "out" is solution vector */
-        par::Error petsc_solve( const Vec rhs, Vec out ) const;
+        Error apply_bc_blkdiag(Mat* blkdiagMat);
 
         /**@brief: allocate an aligned memory */
         DT* create_aligned_array(unsigned int alignment, unsigned int length);
@@ -723,88 +849,133 @@ namespace par {
         /**@brief: deallocate an aligned memory */
         void delete_algined_array(DT* array);
 
-        /**@brief ********* FUNCTIONS FOR DEBUGGING **************************************************/
-        inline void echo_rank() const {
-            printf("echo from rank= %d\n", m_uiRank);
-        }
+    }; //class aMatFree
 
-        inline par::Error petsc_init_mat_matvec( MatAssemblyType mode ) const {
-            MatAssemblyBegin( m_pMat_matvec, mode );
+
+
+    //==============================================================================================================
+    // class aMatBased derived from base class aMat
+    // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
+    template <typename DT, typename GI, typename LI>
+    class aMatBased : public aMat<DT,GI,LI> {
+        public:
+        using typename aMat<DT,GI,LI>::EigenMat;
+        using typename aMat<DT,GI,LI>::EigenVec;
+
+        using aMat<DT,GI,LI>::m_comm;
+        using aMat<DT,GI,LI>::m_uiRank;
+        using aMat<DT,GI,LI>::m_uiSize;
+        using aMat<DT,GI,LI>::m_BcMeth;
+
+        using aMat<DT,GI,LI>::m_uiNumDofs;
+        using aMat<DT,GI,LI>::m_ulNumDofsGlobal;
+        using aMat<DT,GI,LI>::m_ulGlobalDofStart;
+        using aMat<DT,GI,LI>::m_ulGlobalDofEnd;
+        using aMat<DT,GI,LI>::m_uiNumDofsTotal;
+        using aMat<DT,GI,LI>::m_uiNumElems;
+        using aMat<DT,GI,LI>::m_uiMaxDofsPerElem;
+
+        using aMat<DT,GI,LI>::m_ulpMap;
+        using aMat<DT,GI,LI>::m_uiDofsPerElem;
+        using aMat<DT,GI,LI>::m_uipBdrMap;
+        using aMat<DT,GI,LI>::m_dtPresValMap;
+        using aMat<DT,GI,LI>::ownedConstrainedDofs;
+        using aMat<DT,GI,LI>::ownedPrescribedValues;
+        using aMat<DT,GI,LI>::ownedFreeDofs;
+        using aMat<DT,GI,LI>::KfcUcVec;
+        using aMat<DT,GI,LI>::m_dtTraceK;
+
+        #ifdef AMAT_PROFILER
+        using aMat<DT,GI,LI>::timing_aMat;
+        #endif
+
+        protected:
+        /**@brief assembled stiffness matrix */
+        Mat m_pMat;
+
+        public:
+        /**@brief constructor to initialize variables of aMatBased */
+        aMatBased( BC_METH bcType = BC_METH::BC_IMATRIX);
+
+        /**@brief destructor of aMatBased */
+        ~aMatBased();
+
+        /**@brief overriden version for matrix-based approach */
+        Error set_map( const LI          n_elements_on_rank,
+                            const LI* const * element_to_rank_map,
+                            const LI        * dofs_per_element,
+                            const LI          n_all_dofs_on_rank, // Note: includes ghost dofs
+                            const GI        * rank_to_global_map,
+                            const GI          owned_global_dof_range_begin,
+                            const GI          owned_global_dof_range_end,
+                            const GI          n_global_dofs );
+
+        /**@brief overridden version for matrix-based approach */
+        Error update_map(const LI* new_to_old_rank_map,
+                            const LI old_n_all_dofs_on_rank,
+                            const GI* old_rank_to_global_map,
+                            const LI n_elements_on_rank,
+                            const LI* const * element_to_rank_map,
+                            const LI* dofs_per_element,
+                            const LI n_all_dofs_on_rank,
+                            const GI* rank_to_global_map,
+                            const GI owned_global_dof_range_begin,
+                            const GI owned_global_dof_range_end,
+                            const GI n_global_dofs);
+
+        /**@brief overidden version of aMatFree */
+        Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim );
+
+        /**@brief overidden version of aMat::set_bdr_map */
+        Error set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints);
+
+        /**@brief overidden version of aMat::apply_bc */
+        Error apply_bc( Vec rhs ){
+            apply_bc_rhs(rhs);
+            apply_bc_mat();
             return Error::SUCCESS;
         }
 
-        inline par::Error petsc_finalize_mat_matvec( MatAssemblyType mode ) const{
-            MatAssemblyEnd( m_pMat_matvec, mode );
+        /**@brief overidden version of aMat::petsc_solve */
+        Error petsc_solve( const Vec rhs, Vec out ) const;
+
+        /**@brief overidden version */
+        par::Error petsc_init_mat( MatAssemblyType mode ) const {
+            MatAssemblyBegin( m_pMat, mode );
             return Error::SUCCESS;
         }
 
-        inline par::Error set_Local2Global( GI* local_to_global ){
-            m_ulpLocal2Global = local_to_global;
+        /**@brief overidden version */
+        Error petsc_finalize_mat( MatAssemblyType mode ) const {
+            MatAssemblyEnd( m_pMat, mode );
             return Error::SUCCESS;
         }
 
-        /**@brief create pestc matrix with size of m_uniNumNodes^2, used in testing matvec() */
-        par::Error petsc_create_matrix_matvec();
+        /**@brief overidden version */
+        // Note: can't be 'const' because may call matvec which may need MPI data to be stored...
+        Error petsc_dump_mat( const char* filename = nullptr );
 
-        /**@brief assemble matrix term by term so that we can control not to assemble "almost zero" terms*/
-        par::Error set_element_matrix_term_by_term( LI eid, EigenMat e_mat, InsertMode mode = ADD_VALUES );
+        protected:
+        /**@brief matrix-based version of set_element_matrix */
+        Error petsc_set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, InsertMode = ADD_VALUES );
 
-        /**@brief compare 2 matrices */
-        par::Error petsc_compare_matrix();
+        /**@brief apply Dirichlet BCs by modifying the rhs vector, also used for diagonal vector in Jacobi precondition*/
+        Error apply_bc_rhs( Vec rhs );
 
-        /**@brief compute the norm of the diffference of 2 matrices*/
-        par::Error petsc_norm_matrix_difference();
+        /**@brief apply Dirichlet BCs by modifying the matrix "m_pMat" */
+        Error apply_bc_mat();
 
-        /**@brief print out to file matrix "m_pMat_matvec" (matrix created by using matvec() to multiply
-         * m_pMat with series of vectors [1 0 0...]
-         * @param[in] filename : name of file to write vector to.  If nullptr, then dump to std out.
-         */
-        par::Error dump_mat_matvec( const char* filename = nullptr ) const;
-
-        /**@brief y = m_pMat * x */
-        par::Error petsc_matmult( Vec x, Vec result );
-
-        /**@brief set entire vector "vec" to the column "nonzero_row" of matrix m_pMat_matvec, to compare with m_pMat*/
-        par::Error petsc_set_matrix_matvec( DT* vec, unsigned int nonzero_row, InsertMode mode = ADD_VALUES );
-
-        /**@brief: test only: display all components of vector on screen */
-        par::Error print_vector( const DT* vec, bool ghosted = false );
-
-        /**@brief: test only: display all element matrices (for purpose of debugging) */
-        par::Error print_matrix();
-
-        /**@brief: transform vec to pestc vector (for comparison between matrix-free and matrix-based)*/
-        par::Error transform_to_petsc_vector(const DT* vec, Vec petsc_vec, bool ghosted = false);
-
-        /**@brief: apply zero Dirichlet boundary condition on nodes dictated by dirichletBMap */
-        par::Error set_vector_bc(DT* vec, unsigned int eid, const GI **dirichletBMap);
-
-        /**@brief get diagonal block matrix for sequential code (no communication among ranks) */
-        par::Error mat_get_diagonal_block_seq(DT **diag_blk);
-
-        /**@brief copy gMat (size including ghost DoFs) to lMat (size of local DoFs) */
-        par::Error ghost_to_local_mat(DT**  lMat, DT** gMat) const;
-
-        /**@brief assemble element matrix to global matrix for matrix-based, not using Eigen */
-        par::Error petsc_set_element_matrix( LI eid, DT *e_mat, InsertMode mode = ADD_VALUES );
-
-        par::Error print_mepMat();
-
-        /**@brief get diagonal block matrix (dense matrix) */
-        par::Error mat_get_diagonal_block_dense(DT **diag_blk);
-
-    }; // end class aMat
+    }; // class aMatBased
 
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    //==============================================================================================================
     // context for aMat
-
     template <typename DT, typename GI, typename LI>
     struct aMatCTX {
-        par::aMat<DT,GI,LI> * aMatPtr;
+        par::aMatFree<DT,GI,LI> * aMatPtr;
     };
 
-    ////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     // matrix shell to use aMat::MatMult_mf
     template<typename DT,typename GI, typename LI>
@@ -813,12 +984,13 @@ namespace par {
         aMatCTX<DT,GI, LI> * pCtx;
         MatShellGetContext( A, &pCtx );
 
-        par::aMat<DT, GI, LI> * pLap = pCtx->aMatPtr;
+        par::aMatFree<DT, GI, LI> * pLap = pCtx->aMatPtr;
         std::function<PetscErrorCode( Mat, Vec, Vec )>* f = pLap->get_MatMult_func();
         (*f)( A, u , v );
         delete f;
         return 0;
     }
+
 
     // matrix shell to use aMat::MatGetDiagonal_mf
     template<typename DT,typename GI, typename LI>
@@ -827,12 +999,13 @@ namespace par {
         aMatCTX<DT,GI,LI> * pCtx;
         MatShellGetContext(A, &pCtx);
 
-        par::aMat<DT,GI,LI> * pLap = pCtx->aMatPtr;
+        par::aMatFree<DT,GI,LI> * pLap = pCtx->aMatPtr;
         std::function<PetscErrorCode(Mat, Vec)>* f = pLap->get_MatGetDiagonal_func();
         (*f)(A, d);
         delete f;
         return 0;
     }
+
 
     // matrix shell to use aMat::MatGetDiagonalBlock_mf
     template<typename DT,typename GI, typename LI>
@@ -841,109 +1014,194 @@ namespace par {
         aMatCTX<DT,GI,LI> * pCtx;
         MatShellGetContext(A, &pCtx);
 
-        par::aMat<DT,GI,LI> * pLap = pCtx->aMatPtr;
+        par::aMatFree<DT,GI,LI> * pLap = pCtx->aMatPtr;
         std::function<PetscErrorCode(Mat, Mat*)>* f = pLap->get_MatGetDiagonalBlock_func();
         (*f)(A, a);
         delete f;
         return 0;
     }
 
+
+
+    //==============================================================================================================
     // aMat constructor
     template <typename DT,typename GI, typename LI>
-    aMat<DT,GI,LI>::aMat( AMAT_TYPE matType, BC_METH bcType ){
-        m_MatType          = matType;       // set type of matrix (matrix-based or matrix-free)
-        m_BcMeth           = bcType;
-        m_uiNumDofs        = 0;             // umber of local dofs
-        m_ulNumDofsGlobal  = 0;             // number of global dofs
-        m_uiNumElems       = 0;             // number of local elements
+    aMat<DT,GI,LI>::aMat( BC_METH bcType ) {
+        m_BcMeth           = bcType;        // method of apply bc
+        m_uiNumDofs        = 0;             // number of owned dofs
+        m_ulNumDofsGlobal  = 0;             // total number of global dofs of all ranks
+        m_uiNumElems       = 0;             // number of owned elements
+        m_uiNumDofsTotal  = 0;             // total number of owned dofs + ghost dofs
+        m_ulGlobalDofStart = 0;
+        m_ulGlobalDofEnd   = 0;
+        m_uiMaxDofsPerElem = 0;
+
         m_ulpMap           = nullptr;       // local-to-global map
         m_uiDofsPerElem    = nullptr;       // number of dofs per element
-        m_epMat            = nullptr;       // element matrices (Eigen matrix), used in matrix-free
-        m_pMat             = nullptr;       // "global" matrix, used in matrix-based
         m_comm             = MPI_COMM_NULL; // communication of aMat
-        if( matType == AMAT_TYPE::MAT_FREE ){
-            m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
-            #ifdef USE_OMP
-                // (thread local) ve and ue
-                m_veBufs = nullptr;
-                m_ueBufs = nullptr;
-                // max of omp threads
-                m_uiNumThreads = omp_get_max_threads();
-            #else
-                ue = nullptr;
-                ve = nullptr;
-            #endif
-            Uc = nullptr;
-        }
+
         m_uipBdrMap = nullptr;
         m_dtPresValMap = nullptr;
-    }// constructor
+    } // aMat::constructor
+
 
     template <typename DT,typename GI, typename LI>
     aMat<DT,GI,LI>::~aMat() {
-
-        if (m_MatType == AMAT_TYPE::MAT_FREE){
-            if (m_epMat != nullptr){
-                for (LI eid = 0; eid < m_uiNumElems; eid++){
-                    for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
-                        if (m_epMat[eid][bid] != nullptr){
-                            // delete the block matrix bid
-                            delete_algined_array(m_epMat[eid][bid]);
-                        }
-                    }
-                    // clear the content of vector of DT* and resize to 0
-                    m_epMat[eid].clear();
+        // free memory allocated for global map
+        if (m_ulpMap != nullptr){
+            for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+                if (m_ulpMap[eid] != nullptr) {
+                    delete [] m_ulpMap[eid];
                 }
-                // delete the array created by new in set_map
-                delete [] m_epMat;
             }
+            delete [] m_ulpMap;
         }
 
-        if( m_MatType == AMAT_TYPE::MAT_FREE ){
-            if (m_ulpMap != nullptr){
-                for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-                    if (m_ulpMap[eid] != nullptr) delete [] m_ulpMap[eid];
-                }
-                delete [] m_ulpMap;
-            }
-            #ifdef USE_OMP
-                for (unsigned int tid = 0; tid < m_uiNumThreads; tid++){
-                    if (m_ueBufs[tid] != nullptr) delete_algined_array(m_ueBufs[tid]);
-                    if (m_veBufs[tid] != nullptr) delete_algined_array(m_veBufs[tid]);
-                }
-                if (m_ueBufs != nullptr) free(m_ueBufs);
-                if (m_veBufs != nullptr) free(m_veBufs);
-            #else
-                if (ue != nullptr){
-                    delete_algined_array(ue);
-                }
-                if (ve != nullptr) {
-                    delete_algined_array(ve);
-                }
-            #endif
-
-            if (n_owned_constraints > 0) delete [] Uc;
-        }
-        //else if( m_MatType == AMAT_TYPE::PETSC_SPARSE ) {
-        //    MatDestroy(&m_pMat);
-        //}
-
+        // free memory allocated for m_uiBdrMap
         if (m_uipBdrMap != nullptr){
             for (LI eid = 0; eid < m_uiNumElems; eid++) {
                 if (m_uipBdrMap[eid] != nullptr) delete [] m_uipBdrMap[eid];
             }
             delete [] m_uipBdrMap;
         }
+
+        // free memory allocated for m_dtPresValMap
         if (m_dtPresValMap != nullptr) {
             for (LI eid = 0; eid < m_uiNumElems; eid++) {
                 if (m_dtPresValMap[eid] != nullptr) delete [] m_dtPresValMap[eid];
             }
             delete [] m_dtPresValMap;
         }
-    } // ~aMat
+    } // aMat::destructor
+
+
+    // 16.Dec.2019: change type of e_vec from DT* to EigenVec to be consistent with element matrix
+    // Note: for force vector, there is no block_j (as in stiffness matrix)
+    template <typename DT, typename GI, typename LI>
+    Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode){
+
+        unsigned int num_rows = e_vec.size();
+        assert(e_vec.size() == e_vec.rows()); // since EigenVec is defined as matrix with 1 column
+
+        PetscScalar value;
+        PetscInt rowId;
+
+        for (unsigned int r = 0; r < num_rows; ++r) {
+
+            // this ONLY WORKS with assumption that all blocks have the same number of dofs (that is true for R-XFEM ?)
+            rowId = m_ulpMap[eid][block_i * num_rows + r];
+            value = e_vec(r);
+            VecSetValue(vec, rowId, value, mode);
+        }
+
+        return Error::SUCCESS;
+    } // aMat::petsc_set_element_vec
+
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_map( const LI           n_elements_on_rank,
+    par::Error aMat<DT,GI,LI>::petsc_create_vec(Vec &vec, PetscScalar alpha) const {
+        VecCreate(m_comm, &vec);
+        if (m_uiSize>1) {
+            VecSetType(vec,VECMPI);
+            VecSetSizes(vec, m_uiNumDofs, PETSC_DECIDE);
+            VecSet(vec, alpha);
+        } else {
+            VecSetType(vec,VECSEQ);
+            VecSetSizes(vec, m_uiNumDofs, PETSC_DECIDE);
+            VecSet(vec, alpha);
+        }
+        return Error::SUCCESS;
+    } // aMat::petsc_create_vec
+
+
+    template <typename DT, typename GI, typename LI>
+    Error aMat<DT,GI,LI>::petsc_dump_vec( Vec vec, const char* filename ) const {
+        if( filename == nullptr ) {
+            VecView( vec, PETSC_VIEWER_STDOUT_WORLD );
+        }
+        else {
+            PetscViewer viewer;
+            // write to ASCII file
+            PetscViewerASCIIOpen( m_comm, filename, &viewer );
+            // write to file readable by Matlab (filename must be name.m)
+            //PetscViewerPushFormat( viewer, PETSC_VIEWER_ASCII_MATLAB ); // comment when what to write in normal ASCII text
+            VecView( vec, viewer );
+            PetscViewerDestroy( &viewer );
+        }
+        return Error::SUCCESS;
+    } // aMat::petsc_dump_vec
+
+
+
+    //==============================================================================================================
+    template <typename DT,typename GI, typename LI>
+    aMatFree<DT,GI,LI>::aMatFree( BC_METH bcType ) : aMat<DT,GI,LI>(bcType) {
+        m_epMat    = nullptr;   // element matrices (Eigen matrix), used in matrix-free
+        m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
+
+        Uc = nullptr;
+
+        #ifdef USE_OMP
+            // (thread local) ve and ue
+            m_veBufs = nullptr;
+            m_ueBufs = nullptr;
+            // max of omp threads
+            m_uiNumThreads = omp_get_max_threads();
+        #else
+            ue = nullptr;
+            ve = nullptr;
+        #endif
+    }// aMatFree::constructor
+
+
+    template <typename DT,typename GI, typename LI>
+    aMatFree<DT,GI,LI>::~aMatFree() {
+        // free memory allocated for m_epMat storing elemental matrices
+        if (m_epMat != nullptr){
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
+                    if (m_epMat[eid][bid] != nullptr){
+                        // delete the block matrix bid
+                        delete_algined_array(m_epMat[eid][bid]);
+                    }
+                }
+                // clear the content of vector of DT* and resize to 0
+                m_epMat[eid].clear();
+            }
+            // delete the array created by new in set_map
+            delete [] m_epMat;
+
+            // free memory allocated for Uc
+            if (n_owned_constraints > 0) {
+                delete [] Uc;
+            }
+        }
+
+        // free memory allocated for storing elemental vectors ue and ve
+        #ifdef USE_OMP
+            for (unsigned int tid = 0; tid < m_uiNumThreads; tid++){
+                if (m_ueBufs[tid] != nullptr) delete_algined_array(m_ueBufs[tid]);
+                if (m_veBufs[tid] != nullptr) delete_algined_array(m_veBufs[tid]);
+            }
+            if (m_ueBufs != nullptr) {
+                free(m_ueBufs);
+            }
+            if (m_veBufs != nullptr) {
+                free(m_veBufs);
+            }
+        #else
+            if (ue != nullptr){
+                delete_algined_array(ue);
+            }
+            if (ve != nullptr) {
+                delete_algined_array(ve);
+            }
+        #endif
+    } // aMatFree::destructor
+
+
+    template <typename DT,typename GI, typename LI>
+    Error aMatFree<DT,GI,LI>::set_map( const LI       n_elements_on_rank,
                                         const LI * const * element_to_rank_map,
                                         const LI         * dofs_per_element,
                                         const LI           n_all_dofs_on_rank,
@@ -951,21 +1209,27 @@ namespace par {
                                         const GI           owned_global_dof_range_begin,
                                         const GI           owned_global_dof_range_end,
                                         const GI           n_global_dofs ){
+        // number of owned elements
+        m_uiNumElems = n_elements_on_rank;
 
-        m_uiNumElems = n_elements_on_rank; // This is number of owned element
+        // number  of owned dofs
         m_uiNumDofs = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
-        m_ulNumDofsGlobal = n_global_dofs; // currently this is not used
-        m_ulGlobalDofStart_assert = owned_global_dof_range_begin; // this will be used for assertion in buildScatterMap
-        m_ulGlobalDofEnd_assert = owned_global_dof_range_end; // this will be used for assertion in buildScatterMap
-        m_uiTotalDofs_assert = n_all_dofs_on_rank; // this will be used for assertion in buildScatterMap
+        // number of dofs of ALL ranks, currently this is not used in aMatFree
+        m_ulNumDofsGlobal = n_global_dofs;
 
-        // point to provided local map
+        // these are assertion in buildScatterMap
+        m_ulGlobalDofStart = owned_global_dof_range_begin;
+        m_ulGlobalDofEnd = owned_global_dof_range_end;
+        m_uiNumDofsTotal = n_all_dofs_on_rank;
+
+        // point to provided array giving number of dofs of each element
         m_uiDofsPerElem = dofs_per_element;
 
-        // point to rank_to_global map
+        // point to provided array giving global dof id of local dof id
         m_ulpLocal2Global = rank_to_global_map;
 
+        // create global map based on provided local map and Local2Global
         m_ulpMap = new GI* [m_uiNumElems];
         for( LI eid = 0; eid < m_uiNumElems; eid++ ){
             m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
@@ -976,84 +1240,67 @@ namespace par {
             }
         }
 
-        if( m_MatType == AMAT_TYPE::PETSC_SPARSE ){
-            MatCreate(m_comm, &m_pMat);
-            MatSetSizes(m_pMat, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
-            if(m_uiSize > 1) {
-                MatSetType(m_pMat, MATMPIAIJ);
-                MatMPIAIJSetPreallocation( m_pMat, NNZ, PETSC_NULL, NNZ, PETSC_NULL );
-            }
-            else {
-                MatSetType(m_pMat, MATSEQAIJ);
-                MatSeqAIJSetPreallocation(m_pMat, NNZ, PETSC_NULL);
-            }
-            // this will disable on preallocation errors (but not good for performance)
-            MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
-
-            //LocaMap is required by buildScatterMap which is used for apply boundary condition
-            m_uipLocalMap = element_to_rank_map;
-            buildScatterMap();
-        }
-        else if( m_MatType == AMAT_TYPE::MAT_FREE ){
-            if( m_epMat != nullptr) {
-                for (LI eid = 0; eid < m_uiNumElems; eid++){
-                    for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
-                        if (m_epMat[eid][bid] != nullptr){
-                            free(m_epMat[eid][bid]);
-                        }
+        // clear elemental matrices stored in m_epMat (if it is not empty)
+        if( m_epMat != nullptr) {
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
+                    if (m_epMat[eid][bid] != nullptr){
+                        free(m_epMat[eid][bid]);
                     }
-                    m_epMat[eid].clear();
                 }
-                delete [] m_epMat;
-                m_epMat = nullptr;
+                m_epMat[eid].clear();
             }
-
-            // we do not know how many blocks and size of blocks for each element at this time
-            if (m_MatType == AMAT_TYPE::MAT_FREE){
-                m_epMat = new std::vector<DT*> [m_uiNumElems];
-            }
-
-            // point to provided local Map
-            m_uipLocalMap = element_to_rank_map;
-
-            buildScatterMap();
-
-            get_max_dof_per_elem();
-
-        } else {
-            std::cout << "ERROR: mat type is unknown: " << (int)m_MatType << "\n";
-            return Error::UNKNOWN_MAT_TYPE;
+            delete [] m_epMat;
+            m_epMat = nullptr;
         }
+
+        // allocate m_epMat as an array with size equals number of owned elements
+        // we do not know how many blocks and size of blocks for each element at this time
+        m_epMat = new std::vector<DT*> [m_uiNumElems];
+
+        // point to provided local Map
+        m_uipLocalMap = element_to_rank_map;
+
+        // build scatter map for communication before and after matvec
+        buildScatterMap();
+
+        // compute the largest number of dofs per elements, will be used for allocation ue and ve...
+        get_max_dof_per_elem();
+
         return Error::SUCCESS;
-    } //set_map
+    } // aMatFree::set_map
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::update_map(const LI* new_to_old_rank_map, const LI old_n_all_dofs_on_rank,
-                          const LI* old_rank_to_global_map, const LI n_elements_on_rank,
-                          const GI* const * element_to_rank_map, const LI* dofs_per_element,
-                          const LI n_all_dofs_on_rank, const LI* rank_to_global_map,
-                          const GI owned_global_dof_range_begin, const GI owned_global_dof_range_end, const GI n_global_dofs) {
+    Error aMatFree<DT,GI,LI>::update_map(const LI* new_to_old_rank_map,
+                                    const LI old_n_all_dofs_on_rank,
+                                    const GI* old_rank_to_global_map,
+                                    const LI n_elements_on_rank,
+                                    const LI* const * element_to_rank_map,
+                                    const LI* dofs_per_element,
+                                    const LI n_all_dofs_on_rank,
+                                    const GI* rank_to_global_map,
+                                    const GI owned_global_dof_range_begin,
+                                    const GI owned_global_dof_range_end,
+                                    const GI n_global_dofs) {
 
         // It is assumed that total number of owned elements is unchanged
         assert(m_uiNumElems == n_elements_on_rank);
 
-        // delete old global map m_ulpMap[eid][:], keep [eid] since number of total elements does not change
+        // point to new provided array giving number of dofs of each element
+        m_uiDofsPerElem = dofs_per_element;
+
+        // point to new provided array giving global dof id of local dof id
+        m_ulpLocal2Global = rank_to_global_map;
+
+        // update new global map (number dofs per element is changed, but number of owned elements is intact)
         if (m_ulpMap != nullptr){
             for (LI eid = 0; eid < m_uiNumElems; eid++){
                 delete[] m_ulpMap[eid];
             }
         }
-
-        // point to new dofs_per_element map
-        m_uiDofsPerElem = dofs_per_element;
-
-        // update new rank_to_global map
-        m_ulpLocal2Global = rank_to_global_map;
-
-        // allocate with new dofs per element, and update new global map
         for (LI eid = 0; eid < m_uiNumElems; eid++){
-            m_ulpMap[eid] = new GI[m_uiDofsPerElem[eid]];
+            m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
         }
         for (LI eid = 0; eid < m_uiNumElems; eid++){
             for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
@@ -1061,10 +1308,10 @@ namespace par {
             }
         }
 
-        // update total number of owned dofs
+        // update number of owned dofs
         m_uiNumDofs = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
-        // update total number of dofs on all ranks, currently not in use
+        // update total dofs of all ranks, currently not use by aMatFree
         m_ulNumDofsGlobal = n_global_dofs;
 
         /*unsigned long nl = m_uiNumDofs;
@@ -1073,64 +1320,44 @@ namespace par {
         assert( n_global_dofs == ng );*/
 
         // update variables for assertion in buildScatterMap
-        m_ulGlobalDofStart_assert = owned_global_dof_range_begin;
-        m_ulGlobalDofEnd_assert = owned_global_dof_range_end;
-        m_uiTotalDofs_assert = n_all_dofs_on_rank;
+        m_ulGlobalDofStart = owned_global_dof_range_begin;
+        m_ulGlobalDofEnd = owned_global_dof_range_end;
+        m_uiNumDofsTotal = n_all_dofs_on_rank;
 
-        // allocate new (larger) matrix of size m_uiNumDofs
-        if( m_MatType == AMAT_TYPE::PETSC_SPARSE ) {
-            if( m_pMat != nullptr ){
-                MatDestroy( &m_pMat );
-                m_pMat = nullptr;
-            }
-            MatCreate( m_comm, &m_pMat );
-            MatSetSizes( m_pMat, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE );
-            if( m_uiSize > 1 ) {
-                // initialize matrix
-                MatSetType(m_pMat, MATMPIAIJ);
-                MatMPIAIJSetPreallocation(m_pMat, 30, PETSC_NULL, 30, PETSC_NULL);
-            }
-            else {
-                MatSetType(m_pMat, MATSEQAIJ);
-                MatSeqAIJSetPreallocation(m_pMat, 30, PETSC_NULL);
-            }
-
-            //LocaMap is required by buildScatterMap which is used for apply boundary condition
-            m_uipLocalMap = element_to_rank_map;
-            buildScatterMap();
-        }
-        else if (m_MatType == AMAT_TYPE::MAT_FREE){
-            // Note: currently we delete all old element matrices and need to add new element matrices again
-            // Todo: only add newly formed blocks?
-            if( m_epMat != nullptr) {
-                for (LI eid = 0; eid < m_uiNumElems; eid++){
-                    for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
-                        if (m_epMat[eid][bid] != nullptr){
-                            free(m_epMat[eid][bid]);
-                        }
+        // Note: currently we delete all old element matrices and need to add new element matrices again
+        // Todo: only add newly formed blocks?
+        if( m_epMat != nullptr) {
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
+                    if (m_epMat[eid][bid] != nullptr){
+                        free(m_epMat[eid][bid]);
                     }
-                    m_epMat[eid].clear();
                 }
-                // we do not delete [] m_epMat because the number of elements do not change when map is updated
+                m_epMat[eid].clear();
             }
-            
-            // point to new local map
-            m_uipLocalMap = element_to_rank_map;
-
-            // build scatter map
-            buildScatterMap();
+            // we do not delete [] m_epMat because the number of elements do not change when map is updated
         }
+
+        // point to new local map
+        m_uipLocalMap = element_to_rank_map;
+
+        // build scatter map
+        buildScatterMap();
+        // compute the largest number of dofs per elements, will be used for allocation ue and ve...
+        get_max_dof_per_elem();
 
         return Error::SUCCESS;
-    } // update_map()
+    } // aMatFree::update_map()
 
 
-    // build scatter map
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::buildScatterMap() {
+    Error aMatFree<DT,GI,LI>::buildScatterMap() {
         /* Assumptions: We assume that the global nodes are continuously partitioned across processors.
-           Currently we do not account for twin elements
-           "node" is actually "dof" because the map is in terms of dofs */
+            Currently we do not account for twin elements
+            "node" is actually "dof" because the map is in terms of dofs */
+
+        // total dofs (owned + ghost) received from set_map
+        const LI m_uiNumDofsTotal_received_in_setmap = m_uiNumDofsTotal;
 
         if( m_ulpMap == nullptr ) { return Error::NULL_L2G_MAP; }
 
@@ -1167,15 +1394,16 @@ namespace par {
                 const unsigned int nid = m_ulpMap[eid][i];
                 if (nid < m_uivLocalDofScan[m_uiRank]) {
                     // dofs with global ID < owned-range --> pre-ghost dofs
-                    assert( nid < m_ulGlobalDofStart_assert);
+                    assert( nid < m_ulGlobalDofStart);
                     preGhostGIds.push_back(nid);
                 } else if (nid >= (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)){
                     // dofs with global ID > owned-range --> post-ghost dofs
-                    assert( nid > m_ulGlobalDofEnd_assert);
+                    // note: m_uivLocalDofScan[m_uiRank] + m_uiNumDofs = m_ulGlobalDofEnd + 1
+                    assert( nid > m_ulGlobalDofEnd);
                     postGhostGIds.push_back(nid);
                 } else {
-                    assert ((nid >= m_uivLocalDofScan[m_uiRank])  && (nid< (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)));
-                    assert((nid >= m_ulGlobalDofStart_assert) && (nid <= m_ulGlobalDofEnd_assert));
+                    assert ((nid >= m_uivLocalDofScan[m_uiRank])  && (nid < (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)));
+                    assert((nid >= m_ulGlobalDofStart) && (nid <= m_ulGlobalDofEnd));
                 }
             }
         }
@@ -1206,7 +1434,9 @@ namespace par {
 
         // total number of dofs including ghost dofs
         m_uiNumDofsTotal = m_uiNumDofs + m_uiNumPreGhostDofs + m_uiNumPostGhostDofs;
-        assert(m_uiNumDofsTotal == m_uiTotalDofs_assert);
+
+        // note: m_uiNumDofsTotal was passed in set_map --> assert if what we received is what we compute here
+        assert(m_uiNumDofsTotal == m_uiNumDofsTotal_received_in_setmap);
 
         // determine owners of pre- and post-ghost dofs
         std::vector<unsigned int> preGhostOwner;
@@ -1221,7 +1451,7 @@ namespace par {
             // global ID of pre-ghost dof gcount
             unsigned int nid = preGhostGIds[gcount];
             while ((pcount < m_uiRank) &&
-                   (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))) {
+                    (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))) {
                 // nid is not in the range of global ID of dofs owned by pcount
                 pcount++;
             }
@@ -1242,7 +1472,7 @@ namespace par {
                 // global ID of post-ghost dof gcount
                 unsigned int nid = postGhostGIds[gcount];
                 while ((pcount < m_uiSize) &&
-                       (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))){
+                        (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))){
                     // nid is not the range of global ID of dofs owned by pcount
                     pcount++;
                 }
@@ -1310,7 +1540,7 @@ namespace par {
 
         // exchange the global ID of ghost dofs with ranks who own them
         MPI_Alltoallv(&(*(sendBuf.begin())), (int*)sendCounts, (int*)sendOffset, MPI_BYTE,
-                      &(*(recvBuf.begin())), (int*)recvCounts, (int*)recvOffset, MPI_BYTE, m_comm);
+                        &(*(recvBuf.begin())), (int*)recvCounts, (int*)recvOffset, MPI_BYTE, m_comm);
 
         for(unsigned int i = 0; i < m_uiSize; i++) {
             sendCounts[i] /= sizeof(GI);
@@ -1328,9 +1558,9 @@ namespace par {
             // check if gid is really owned by my rank (if not then something goes wrong with sendBuf above
             if (gid < m_uivLocalDofScan[m_uiRank]  || gid >=  (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
                 std::cout<<" m_uiRank: "<<m_uiRank<< "scatter map error : "<<__func__<<std::endl;
-                par::Error::GHOST_NODE_NOT_FOUND;
+                Error::GHOST_NODE_NOT_FOUND;
             }
-            assert((gid >= m_ulGlobalDofStart_assert) && (gid <= m_ulGlobalDofEnd_assert));
+            assert((gid >= m_ulGlobalDofStart) && (gid <= m_ulGlobalDofEnd));
             // local ID
             m_uivSendDofIds[i] = m_uiNumPreGhostDofs + (gid - m_uivLocalDofScan[m_uiRank]);
         }
@@ -1386,259 +1616,11 @@ namespace par {
         delete [] sendOffset;
         delete [] recvOffset;
         return Error::SUCCESS;
-    } // buildScatterMap()
-
-
-    template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints){
-
-        // extract constrained dofs owned by me
-        LI local_Id;
-        GI global_Id;
-
-        for (LI i = 0; i < numConstraints; i++){
-            global_Id = constrainedDofs[i];
-            if ((global_Id >= m_uivLocalDofScan[m_uiRank]) && (global_Id < m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
-                ownedConstrainedDofs.push_back(global_Id);
-                ownedPrescribedValues.push_back(prescribedValues[i]);
-            }
-        }
-
-        // construct elemental map of boundary condition
-        m_uipBdrMap = new unsigned int* [m_uiNumElems];
-        m_dtPresValMap = new DT* [m_uiNumElems];
-        for (LI eid = 0; eid < m_uiNumElems; eid++){
-            m_uipBdrMap[eid] = new unsigned int[m_uiDofsPerElem[eid]];
-            m_dtPresValMap[eid] = new DT [m_uiDofsPerElem[eid]];
-        }
-
-        for (LI eid = 0; eid < m_uiNumElems; eid++){
-            for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
-                global_Id = m_ulpMap[eid][nid];
-                LI index;
-                for (index = 0; index < numConstraints; index++) {
-                    if (global_Id == constrainedDofs[index]) {
-                        m_uipBdrMap[eid][nid] = 1;
-                        m_dtPresValMap[eid][nid] = prescribedValues[index];
-                        break;
-                    }
-                }
-                if (index == numConstraints){
-                    m_uipBdrMap[eid][nid] = 0;
-                    m_dtPresValMap[eid][nid] = -1E16; // for testing
-                    if ((global_Id >= m_uivLocalDofScan[m_uiRank]) && (global_Id < m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
-                        ownedFreeDofs.push_back(global_Id);
-                    }
-                }
-            }
-        }
-
-        //if (ownedFreeDofs_unsorted.size() > 0){
-        if (ownedFreeDofs.size() > 0){
-            std::sort(ownedFreeDofs.begin(), ownedFreeDofs.end());
-            ownedFreeDofs.erase(std::unique(ownedFreeDofs.begin(),ownedFreeDofs.end()), ownedFreeDofs.end());
-        }
-
-        if (m_uiRank == 0){
-            if (m_BcMeth == BC_METH::BC_IMATRIX){
-                printf("Apply BC: use identity-matrix method\n");
-            } else if (m_BcMeth == BC_METH::BC_PENALTY){
-                printf("Apply BC: use penaly method\n");
-            } else {
-                return Error::UNKNOWN_BC_METH;
-            }
-        }
-
-        if (m_BcMeth == BC_METH::BC_IMATRIX){
-            // allocate KfcUc with size = m_uiNumDofs, this will be subtracted from rhs to apply bc
-            petsc_create_vec(KfcUcVec);
-        } else if (m_BcMeth == BC_METH::BC_PENALTY){
-            // initialize the trace of matrix, used to form the (big) penalty number
-            m_dtTraceK = 0.0;
-        }
-
-        // allocate memory for Uc used in matvec_ghosted when applying BC
-        n_owned_constraints = ownedConstrainedDofs.size();
-        if ((n_owned_constraints > 0) && (m_MatType == AMAT_TYPE::MAT_FREE)){
-            Uc = new DT [n_owned_constraints];
-        }
-
-        return Error::SUCCESS;
-    }//set_bdr_map
-
-
-    template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_create_vec(Vec &vec, PetscScalar alpha) const {
-        VecCreate(m_comm, &vec);
-        if (m_uiSize>1) {
-            VecSetType(vec,VECMPI);
-            VecSetSizes(vec, m_uiNumDofs, PETSC_DECIDE);
-            VecSet(vec, alpha);
-        } else {
-            VecSetType(vec,VECSEQ);
-            VecSetSizes(vec, m_uiNumDofs, PETSC_DECIDE);
-            VecSet(vec, alpha);
-        }
-        return Error::SUCCESS;
-    } // petsc_create_vec
-
-
-    // 16.Dec.2019: change type of e_vec from DT* to EigenVec to be consistent with element matrix
-    // Note: for force vector, there is no block_j (as in stiffness matrix)
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode){
-
-        unsigned int num_rows = e_vec.size();
-        assert(e_vec.size() == e_vec.rows()); // since EigenVec is defined as matrix with 1 column
-
-        PetscScalar value;
-        PetscInt rowId;
-
-        for (unsigned int r = 0; r < num_rows; ++r) {
-
-            // this ONLY WORKS with assumption that all blocks have the same number of dofs (that is true for R-XFEM ?)
-            rowId = m_ulpMap[eid][block_i * num_rows + r];
-            value = e_vec(r);
-            VecSetValue(vec, rowId, value, mode);
-        }
-
-        return Error::SUCCESS;
-    } // petsc_set_element_vec
-
-
-    // use with Eigen, matrix-based, set every row of the matrix (faster than set every term of the matrix)
-    template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, InsertMode mode ) {
-
-        // this is number of dofs per block:
-        unsigned int num_rows = e_mat.rows();
-        assert(num_rows == e_mat.cols());
-
-        // assemble global matrix (petsc matrix)
-        // now set values ...
-        std::vector<PetscScalar> values(num_rows);
-        std::vector<PetscInt> colIndices(num_rows);
-        PetscInt rowId;
-        for (unsigned int r = 0; r < num_rows; ++r) {
-            // this ONLY WORKS with assumption that all blocks have the same number of dofs (that is true for RXFEM ?)
-            rowId = m_ulpMap[eid][block_i * num_rows + r];
-            for (unsigned int c = 0; c < num_rows; ++c) {
-                colIndices[c] = m_ulpMap[eid][block_j * num_rows + c];
-                values[c] = e_mat(r,c);
-            } // c
-            //MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
-            MatSetValues(m_pMat, 1, &rowId, colIndices.size(), colIndices.data(), values.data(), mode);
-        } // r
-
-        // compute the trace of matrix for penalty method
-        if (m_BcMeth == BC_METH::BC_PENALTY){
-            for (LI r = 0; r < num_rows; r++) m_dtTraceK += e_mat(r,r);
-        }
-
-        // 5/7/2020: move this part to apply_bc_rhs
-        // prepare for bc of rhs
-        if (m_BcMeth == BC_METH::BC_IMATRIX){
-            std::vector<PetscScalar> KfcUcValues;
-            std::vector<PetscInt> rowIndices;
-            PetscScalar temp;
-            bool bdrFlag, rowFlag;
-
-            // loop over rows of the element matrix (block)
-            for (LI r = 0; r < num_rows; r++){
-                rowFlag = false;
-                // continue if row is associated with a free dof
-                if (m_uipBdrMap[eid][block_i * num_rows + r] == 0){
-                    rowId = m_ulpMap[eid][block_i * num_rows + r];
-                    temp = 0;
-                    // loop over columns of the element matrix (block)
-                    for (LI c = 0; c < num_rows; c++){
-                        // continue if column is associated with a constrained dof
-                        if (m_uipBdrMap[eid][block_j * num_rows + c] == 1){
-                            // accumulate Kfc[r,c]*Uc[c]
-                            temp += e_mat(r,c) * m_dtPresValMap[eid][block_j * num_rows + c];
-                            rowFlag = true; // this rowId has constrained column dof
-                            bdrFlag = true; // this element matrix has KfcUc
-                        }
-                    }
-                    if (rowFlag){
-                        rowIndices.push_back(rowId);
-                        KfcUcValues.push_back(-1.0*temp);
-                    }
-                }
-            }
-            if (bdrFlag){
-                VecSetValues(KfcUcVec, rowIndices.size(), rowIndices.data(), KfcUcValues.data(), ADD_VALUES);
-            }
-        }
-
-        return Error::SUCCESS;
-    } // petsc_set_element_matrix
+    } // aMatFree::buildScatterMap()
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::dump_mat( const char* filename /* = nullptr */ ) {
-
-        if( m_pMat == nullptr ) {
-            std::cout << "Matrix has not yet been allocated, can't display...\n";
-            return Error::SUCCESS;
-        }
-
-        PetscBool assembled = PETSC_FALSE;
-        MatAssembled( m_pMat, &assembled );
-        if( !assembled ) {
-            std::cout << "Matrix has not yet been assembled, can't display...\n";
-            return Error::SUCCESS;
-        }
-
-        if( filename == nullptr ) {
-            MatView( m_pMat, PETSC_VIEWER_STDOUT_WORLD );
-        }
-        else {
-            PetscViewer viewer;
-            PetscViewerASCIIOpen( m_comm, filename, &viewer );
-            // write to file readable by Matlab (filename must be filename.m in order to execute in Matlab)
-            //PetscViewerPushFormat( viewer, PETSC_VIEWER_ASCII_MATLAB );
-            MatView( m_pMat, viewer );
-            PetscViewerDestroy( &viewer );
-        }
-        return Error::SUCCESS;
-    } // dump_mat
-
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::dump_vec( Vec vec, const char* filename ) const {
-        if( filename == nullptr ) {
-            VecView( vec, PETSC_VIEWER_STDOUT_WORLD );
-        }
-        else {
-            PetscViewer viewer;
-            // write to ASCII file
-            PetscViewerASCIIOpen( m_comm, filename, &viewer );
-            // write to file readable by Matlab (filename must be name.m)
-            //PetscViewerPushFormat( viewer, PETSC_VIEWER_ASCII_MATLAB ); // comment when what to write in normal ASCII text
-            VecView( vec, viewer );
-            PetscViewerDestroy( &viewer );
-        }
-        return Error::SUCCESS;
-    } // dump_vec
-
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_get_diagonal( const Vec & vec ) const {
-        MatGetDiagonal( m_pMat, vec );
-        return Error::SUCCESS;
-    } //petsc_get_diagonal
-
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_destroy_vec( Vec & vec ) const {
-        VecDestroy( &vec );
-        return Error::SUCCESS;
-    }
-
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::create_vec( DT* &vec, bool isGhosted /* = false */, DT alpha /* = 0.0 */ ) const {
+    Error aMatFree<DT,GI,LI>::create_vec( DT* &vec, bool isGhosted /* = false */, DT alpha /* = 0.0 */ ) const {
         if (isGhosted){
             vec = new DT[m_uiNumDofsTotal];
         } else {
@@ -1655,37 +1637,21 @@ namespace par {
             }
         }
         return Error::SUCCESS;
-    } // create_vec
+    } // aMatFree::create_vec
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::create_mat( DT** &mat, bool isGhosted /* = false */, DT alpha /* = 0.0 */ ){
-        if( isGhosted ){
-            mat = new DT*[m_uiNumDofsTotal];
-            for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
-                mat[i] = new DT[m_uiNumDofsTotal];
-            }
-            for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
-                for (unsigned int j = 0; j < m_uiNumDofsTotal; j++){
-                    mat[i][j] = alpha;
-                }
-            }
-        }
-        else {
-            mat = new DT *[m_uiNumDofs];
-            for (unsigned int i = 0; i < m_uiNumDofs; i++) {
-                mat[i] = new DT[m_uiNumDofs];
-            }
-            for (unsigned int i = 0; i < m_uiNumDofs; i++){
-                for (unsigned int j = 0; j < m_uiNumDofs; j++){
-                    mat[i][j] = alpha;
-                }
-            }
+    Error aMatFree<DT,GI,LI>::destroy_vec(DT* &vec) {
+        if (vec != nullptr) {
+            delete[] vec;
+            vec = nullptr;
         }
         return Error::SUCCESS;
-    }
+    } // aMatFree::destroy_vec
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::local_to_ghost( DT*  gVec, const DT* local ) const {
+    Error aMatFree<DT,GI,LI>::local_to_ghost( DT*  gVec, const DT* local ) const {
         for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
             if ((i >= m_uiNumPreGhostDofs) && (i < m_uiNumPreGhostDofs + m_uiNumDofs)) {
                 gVec[i] = local[i - m_uiNumPreGhostDofs];
@@ -1695,19 +1661,27 @@ namespace par {
             }
         }
         return Error::SUCCESS;
-    } // local_to_ghost
+    } // aMatFree::local_to_ghost
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_to_local(DT* local, const DT* gVec) const {
+    Error aMatFree<DT,GI,LI>::ghost_to_local(DT* local, const DT* gVec) const {
         for (unsigned int i = 0; i < m_uiNumDofs; i++) {
             local[i] = gVec[i + m_uiNumPreGhostDofs];
         }
         return Error::SUCCESS;
-    } // ghost_to_local
+    } // aMatFree::ghost_to_local
+
+
+    template <typename DT, typename GI, typename LI>
+    Error aMatFree<DT,GI,LI>::set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ){
+        aMatFree<DT,GI,LI>::copy_element_matrix(eid, e_mat, block_i, block_j, blocks_dim);
+        return Error::SUCCESS;
+    } //aMatFree::set_element_matrix
 
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) {
+    Error aMatFree<DT,GI,LI>::copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) {
 
         // resize the vector of blocks for element eid
         m_epMat[eid].resize(blocks_dim * blocks_dim, nullptr);
@@ -1721,13 +1695,9 @@ namespace par {
         
         // allocate and align memory for elemental matrices
         #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
-            /* void* ptr;
-            posix_memalign(&ptr, ALIGNMENT, (num_rows * num_rows) * sizeof(DT));
-            m_epMat[eid][index] = (DT*)ptr; */
             m_epMat[eid][index] = create_aligned_array(ALIGNMENT, (num_rows * num_rows));
         #else
             m_epMat[eid][index] = (DT*)malloc((num_rows * num_rows) * sizeof(DT));
-            //m_epMat[eid][index] = create_aligned_array(ALIGNMENT, (num_rows * num_rows))
         #endif
         
         // store block matrix in column-major for simpd, row-major for non-simd
@@ -1753,49 +1723,12 @@ namespace par {
             for (LI r = 0; r < num_rows; r++) m_dtTraceK += e_mat(r,r);
         }
 
-        // 5/7/2020: move this part to apply_bc_rhs
-        // prepare for bc of rhs
-        /* if (m_BcMeth == BC_METH::BC_IMATRIX){
-            std::vector<PetscScalar> KfcUcValues;
-            std::vector<PetscInt> rowIndices;
-            PetscInt rowId;
-            PetscScalar temp;
-            bool bdrFlag, rowFlag;
-
-            // loop over rows of the element matrix (block)
-            for (LI r = 0; r < num_rows; r++){
-                rowFlag = false;
-                // continue if row is associated with a free dof
-                if (m_uipBdrMap[eid][block_i * num_rows + r] == 0){
-                    rowId = m_ulpMap[eid][block_i * num_rows + r];
-                    temp = 0;
-                    // loop over columns of the element matrix (block)
-                    for (LI c = 0; c < num_rows; c++){
-                        // continue if column is associated with a constrained dof
-                        if (m_uipBdrMap[eid][block_j * num_rows + c] == 1){
-                            // accumulate Kfc[r,c]*Uc[c]
-                            temp += e_mat(r,c) * m_dtPresValMap[eid][block_j * num_rows + c];
-                            rowFlag = true; // this rowId has constrained column dof
-                            bdrFlag = true; // this element matrix has KfcUc
-                        }
-                    }
-                    if (rowFlag){
-                        rowIndices.push_back(rowId);
-                        KfcUcValues.push_back(-1.0*temp);
-                    }
-                }
-            }
-            if (bdrFlag){
-                VecSetValues(KfcUcVec, rowIndices.size(), rowIndices.data(), KfcUcValues.data(), ADD_VALUES);
-            }
-        }*/
-
         return Error::SUCCESS;
-    }// copy_element_matrix
+    }// aMatFree::copy_element_matrix
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::mat_get_diagonal(DT* diag, bool isGhosted){
+    Error aMatFree<DT,GI,LI>::mat_get_diagonal(DT* diag, bool isGhosted){
         if (isGhosted) {
             mat_get_diagonal_ghosted(diag);
         } else {
@@ -1806,10 +1739,11 @@ namespace par {
             delete[] g_diag;
         }
         return Error::SUCCESS;
-    }// mat_get_diagonal
+    }// aMatFree::mat_get_diagonal
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
+    Error aMatFree<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
         LI rowID;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
 
@@ -1861,11 +1795,12 @@ namespace par {
         } */
 
         return Error::SUCCESS;
-    }// mat_get_diagonal_ghosted
+    }// aMatFree::mat_get_diagonal_ghosted
+
 
     // return rank that owns global gId
     template <typename DT, typename GI, typename LI>
-    unsigned int aMat<DT, GI, LI>::globalId_2_rank(GI gId) const {
+    unsigned int aMatFree<DT, GI, LI>::globalId_2_rank(GI gId) const {
         unsigned int rank;
         if (gId >= m_uivLocalDofScan[m_uiSize - 1]){
             rank = m_uiSize - 1;
@@ -1878,10 +1813,11 @@ namespace par {
             }
         }
         return rank;
-    }
+    } // aMatFree::globalId_2_rank
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT, GI, LI>::mat_get_diagonal_block(std::vector<MatRecord<DT,LI>> &diag_blk){
+    Error aMatFree<DT, GI, LI>::mat_get_diagonal_block(std::vector<MatRecord<DT,LI>> &diag_blk){
         LI blocks_dim;
         GI glo_RowId, glo_ColId;
         LI loc_RowId, loc_ColId;
@@ -2097,17 +2033,17 @@ namespace par {
             ind++;
         }
 
-
         delete [] sendCounts;
         delete [] recvCounts;
         delete [] sendOffset;
         delete [] recvOffset;
 
         return Error::SUCCESS;
-    } // mat_get_diagonal_block
+    } // aMatFree::mat_get_diagonal_block
+
 
     template <typename DT, typename  GI, typename LI>
-    par::Error aMat<DT,GI,LI>::get_max_dof_per_elem(){
+    Error aMatFree<DT,GI,LI>::get_max_dof_per_elem(){
         unsigned int num_dofs;
         unsigned int max_dpe = 0;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
@@ -2116,6 +2052,7 @@ namespace par {
         }
         m_uiMaxDofsPerElem = max_dpe;
         
+        // allocate memory for ue and ve used in matvec
         #ifdef USE_OMP
             // (thread local) ue and ve
             m_ueBufs = (DT**)malloc(m_uiNumThreads * sizeof(DT*));
@@ -2136,38 +2073,13 @@ namespace par {
         #endif
 
         return Error::SUCCESS;
-    }// get_max_dof_per_elem
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::destroy_vec(DT* &vec) {
-        if (vec != nullptr) {
-            delete[] vec;
-            vec = nullptr;
-        }
-        return Error::SUCCESS;
-    }
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::destroy_mat(DT** &mat, const unsigned int nrow){
-        if (mat != nullptr){
-            for (unsigned int i = 0; i < nrow; i++){
-                if (mat[i] != nullptr){
-                    delete[](mat[i]);
-                    mat[i] = nullptr;
-                }
-            }
-            delete[](mat);
-            mat = nullptr;
-        }
-        return Error::SUCCESS;
-    }
+    }// aMatFree::get_max_dof_per_elem
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_receive_begin(DT* vec) {
-
+    Error aMatFree<DT,GI,LI>::ghost_receive_begin(DT* vec) {
         if(m_uiSize==1)
-            return par::Error::SUCCESS;
+            return Error::SUCCESS;
 
         // exchange context for vec
         AsyncExchangeCtx ctx((const void*)vec);
@@ -2215,14 +2127,15 @@ namespace par {
         m_vAsyncCtx.push_back(ctx);
         // get a different value of tag if we have another ghost_exchange for a different vec
         m_iCommTag++;
+
         return Error::SUCCESS;
-    } //ghost_receive_begin
+    } // aMatFree::ghost_receive_begin
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_receive_end(DT* vec) {
-
+    Error aMatFree<DT,GI,LI>::ghost_receive_end(DT* vec) {
         if(m_uiSize==1)
-            return par::Error::SUCCESS;
+            return Error::SUCCESS;
 
         // get the context associated with vec
         unsigned int ctx_index;
@@ -2256,14 +2169,13 @@ namespace par {
 
         m_vAsyncCtx.erase(m_vAsyncCtx.begin() + ctx_index);
         return Error::SUCCESS;
-    } // ghost_receive_end
+    } // aMatFree::ghost_receive_end
 
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_send_begin(DT* vec) {
-
+    Error aMatFree<DT,GI,LI>::ghost_send_begin(DT* vec) {
         if(m_uiSize==1)
-            return par::Error::SUCCESS;
+            return Error::SUCCESS;
 
         AsyncExchangeCtx ctx((const void*)vec);
 
@@ -2308,13 +2220,13 @@ namespace par {
         m_vAsyncCtx.push_back(ctx);
         m_iCommTag++; // get a different value if we have another ghost_exchange for a different vec
         return Error::SUCCESS;
-    } // ghost_send_begin
+    } // aMatFree::ghost_send_begin
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_send_end(DT* vec) {
-
+    Error aMatFree<DT,GI,LI>::ghost_send_end(DT* vec) {
         if(m_uiSize==1)
-            return par::Error::SUCCESS;
+            return Error::SUCCESS;
 
         unsigned int ctx_index;
         for (unsigned i = 0; i < m_vAsyncCtx.size(); i++){
@@ -2344,11 +2256,14 @@ namespace par {
         ctx.deAllocateSendBuffer();
         m_vAsyncCtx.erase(m_vAsyncCtx.begin() + ctx_index);
         return Error::SUCCESS;
-    } // ghost_send_end
+    } // aMatFree::ghost_send_end
+
 
     template <typename  DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::matvec(DT* v, const DT* u, bool isGhosted) {
-
+    Error aMatFree<DT,GI,LI>::matvec(DT* v, const DT* u, bool isGhosted) {
+        #ifdef AMAT_PROFILER
+            timing_aMat[static_cast<int>(PROFILER::MATVEC)].start();
+        #endif
         if( isGhosted ) {
             // std::cout << "GHOSTED MATVEC" << std::endl;
             #ifdef USE_OMP
@@ -2379,15 +2294,17 @@ namespace par {
             delete[] gv;
             delete[] gu;
         }
-
+        #ifdef AMAT_PROFILER
+            timing_aMat[static_cast<int>(PROFILER::MATVEC)].stop();
+        #endif
         return Error::SUCCESS;
 
-    } // matvec
+    } // aMatFree::matvec
 
     #ifdef USE_OMP
-    // use omp parallel for...
+
     template <typename  DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::matvec_ghosted_OMP( DT* v, DT* u ) {
+    Error aMatFree<DT,GI,LI>::matvec_ghosted_OMP( DT* v, DT* u ) {
 
         // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumDofsTotal)
         for (unsigned int i = 0; i < m_uiDofPostGhostEnd; i++){
@@ -2607,13 +2524,14 @@ namespace par {
         // end of apply BC
 
         return Error::SUCCESS;
-    } // matvec_ghosted_OMP
+    } // aMatFree::matvec_ghosted_OMP
+
 
     #else
 
-    // matvec (v = K * u) embeded applying bc by modifying matrix
+
     template <typename  DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::matvec_ghosted_noOMP( DT* v, DT* u ) {
+    Error aMatFree<DT,GI,LI>::matvec_ghosted_noOMP( DT* v, DT* u ) {
 
         LI blocks_dim, num_dofs_per_block;
 
@@ -2660,7 +2578,9 @@ namespace par {
                     LI block_ID = block_i * blocks_dim + block_j;
 
                     if (m_epMat[eid][block_ID] != nullptr){
-
+                        #ifdef AMAT_PROFILER
+                            timing_aMat[static_cast<int>(PROFILER::MATVEC_MUL)].start();
+                        #endif
                         // extract block-element vector ue from structure vector u, and initialize ve
                         for (LI c = 0; c < num_dofs_per_block; c++) {
                             colID = m_uipLocalMap[eid][block_col_offset + c];
@@ -2786,13 +2706,21 @@ namespace par {
                                 }
                             }
                         #endif
+                        #ifdef AMAT_PROFILER
+                            timing_aMat[static_cast<int>(PROFILER::MATVEC_MUL)].stop();
+                        #endif
 
+                        #ifdef AMAT_PROFILER
+                            timing_aMat[static_cast<int>(PROFILER::MATVEC_ACC)].start();
+                        #endif
                         // accumulate element vector ve to structure vector v
                         for (unsigned int r = 0; r < num_dofs_per_block; r++){
                             rowID = m_uipLocalMap[eid][block_row_offset + r];
                             v[rowID] += ve[r];
                         }
-
+                        #ifdef AMAT_PROFILER
+                            timing_aMat[static_cast<int>(PROFILER::MATVEC_ACC)].stop();
+                        #endif
                     }
                     // move to next block in j direction (u changes)
                     block_col_offset += num_dofs_per_block;
@@ -2821,11 +2749,13 @@ namespace par {
         // end of apply BC
 
         return Error::SUCCESS;
-    } // matvec_ghosted_noOMP
+    } // aMatFree::matvec_ghosted_noOMP
+
     #endif
 
+
     template <typename  DT, typename GI, typename LI>
-    PetscErrorCode aMat<DT,GI,LI>::MatMult_mf( Mat A, Vec u, Vec v ) {
+    PetscErrorCode aMatFree<DT,GI,LI>::MatMult_mf( Mat A, Vec u, Vec v ) {
 
         PetscScalar * vv; // this allows vv to be considered as regular vector
         PetscScalar * uu;
@@ -2875,12 +2805,11 @@ namespace par {
         VecRestoreArray(v,&vv);
 
         return 0;
-    }// MatMult_mf
+    }// aMatFree::MatMult_mf
 
 
     template<typename DT, typename GI, typename LI>
-    PetscErrorCode aMat<DT,GI,LI>::MatGetDiagonal_mf(Mat A, Vec d){
-
+    PetscErrorCode aMatFree<DT,GI,LI>::MatGetDiagonal_mf(Mat A, Vec d){
         // point to data of PETSc vector d
         PetscScalar* dd;
         VecGetArray(d, &dd);
@@ -2888,7 +2817,7 @@ namespace par {
         //VecGetSize(d,&N);
         //std::cout<<" N: "<<N<<std::endl;
 
-        // allocate regular vector used for get_diagonal() in aMat
+        // allocate regular vector used for get_diagonal() in aMatFree
         double* ddg;
         create_vec(ddg, true, 0);
 
@@ -2910,18 +2839,16 @@ namespace par {
         // apply Dirichlet boundary condition
         apply_bc_diagonal( d );
 
-        petsc_init_vec( d );
-        petsc_finalize_vec( d );
+        VecAssemblyBegin( d );
+        VecAssemblyEnd( d );
 
         return 0;
-
-    }// MatGetDiagonal_mf
+    }// aMatFree::MatGetDiagonal_mf
 
 
     template<typename DT, typename GI, typename LI>
-    PetscErrorCode aMat<DT,GI,LI>::MatGetDiagonalBlock_mf(Mat A, Mat* a){
-
-        unsigned int local_size = get_local_num_nodes();
+    PetscErrorCode aMatFree<DT,GI,LI>::MatGetDiagonalBlock_mf(Mat A, Mat* a){
+        LI local_size = m_uiNumDofs;
 
         //LI local_rowID, local_colID;
         //DT value;
@@ -3043,58 +2970,90 @@ namespace par {
         MatDestroy(&B);*/
 
         return 0;
-    } //MatGetDiagonalBlock_mf
+    } // aMatFree::MatGetDiagonalBlock_mf
 
 
-    // apply Dirichlet bc by modifying matrix, only used in matrix-based approach
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::apply_bc_mat() {
-        unsigned int num_nodes;
-        PetscInt rowId, colId;
+    template <typename DT,typename GI, typename LI>
+    Error aMatFree<DT,GI,LI>::set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints){
 
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid ++) {
-            num_nodes = m_uiDofsPerElem[eid];
-            if (m_BcMeth == BC_METH::BC_IMATRIX){
-                for (unsigned int r = 0; r < num_nodes; r++) {
-                    rowId = m_ulpMap[eid][r];
-                    if (m_uipBdrMap[eid][r] == 1) {
-                        for (unsigned int c = 0; c < num_nodes; c++) {
-                            colId = m_ulpMap[eid][c];
-                            if (colId == rowId) {
-                                MatSetValue(m_pMat, rowId, colId, 1.0, INSERT_VALUES);
-                            } else {
-                                MatSetValue(m_pMat, rowId, colId, 0.0, INSERT_VALUES);
-                            }
-                        }
-                    } else {
-                        for (unsigned int c = 0; c < num_nodes; c++) {
-                            colId = m_ulpMap[eid][c];
-                            if (m_uipBdrMap[eid][c] == 1) {
-                                MatSetValue(m_pMat, rowId, colId, 0.0, INSERT_VALUES);
-                            }
-                        }
+        // extract constrained dofs owned by me
+        LI local_Id;
+        GI global_Id;
+
+        for (LI i = 0; i < numConstraints; i++){
+            global_Id = constrainedDofs[i];
+            if ((global_Id >= m_uivLocalDofScan[m_uiRank]) && (global_Id < m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
+                ownedConstrainedDofs.push_back(global_Id);
+                ownedPrescribedValues.push_back(prescribedValues[i]);
+            }
+        }
+
+        // construct elemental map of boundary condition
+        m_uipBdrMap = new unsigned int* [m_uiNumElems];
+        m_dtPresValMap = new DT* [m_uiNumElems];
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            m_uipBdrMap[eid] = new unsigned int[m_uiDofsPerElem[eid]];
+            m_dtPresValMap[eid] = new DT [m_uiDofsPerElem[eid]];
+        }
+
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
+                global_Id = m_ulpMap[eid][nid];
+                LI index;
+                for (index = 0; index < numConstraints; index++) {
+                    if (global_Id == constrainedDofs[index]) {
+                        m_uipBdrMap[eid][nid] = 1;
+                        m_dtPresValMap[eid][nid] = prescribedValues[index];
+                        break;
                     }
                 }
-            } else if (m_BcMeth == BC_METH::BC_PENALTY){
-                for (unsigned int r = 0; r < num_nodes; r++){
-                    rowId = m_ulpMap[eid][r];
-                    if (m_uipBdrMap[eid][r] == 1) {
-                        for (unsigned int c = 0; c < num_nodes; c++) {
-                            colId = m_ulpMap[eid][c];
-                            if (colId == rowId) {
-                                MatSetValue(m_pMat, rowId, colId, PENALTY_FACTOR * m_dtTraceK, INSERT_VALUES);
-                            }
-                        }
+                if (index == numConstraints){
+                    m_uipBdrMap[eid][nid] = 0;
+                    m_dtPresValMap[eid][nid] = -1E16; // for testing
+                    if ((global_Id >= m_uivLocalDofScan[m_uiRank]) && (global_Id < m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
+                        ownedFreeDofs.push_back(global_Id);
                     }
                 }
             }
         }
-        return Error::SUCCESS;
-    } // apply_bc_mat
 
-    // apply Dirichlet bc to diagonal vector used in Jacobi preconditioning
+        //if (ownedFreeDofs_unsorted.size() > 0){
+        if (ownedFreeDofs.size() > 0){
+            std::sort(ownedFreeDofs.begin(), ownedFreeDofs.end());
+            ownedFreeDofs.erase(std::unique(ownedFreeDofs.begin(),ownedFreeDofs.end()), ownedFreeDofs.end());
+        }
+
+        if (m_uiRank == 0){
+            if (m_BcMeth == BC_METH::BC_IMATRIX){
+                printf("Apply BC: use identity-matrix method\n");
+            } else if (m_BcMeth == BC_METH::BC_PENALTY){
+                printf("Apply BC: use penaly method\n");
+            } else {
+                return Error::UNKNOWN_BC_METH;
+            }
+        }
+
+        if (m_BcMeth == BC_METH::BC_IMATRIX){
+            // allocate KfcUc with size = m_uiNumDofs, this will be subtracted from rhs to apply bc
+            this->petsc_create_vec( KfcUcVec );
+
+        } else if (m_BcMeth == BC_METH::BC_PENALTY){
+            // initialize the trace of matrix, used to form the (big) penalty number
+            m_dtTraceK = 0.0;
+        }
+
+        // allocate memory for Uc used in matvec_ghosted when applying BC
+        n_owned_constraints = ownedConstrainedDofs.size();
+        if (n_owned_constraints > 0){
+            Uc = new DT [n_owned_constraints];
+        }
+
+        return Error::SUCCESS;
+    }// aMatFree::set_bdr_map
+
+
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::apply_bc_diagonal(Vec diag) {
+    Error aMatFree<DT,GI,LI>::apply_bc_diagonal(Vec diag) {
         unsigned int num_nodes;
         PetscInt rowId;
 
@@ -3114,12 +3073,12 @@ namespace par {
             }
         }
         return Error::SUCCESS;
-    }
+    } // aMatFree::apply_bc_diagonal
 
 
     // apply Dirichlet BC to block diagonal matrix
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::apply_bc_blkdiag(Mat* blkdiagMat) {
+    Error aMatFree<DT,GI,LI>::apply_bc_blkdiag(Mat* blkdiagMat) {
         unsigned int num_nodes;
         PetscInt loc_rowId, loc_colId;
         for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
@@ -3171,25 +3130,14 @@ namespace par {
             }
         }
         return Error::SUCCESS;
-    }
+    } // aMatFree::apply_bc_blkdiag
 
-    // apply Dirichlet bc by modifying rhs:
+
     // rhs[i] = Uc_i if i is on boundary of Dirichlet condition, Uc_i is the prescribed value on boundary
     // rhs[i] = rhs[i] - sum_{j=1}^{nc}{K_ij * Uc_j} if i is a free dof
     //          where nc is the total number of boundary dofs and K_ij is stiffness matrix
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::apply_bc_rhs(Vec rhs){
-
-        // FIXME: Do we need to handle apply_bc_rhs() differently depending on matrix type?
-        //
-        // if (m_MatType == AMAT_TYPE::MAT_FREE){
-        // }
-        // else if (m_MatType == AMAT_TYPE::PETSC_SPARSE){
-        //     // todo apply bc for rhs in matrix-based method
-        // }
-        // else {
-        //     return Error::UNKNOWN_MAT_TYPE;
-        // }
+    Error aMatFree<DT,GI,LI>::apply_bc_rhs(Vec rhs){
 
         // set rows associated with constrained dofs to be equal to Uc
         //LI num_nodes;
@@ -3198,106 +3146,68 @@ namespace par {
 
         // compute KfcUc
         if (m_BcMeth == BC_METH::BC_IMATRIX){
-            if (m_MatType == AMAT_TYPE::MAT_FREE){
-                LI block_dims;
-                LI num_dofs_per_block;
-                LI block_index;
-                std::vector<PetscScalar> KfcUc_elem;
-                std::vector<PetscInt> row_Indices_KfcUc_elem;
-                PetscInt rowId;
-                PetscScalar temp;
-                bool bdrFlag, rowFlag;
+            LI block_dims;
+            LI num_dofs_per_block;
+            LI block_index;
+            std::vector<PetscScalar> KfcUc_elem;
+            std::vector<PetscInt> row_Indices_KfcUc_elem;
+            PetscInt rowId;
+            PetscScalar temp;
+            bool bdrFlag, rowFlag;
 
-                for (LI eid = 0; eid < m_uiNumElems; eid++){
-                    block_dims = (LI)sqrt(m_epMat[eid].size());
-                    assert((block_dims*block_dims) == m_epMat[eid].size());
-                    LI block_row_offset = 0;
-                    LI block_col_offset = 0;
-                    num_dofs_per_block = m_uiDofsPerElem[eid]/block_dims;
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                block_dims = (LI)sqrt(m_epMat[eid].size());
+                assert((block_dims*block_dims) == m_epMat[eid].size());
+                LI block_row_offset = 0;
+                LI block_col_offset = 0;
+                num_dofs_per_block = m_uiDofsPerElem[eid]/block_dims;
 
-                    // clear the vectors storing values of KfcUc for element eid
-                    KfcUc_elem.clear();
-                    row_Indices_KfcUc_elem.clear();
+                // clear the vectors storing values of KfcUc for element eid
+                KfcUc_elem.clear();
+                row_Indices_KfcUc_elem.clear();
 
-                    for (LI block_i = 0; block_i < block_dims; block_i++){
-                        for (LI block_j = 0; block_j < block_dims; block_j++){
-                            block_index = block_i * block_dims + block_j;
-                            // continue if block_index is not nullptr
-                            if (m_epMat[eid][block_index] != nullptr){
-                                for (LI r = 0; r < num_dofs_per_block; r++){
-                                    rowFlag = false;
-                                    // continue if row is associated with a free dof
-                                    if (m_uipBdrMap[eid][block_i * num_dofs_per_block + r] == 0){
-                                        rowId = m_ulpMap[eid][block_i * num_dofs_per_block + r];
-                                        temp = 0;
-                                        // loop over columns of the element matrix (block)
-                                        for (LI c = 0; c < num_dofs_per_block; c++){
-                                            // continue if column is associated with a constrained dof
-                                            if (m_uipBdrMap[eid][block_j * num_dofs_per_block + c] == 1){
-                                                // accumulate Kfc[r,c]*Uc[c]
-                                                #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
-                                                    // block m_epMat[eid][block_index] is stored in column-major
-                                                    temp += m_epMat[eid][block_index][(c*num_dofs_per_block) + r] *
-                                                            m_dtPresValMap[eid][block_j * num_dofs_per_block + c];
-                                                #else
-                                                    // block m_epMat[eid][block_index] is stored in row-major
-                                                    temp += m_epMat[eid][block_index][(r*num_dofs_per_block) + c] *
-                                                            m_dtPresValMap[eid][block_j * num_dofs_per_block + c];
-                                                #endif
-                                                rowFlag = true; // this rowId has constrained column dof
-                                                bdrFlag = true; // this element matrix has KfcUc
-                                            }
-                                        }
-                                        if (rowFlag){
-                                            row_Indices_KfcUc_elem.push_back(rowId);
-                                            KfcUc_elem.push_back(-1.0*temp);
+                for (LI block_i = 0; block_i < block_dims; block_i++){
+                    for (LI block_j = 0; block_j < block_dims; block_j++){
+                        block_index = block_i * block_dims + block_j;
+                        // continue if block_index is not nullptr
+                        if (m_epMat[eid][block_index] != nullptr){
+                            for (LI r = 0; r < num_dofs_per_block; r++){
+                                rowFlag = false;
+                                // continue if row is associated with a free dof
+                                if (m_uipBdrMap[eid][block_i * num_dofs_per_block + r] == 0){
+                                    rowId = m_ulpMap[eid][block_i * num_dofs_per_block + r];
+                                    temp = 0;
+                                    // loop over columns of the element matrix (block)
+                                    for (LI c = 0; c < num_dofs_per_block; c++){
+                                        // continue if column is associated with a constrained dof
+                                        if (m_uipBdrMap[eid][block_j * num_dofs_per_block + c] == 1){
+                                            // accumulate Kfc[r,c]*Uc[c]
+                                            #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
+                                                // block m_epMat[eid][block_index] is stored in column-major
+                                                temp += m_epMat[eid][block_index][(c*num_dofs_per_block) + r] *
+                                                        m_dtPresValMap[eid][block_j * num_dofs_per_block + c];
+                                            #else
+                                                // block m_epMat[eid][block_index] is stored in row-major
+                                                temp += m_epMat[eid][block_index][(r*num_dofs_per_block) + c] *
+                                                        m_dtPresValMap[eid][block_j * num_dofs_per_block + c];
+                                            #endif
+                                            rowFlag = true; // this rowId has constrained column dof
+                                            bdrFlag = true; // this element matrix has KfcUc
                                         }
                                     }
+                                    if (rowFlag){
+                                        row_Indices_KfcUc_elem.push_back(rowId);
+                                        KfcUc_elem.push_back(-1.0*temp);
+                                    }
                                 }
-                                if (bdrFlag){
-                                    VecSetValues(KfcUcVec, row_Indices_KfcUc_elem.size(), row_Indices_KfcUc_elem.data(), KfcUc_elem.data(), ADD_VALUES);
-                                }
-                            } // m_epMat[eid][index] != nullptr
-                        } // for block_j
-                    } // for block_i
-                } // for eid
-
-            } else if (m_MatType == AMAT_TYPE::PETSC_SPARSE){
-
-                Vec uVec, vVec;
-                petsc_create_vec(uVec);
-                petsc_create_vec(vVec);
-
-                // [uVec] contains the prescribed values at location of constrained dofs
-                for (LI r = 0; r < n_owned_constraints; r++){
-                    value = ownedPrescribedValues[r];
-                    global_Id = ownedConstrainedDofs[r];
-                    VecSetValue(uVec, global_Id, value, INSERT_VALUES);
-                }
-
-                // multiply [K][uVec] = [vVec] where locations of free dofs equal to [Kfc][Uc]
-                MatMult(m_pMat, uVec, vVec);
-                //dump_mat();
-                petsc_init_vec(vVec);
-                petsc_finalize_vec(vVec);
-
-                // extract the values of [Kfc][Uc] from vVec and set to KfcUcVec
-                std::vector<PetscScalar> KfcUc_values(ownedFreeDofs.size());
-                std::vector<PetscInt> KfcUc_indices(ownedFreeDofs.size());
-                for (LI r = 0; r < ownedFreeDofs.size(); r++){
-                    KfcUc_indices[r] = ownedFreeDofs[r];
-                }
-                VecGetValues(vVec, KfcUc_indices.size(), KfcUc_indices.data(), KfcUc_values.data());
-                for (LI r = 0; r < ownedFreeDofs.size(); r++){
-                    KfcUc_values[r] = -1.0*KfcUc_values[r];
-                }
-
-                VecSetValues(KfcUcVec, KfcUc_indices.size(), KfcUc_indices.data(), KfcUc_values.data(), ADD_VALUES);
-
-                petsc_destroy_vec(uVec);
-                petsc_destroy_vec(vVec);
-
-            } // if (m_MatType == AMAT_TYPE::MAT_FREE)
+                            }
+                            if (bdrFlag){
+                                VecSetValues(KfcUcVec, row_Indices_KfcUc_elem.size(), row_Indices_KfcUc_elem.data(), KfcUc_elem.data(), ADD_VALUES);
+                            }
+                        } // m_epMat[eid][index] != nullptr
+                    } // for block_j
+                } // for block_i
+            } // for eid
         } // if (m_BcMeth == BC_METH::BC_IMATRIX)
 
         // modify Fc
@@ -3316,8 +3226,8 @@ namespace par {
         // modify Ff for the case of BC_IMATRIX
         if (m_BcMeth == BC_METH::BC_IMATRIX){
             // need to finalize vector KfcUcVec before extracting its value
-            petsc_init_vec(KfcUcVec);
-            petsc_finalize_vec(KfcUcVec);
+            VecAssemblyBegin( KfcUcVec );
+            VecAssemblyEnd( KfcUcVec );
 
             for (LI nid = 0; nid < ownedFreeDofs.size(); nid++){
                 global_Id = ownedFreeDofs[nid];
@@ -3329,104 +3239,70 @@ namespace par {
             VecDestroy(&KfcUcVec);
         }
 
-        petsc_destroy_vec(KfcUcVec);
+        //petsc_destroy_vec(KfcUcVec);
 
         return Error::SUCCESS;
-    } // apply_bc_rhs
+    } // aMatFree::apply_bc_rhs
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_solve( const Vec rhs, Vec out ) const {
+    Error aMatFree<DT,GI,LI>::petsc_solve( const Vec rhs, Vec out ) const {
+        // PETSc shell matrix
+        Mat pMatFree;
+        // get context to aMatFree
+        aMatCTX<DT,GI,LI> ctx;
+        // point back to aMatFree
+        ctx.aMatPtr =  (aMatFree<DT,GI,LI>*)this;
 
-        if( m_MatType == AMAT_TYPE::MAT_FREE ) {
+        // create matrix shell
+        MatCreateShell( m_comm, m_uiNumDofs, m_uiNumDofs, PETSC_DETERMINE, PETSC_DETERMINE, &ctx, &pMatFree );
 
-            // PETSc shell matrix
-            Mat pMatFree;
-            // get context to aMat
-            aMatCTX<DT,GI,LI> ctx;
-            // point back to aMat
-            ctx.aMatPtr =  (aMat<DT,GI,LI>*)this; // FIXME: casting away "const", better way to do this?
+        // set operation for matrix-vector multiplication using aMatFree::MatMult_mf
+        MatShellSetOperation( pMatFree, MATOP_MULT, (void(*)(void))aMat_matvec<DT,GI,LI> );
 
-            // create matrix shell
-            MatCreateShell( m_comm, m_uiNumDofs, m_uiNumDofs, PETSC_DETERMINE, PETSC_DETERMINE, &ctx, &pMatFree );
+        // set operation for geting matrix diagonal using aMatFree::MatGetDiagonal_mf
+        MatShellSetOperation( pMatFree, MATOP_GET_DIAGONAL, (void(*)(void))aMat_matgetdiagonal<DT,GI,LI> );
 
-            // set operation for matrix-vector multiplication using aMat::MatMult_mf
-            MatShellSetOperation( pMatFree, MATOP_MULT, (void(*)(void))aMat_matvec<DT,GI,LI> );
+        // set operation for geting block matrix diagonal using aMatFree::MatGetDiagonalBlock_mf
+        MatShellSetOperation( pMatFree, MATOP_GET_DIAGONAL_BLOCK, (void(*)(void))aMat_matgetdiagonalblock<DT,GI,LI> );
 
-            // set operation for geting matrix diagonal using aMat::MatGetDiagonal_mf
-            MatShellSetOperation( pMatFree, MATOP_GET_DIAGONAL, (void(*)(void))aMat_matgetdiagonal<DT,GI,LI> );
+        // abstract Krylov object, linear solver context
+        KSP ksp;
+        // abstract preconditioner object, pre conditioner context
+        PC  pc;
 
-            // set operation for geting block matrix diagonal using aMat::MatGetDiagonalBlock_mf
-            MatShellSetOperation( pMatFree, MATOP_GET_DIAGONAL_BLOCK, (void(*)(void))aMat_matgetdiagonalblock<DT,GI,LI> );
+        // default KSP context
+        KSPCreate( m_comm, &ksp );
 
-            // abstract Krylov object, linear solver context
-            KSP ksp;
-            // abstract preconditioner object, pre conditioner context
-            PC  pc;
+        // set the matrix associated the linear system
+        KSPSetOperators( ksp, pMatFree, pMatFree );
 
-            // default KSP context
-            KSPCreate( m_comm, &ksp );
+        // set default solver (e.g. KSPCG, KSPFGMRES, ...)
+        // could be overwritten at runtime using -ksp_type <type>
+        KSPSetType(ksp, KSPCG);
+        KSPSetFromOptions(ksp);
 
-            // set the matrix associated the linear system
-            KSPSetOperators( ksp, pMatFree, pMatFree );
+        KSPSetTolerances(ksp,1E-12,1E-12,PETSC_DEFAULT, 20000);
 
-            // set default solver (e.g. KSPCG, KSPFGMRES, ...)
-            // could be overwritten at runtime using -ksp_type <type>
-            KSPSetType(ksp, KSPCG);
-            KSPSetFromOptions(ksp);
+        // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
+        // could be overwritten at runtime using -pc_type <type>
+        KSPGetPC( ksp, &pc );
+        PCSetType( pc, PCJACOBI );
+        PCSetFromOptions( pc );
 
-            KSPSetTolerances(ksp,1E-12,1E-12,PETSC_DEFAULT, 20000);
+        // solve the system
+        KSPSolve( ksp, rhs, out );
 
-            // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
-            // could be overwritten at runtime using -pc_type <type>
-            KSPGetPC( ksp, &pc );
-            PCSetType( pc, PCJACOBI );
-            PCSetFromOptions( pc );
-
-            // solve the system
-            KSPSolve( ksp, rhs, out );
-
-            // clean up
-            KSPDestroy( &ksp );
-
-        }
-        else { // Normal PETSc solve (ie, not matrix free)
-            // abstract Krylov object, linear solver context
-            KSP ksp;
-            // abstract preconditioner object, pre conditioner context
-            PC  pc;
-            // default KSP context
-            KSPCreate( m_comm, &ksp );
-
-            // set default solver (e.g. KSPCG, KSPFGMRES, ...)
-            // could be overwritten at runtime using -ksp_type <type>
-            KSPSetType(ksp, KSPCG);
-            KSPSetFromOptions(ksp);
-
-            KSPSetTolerances(ksp,1E-12,1E-12,PETSC_DEFAULT, 20000);
-
-            // set the matrix associated the linear system
-            KSPSetOperators(ksp, m_pMat, m_pMat);
-
-            // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
-            // could be overwritten at runtime using -pc_type <type>
-            KSPGetPC(ksp,&pc);
-            PCSetType(pc, PCJACOBI);
-            PCSetFromOptions(pc);
-
-            // solve the system
-            KSPSolve(ksp, rhs, out); // solve the linear system
-
-            // clean up
-            KSPDestroy( &ksp );
-        }
+        // clean up
+        KSPDestroy( &ksp );
 
         return Error::SUCCESS;
+    } // aMatFree::petsc_solve
 
-    } // petsc_solve
 
     /**@brief: allocate an aligned memory */
     template <typename DT, typename GI, typename LI>
-    DT* aMat<DT,GI,LI>::create_aligned_array(unsigned int alignment, unsigned int length){
+    DT* aMatFree<DT,GI,LI>::create_aligned_array(unsigned int alignment, unsigned int length){
 
         DT* array;
 
@@ -3443,479 +3319,471 @@ namespace par {
         #endif
 
         return array;
-    }
+    } // aMatFree::create_aligned_array
+
 
     /**@brief: deallocate an aligned memory */
     template <typename DT, typename GI, typename LI>
-    inline void aMat<DT,GI,LI>::delete_algined_array(DT* array){
+    inline void aMatFree<DT,GI,LI>::delete_algined_array(DT* array){
         #ifdef USE_WINDOWS
             _aligned_free(array);
         #else
             free(array);
         #endif
-    }
+    } // aMatFree::delete_aligned_array
 
-    /**@brief ********* FUNCTIONS FOR DEBUGGING **************************************************/
 
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_create_matrix_matvec(){
-        MatCreate(m_comm, &m_pMat_matvec);
-        MatSetSizes(m_pMat_matvec, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
-        if (m_uiSize > 1) {
-            MatSetType(m_pMat_matvec, MATMPIAIJ);
-            MatMPIAIJSetPreallocation(m_pMat_matvec, 81*3, PETSC_NULL, 81*3, PETSC_NULL);
-        } else {
-            MatSetType(m_pMat_matvec, MATSEQAIJ);
-            MatSeqAIJSetPreallocation(m_pMat_matvec, 81*3, PETSC_NULL);
-        }
-        MatZeroEntries(m_pMat_matvec);
-        return Error :: SUCCESS;
-    } // petsc_create_matrix_matvec
+
+    //==============================================================================================================
+    template <typename DT,typename GI, typename LI>
+    aMatBased<DT,GI,LI>::aMatBased( BC_METH bcType ) : aMat<DT,GI,LI>(bcType) {
+        m_pMat = nullptr;       // "global" matrix
+    } // aMatBased::constructor
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_element_matrix_term_by_term( LI eid, EigenMat e_mat, InsertMode mode /* = ADD_VALUES*/ ) {
+    aMatBased<DT,GI,LI>::~aMatBased() {
+        // MatDestroy(&m_pMat);
+    } // aMatBased::destructor
 
-        assert( e_mat.rows()== e_mat.cols() );
+    template <typename DT,typename GI, typename LI>
+    Error aMatBased<DT,GI,LI>::set_map( const LI      n_elements_on_rank,
+                                        const LI * const * element_to_rank_map,
+                                        const LI         * dofs_per_element,
+                                        const LI           n_all_dofs_on_rank,
+                                        const GI         * rank_to_global_map,
+                                        const GI           owned_global_dof_range_begin,
+                                        const GI           owned_global_dof_range_end,
+                                        const GI           n_global_dofs ){
+
+        // number of owned elements
+        m_uiNumElems = n_elements_on_rank;
+
+        // number  of owned dofs
+        m_uiNumDofs = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
+
+        // number of dofs of ALL ranks, currently this is not used in aMatBased
+        m_ulNumDofsGlobal = n_global_dofs;
+
+        // these will be used in set_bdr_map to pick the constraints owned by rank
+        m_ulGlobalDofStart = owned_global_dof_range_begin;
+        m_ulGlobalDofEnd = owned_global_dof_range_end;
+        m_uiNumDofsTotal = n_all_dofs_on_rank;
+
+        // point to provided array giving number of dofs of each element
+        m_uiDofsPerElem = dofs_per_element;
+
+        // create global map based on provided local map and Local2Global
+        m_ulpMap = new GI* [m_uiNumElems];
+        for( LI eid = 0; eid < m_uiNumElems; eid++ ){
+            m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
+        }
+        for( LI eid = 0; eid < m_uiNumElems; eid++ ){
+            for( unsigned int nid = 0; nid < m_uiDofsPerElem[eid]; nid++ ){
+                m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
+            }
+        }
+
+        MatCreate(m_comm, &m_pMat);
+        MatSetSizes(m_pMat, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
+        if(m_uiSize > 1) {
+            MatSetType(m_pMat, MATMPIAIJ);
+            MatMPIAIJSetPreallocation( m_pMat, NNZ, PETSC_NULL, NNZ, PETSC_NULL );
+        }
+        else {
+            MatSetType(m_pMat, MATSEQAIJ);
+            MatSeqAIJSetPreallocation(m_pMat, NNZ, PETSC_NULL);
+        }
+        // this will disable on preallocation errors (but not good for performance)
+        MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
+
+        return Error::SUCCESS;
+    } // aMatBased::set_map
+
+
+    template <typename DT, typename GI, typename LI>
+    Error aMatBased<DT,GI,LI>::update_map(const LI* new_to_old_rank_map,
+                                        const LI old_n_all_dofs_on_rank,
+                                        const GI* old_rank_to_global_map,
+                                        const LI n_elements_on_rank,
+                                        const LI* const * element_to_rank_map,
+                                        const LI* dofs_per_element,
+                                        const LI n_all_dofs_on_rank,
+                                        const GI* rank_to_global_map,
+                                        const GI owned_global_dof_range_begin,
+                                        const GI owned_global_dof_range_end,
+                                        const GI n_global_dofs) {
+
+        // It is assumed that total number of owned elements is unchanged
+        assert(m_uiNumElems == n_elements_on_rank);
+
+        // point to new provided array giving number of dofs of each element
+        m_uiDofsPerElem = dofs_per_element;
+
+        // update new global map (number dofs per element is changed, but number of owned elements is intact)
+        if (m_ulpMap != nullptr){
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                delete[] m_ulpMap[eid];
+            }
+        }
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            m_ulpMap[eid] = new GI[m_uiDofsPerElem[eid]];
+        }
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
+                m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
+            }
+        }
+
+        // update number of owned dofs
+        m_uiNumDofs = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
+
+        // update total dofs of all ranks, currently not use by aMatBased
+        m_ulNumDofsGlobal = n_global_dofs;
+
+        /*unsigned long nl = m_uiNumDofs;
+        unsigned long ng;
+        MPI_Allreduce( &nl, &ng, 1, MPI_LONG, MPI_SUM, m_comm );
+        assert( n_global_dofs == ng );*/
+
+        // allocate new (larger) matrix of size m_uiNumDofs
+        if( m_pMat != nullptr ){
+            MatDestroy( &m_pMat );
+            m_pMat = nullptr;
+        }
+        MatCreate( m_comm, &m_pMat );
+        MatSetSizes( m_pMat, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE );
+        if( m_uiSize > 1 ) {
+            // initialize matrix
+            MatSetType(m_pMat, MATMPIAIJ);
+            MatMPIAIJSetPreallocation(m_pMat, 30, PETSC_NULL, 30, PETSC_NULL);
+        }
+        else {
+            MatSetType(m_pMat, MATSEQAIJ);
+            MatSeqAIJSetPreallocation(m_pMat, 30, PETSC_NULL);
+        }
+
+        return Error::SUCCESS;
+    } // aMatBased::update_map()
+
+
+    template <typename DT, typename GI, typename LI>
+    Error aMatBased<DT,GI,LI>::set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ){
+        aMatBased<DT,GI,LI>::petsc_set_element_matrix(eid, e_mat, block_i, block_j, ADD_VALUES);
+        return Error::SUCCESS;
+    } // aMatBased::set_element_matrix
+
+
+    // use with Eigen, matrix-based, set every row of the matrix (faster than set every term of the matrix)
+    template <typename DT,typename GI, typename LI>
+    Error aMatBased<DT,GI,LI>::petsc_set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, InsertMode mode ) {
+
+        #ifdef AMAT_PROFILER
+            timing_aMat[static_cast<int>(PROFILER::PETSC_ASS)].start();
+        #endif
+
+        // this is number of dofs per block:
         unsigned int num_rows = e_mat.rows();
+        assert(num_rows == e_mat.cols());
 
         // assemble global matrix (petsc matrix)
         // now set values ...
-        PetscScalar value;
-        PetscInt rowId, colId;
-
+        std::vector<PetscScalar> values(num_rows);
+        std::vector<PetscInt> colIndices(num_rows);
+        PetscInt rowId;
         for (unsigned int r = 0; r < num_rows; ++r) {
-            rowId = m_ulpMap[eid][r];
+            // this ONLY WORKS with assumption that all blocks have the same number of dofs (that is true for RXFEM ?)
+            rowId = m_ulpMap[eid][block_i * num_rows + r];
             for (unsigned int c = 0; c < num_rows; ++c) {
-                colId = m_ulpMap[eid][c];
-                value = e_mat(r,c);
-                if (fabs(value) > 1e-16)
-                    MatSetValue(m_pMat, rowId, colId, value, mode);
-            }
-        }
-        return Error::SUCCESS;
-    } // set_element_matrix_term_by_term
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>:: petsc_compare_matrix(){
-        PetscBool flg;
-        MatEqual(m_pMat, m_pMat_matvec, &flg);
-        if (flg == PETSC_TRUE) {
-            printf("Matrices are equal\n");
-        } else {
-            printf("Matrices are NOT equal\n");
-        }
-        return Error::SUCCESS;
-    } // petsc_compare_matrix
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>:: petsc_norm_matrix_difference(){
-        PetscScalar a = -1.0;
-        PetscReal nrm;
-
-        // subtraction: m_pMat = m_pMat + a * m_pMat_matvec
-        MatAXPY(m_pMat, a, m_pMat_matvec, SAME_NONZERO_PATTERN);
-
-        // compute norm of the matrix difference
-        //MatNorm(m_pMat, NORM_FROBENIUS, &nrm);
-        MatNorm(m_pMat, NORM_INFINITY, &nrm);
-
-        printf("Norm of matrix difference = %10.6f\n", nrm);
-        return Error::SUCCESS;
-    } // petsc_norm_matrix_difference
-
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::dump_mat_matvec( const char* filename /* = nullptr */ ) const {
-
-        if( filename == nullptr ) {
-            MatView( m_pMat_matvec, PETSC_VIEWER_STDOUT_WORLD );
-        }
-        else {
-
-            // write matrix m_pMat_matvec to file
-            PetscViewer viewer;
-            PetscViewerASCIIOpen( m_comm, filename, &viewer );
-
-            // write to file readable by Matlab
-            PetscViewerPushFormat(viewer, PETSC_VIEWER_ASCII_MATLAB);
-
-            MatView( m_pMat_matvec, viewer );
-            PetscViewerDestroy( &viewer );
-        }
-
-        return Error::SUCCESS;
-    } // dump_mat_matvec
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_matmult( Vec x, Vec result ){
-        MatMult( m_pMat, x, result );
-        return Error::SUCCESS;
-    } // petsc_matmult
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>:: petsc_set_matrix_matvec( DT* vec, unsigned int global_column, InsertMode mode /* = ADD_VALUES */ ) {
-
-        PetscScalar value;
-        PetscInt rowId;
-        PetscInt colId;
-
-        // set elements of vector to the corresponding column of matrix
-        colId = global_column;
-        for (unsigned int i = 0; i < m_uiNumDofs; i++){
-            value = vec[i];
-            //rowId = local_to_global[i];
-            rowId = m_ulpLocal2Global[i];
-            // std::cout << "setting: " << rowId << "," << colId << std::endl;
-            if (fabs(value) > 1e-16) {
-                MatSetValue(m_pMat_matvec, rowId, colId, value, mode);
-            }
-        }
-
-        return Error::SUCCESS;
-    } // petsc_set_matrix_matvec
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::print_vector( const DT* vec, bool ghosted /* = false */ ){
-        if( ghosted ){
-            // size of vec includes ghost DoFs, print local DoFs only
-            for (unsigned int i = m_uiDofLocalBegin; i < m_uiDofLocalEnd; i++){
-                printf("rank %d, v[%d] = %10.5f \n", m_uiRank, i - m_uiNumPreGhostDofs, vec[i]);
-            }
-        }
-        else {
-            // vec is only for local DoFs
-            printf("here, rank %d, m_uiNumDofs = %d\n", m_uiRank, m_uiNumDofs);
-            for (unsigned int i = m_uiDofLocalBegin; i < m_uiDofLocalEnd; i++){
-                printf("rank %d, v[%d] = %10.5f \n", m_uiRank, i, vec[i-m_uiNumPreGhostDofs]);
-            }
-        }
-        return Error::SUCCESS;
-    } // print_vector
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::print_matrix(){
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            unsigned int row = m_epMat[eid].rows();
-            unsigned int col = m_epMat[eid].cols();
-            printf("rank= %d, eid= %d, row= %d, col= %d, m_epMat= \n", m_uiRank, eid, row, col);
-            for (unsigned int r = 0; r < row; r++){
-                for (unsigned int c = 0; c < col; c++){
-                    printf("%10.3f\n",m_epMat[eid](r,c));
-                }
-            }
-        }
-        return Error::SUCCESS;
-    } // print_matrix
-
-    // transform vec to petsc vector for comparison between matrix-free and matrix-based methods
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::transform_to_petsc_vector(const DT* vec, Vec petsc_vec, bool ghosted) {
-        PetscScalar value;
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            unsigned int num_nodes = m_uiDofsPerElem[eid];
-
-            for (unsigned int i = 0; i < num_nodes; i++){
-                const unsigned int nidG = m_ulpMap[eid][i]; // global node
-                unsigned int nidL = m_uipLocalMap[eid][i];  // local node
-
-                if (nidL >= m_uiNumPreGhostDofs && nidL < m_uiNumPreGhostDofs + m_uiNumDofs) {
-                    // nidL is owned by me
-                    if (ghosted){
-                        value = vec[nidL];
-                    } else {
-                        value = vec[nidL - m_uiNumPreGhostDofs];
-                    }
-                    VecSetValue(petsc_vec, nidG, value, INSERT_VALUES);
-                }
-            }
-        }
-        return Error::SUCCESS;
-    } // transform_to_petsc_vector
-
-    // explicitly apply Dirichlet boundary conditions on structure vector
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::set_vector_bc(DT* vec, unsigned int eid, const GI **dirichletBMap){
-        unsigned int num_nodes = m_uiDofsPerElem[eid];
-        unsigned int rowId, boundrow;
-        //for (unsigned int r = 0; r < num_nodes * dof; r++){
-        for (unsigned int r = 0; r < num_nodes; r++){
-            rowId = m_uipLocalMap[eid][r];
-            boundrow = dirichletBMap[eid][r];
-            if (boundrow == 1) {
-                // boundary node
-                vec[rowId] = 0.0;
-            }
-        }
-        return Error::SUCCESS;
-    }// set_vector_bc
-
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::mat_get_diagonal_block_seq(DT **diag_blk){
-        //Note: diag_blk is already allocated with size of [m_uiNumDofs][m_uiNumDofs]
-        unsigned int num_nodes;
-        EigenMat e_mat;
-        LI rowID, colID;
-
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiDofsPerElem[eid];
-            // get element matrix
-            e_mat = m_epMat[eid];
-            for (unsigned int r = 0; r < num_nodes; r++){
-                rowID = m_uipLocalMap[eid][r];
-                if ((rowID >= m_uiDofLocalBegin) && (rowID < m_uiDofLocalEnd)){
-                    // only assembling if rowID is owned by my rank
-                    for (unsigned int c = 0; c < num_nodes; c++) {
-                        colID = m_uipLocalMap[eid][c];
-                        if ((colID >= m_uiDofLocalBegin) && (colID < m_uiDofLocalEnd)) {
-                            // only assembling if colID is owned by my rank
-                            diag_blk[rowID - m_uiNumPreGhostDofs][colID - m_uiNumPreGhostDofs] += e_mat(r, c);
-                        }
-                    }
-                }
-            }
-        }
-        return Error::SUCCESS;
-    }// mat_get_diagonal_block_seq
-
-    template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::ghost_to_local_mat(DT** lMat, DT** gMat) const {
-        for (unsigned int r = 0; r < m_uiNumDofs; r++){
-            for (unsigned int c = 0; c < m_uiNumDofs; c++){
-                lMat[r][c] = gMat[r + m_uiNumPreGhostDofs][c + m_uiNumPreGhostDofs];
-            }
-        }
-        return Error::SUCCESS;
-    }// ghost_to_local_mat
-
-
-
-    template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::petsc_set_element_matrix( LI eid, DT* e_mat, InsertMode mode /* = ADD_VALUES */ ) {
-        unsigned int num_nodes = m_uiDofsPerElem[eid];
-
-        // now set values ...
-        //std::vector<PetscScalar> values(num_nodes * dof);
-        std::vector<PetscScalar> values(num_nodes);
-        //std::vector<PetscInt> colIndices(num_nodes * dof);
-        std::vector<PetscInt> colIndices(num_nodes);
-
-        PetscInt rowId;
-
-        unsigned int index = 0;
-        for (unsigned int r = 0; r < num_nodes; ++r) {
-            rowId = m_ulpMap[eid][r];
-            for (unsigned int c = 0; c < num_nodes; ++c) {
-                colIndices[c] = m_ulpMap[eid][c];
-                values[c] = e_mat[index];
-                index++;
+                colIndices[c] = m_ulpMap[eid][block_j * num_rows + c];
+                values[c] = e_mat(r,c);
             } // c
-            MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
-            // values.clear();
-            // colIndices.clear();
+            //MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
+            MatSetValues(m_pMat, 1, &rowId, colIndices.size(), colIndices.data(), values.data(), mode);
         } // r
 
+        // compute the trace of matrix for penalty method
+        if (m_BcMeth == BC_METH::BC_PENALTY){
+            for (LI r = 0; r < num_rows; r++) m_dtTraceK += e_mat(r,r);
+        }
+
+        #ifdef AMAT_PROFILER
+            timing_aMat[static_cast<int>(PROFILER::PETSC_ASS)].stop();
+        #endif
+
         return Error::SUCCESS;
-    } // petsc_set_element_matrix
+    } // aMatBased::petsc_set_element_matrix
+
+
+    template <typename DT, typename GI, typename LI>
+    Error aMatBased<DT,GI,LI>::petsc_dump_mat( const char* filename /* = nullptr */ ) {
+
+        if( m_pMat == nullptr ) {
+            std::cout << "Matrix has not yet been allocated, can't display...\n";
+            return Error::SUCCESS;
+        }
+
+        PetscBool assembled = PETSC_FALSE;
+        MatAssembled( m_pMat, &assembled );
+        if( !assembled ) {
+            std::cout << "Matrix has not yet been assembled, can't display...\n";
+            return Error::SUCCESS;
+        }
+
+        if( filename == nullptr ) {
+            MatView( m_pMat, PETSC_VIEWER_STDOUT_WORLD );
+        }
+        else {
+            PetscViewer viewer;
+            PetscViewerASCIIOpen( m_comm, filename, &viewer );
+            // write to file readable by Matlab (filename must be filename.m in order to execute in Matlab)
+            //PetscViewerPushFormat( viewer, PETSC_VIEWER_ASCII_MATLAB );
+            MatView( m_pMat, viewer );
+            PetscViewerDestroy( &viewer );
+        }
+        return Error::SUCCESS;
+    } // aMatBased::petsc_dump_mat
 
 
     template <typename DT,typename GI, typename LI>
-    par::Error aMat<DT,GI,LI>::print_mepMat() {
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            for (unsigned int block = 0; block < m_epMat[eid].size(); block++){
-                printf("rank %d, eid %d, block %d\n",m_uiRank,eid,block);
-                for (unsigned int r = 0; r < m_epMat[eid][block].rows(); r++){
-                    for (unsigned int c = 0; c < m_epMat[eid][block].rows(); c++){
-                        printf("[%d,%d]= %f; ",r,c,m_epMat[eid][block](r,c));
+    Error aMatBased<DT,GI,LI>::set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints){
+
+        // extract constrained dofs owned by me
+        LI local_Id;
+        GI global_Id;
+
+        for (LI i = 0; i < numConstraints; i++){
+            global_Id = constrainedDofs[i];
+            if ((global_Id >= m_ulGlobalDofStart) && (global_Id <= m_ulGlobalDofEnd)) {
+                ownedConstrainedDofs.push_back(global_Id);
+                ownedPrescribedValues.push_back(prescribedValues[i]);
+            }
+        }
+
+        // construct elemental map of boundary condition
+        m_uipBdrMap = new unsigned int* [m_uiNumElems];
+        m_dtPresValMap = new DT* [m_uiNumElems];
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            m_uipBdrMap[eid] = new unsigned int[m_uiDofsPerElem[eid]];
+            m_dtPresValMap[eid] = new DT [m_uiDofsPerElem[eid]];
+        }
+
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
+                global_Id = m_ulpMap[eid][nid];
+                LI index;
+                for (index = 0; index < numConstraints; index++) {
+                    if (global_Id == constrainedDofs[index]) {
+                        m_uipBdrMap[eid][nid] = 1;
+                        m_dtPresValMap[eid][nid] = prescribedValues[index];
+                        break;
                     }
-                    printf("\n");
+                }
+                if (index == numConstraints){
+                    m_uipBdrMap[eid][nid] = 0;
+                    m_dtPresValMap[eid][nid] = -1E16; // for testing
+                    if ((global_Id >= m_ulGlobalDofStart) && (global_Id <= m_ulGlobalDofEnd)) {
+                        ownedFreeDofs.push_back(global_Id);
+                    }
+                }
+            }
+        }
+
+        //if (ownedFreeDofs_unsorted.size() > 0){
+        if (ownedFreeDofs.size() > 0){
+            std::sort(ownedFreeDofs.begin(), ownedFreeDofs.end());
+            ownedFreeDofs.erase(std::unique(ownedFreeDofs.begin(),ownedFreeDofs.end()), ownedFreeDofs.end());
+        }
+
+        if (m_uiRank == 0){
+            if (m_BcMeth == BC_METH::BC_IMATRIX){
+                printf("Apply BC: use identity-matrix method\n");
+            } else if (m_BcMeth == BC_METH::BC_PENALTY){
+                printf("Apply BC: use penaly method\n");
+            } else {
+                return Error::UNKNOWN_BC_METH;
+            }
+        }
+
+        if (m_BcMeth == BC_METH::BC_IMATRIX){
+            // allocate KfcUc with size = m_uiNumDofs, this will be subtracted from rhs to apply bc
+            this->petsc_create_vec( KfcUcVec );
+
+        } else if (m_BcMeth == BC_METH::BC_PENALTY){
+            // initialize the trace of matrix, used to form the (big) penalty number
+            m_dtTraceK = 0.0;
+        }
+
+        return Error::SUCCESS;
+    }// aMatBased::set_bdr_map
+
+
+    // apply Dirichlet bc by modifying matrix, only used in matrix-based approach
+    template <typename DT, typename GI, typename LI>
+    Error aMatBased<DT,GI,LI>::apply_bc_mat() {
+        unsigned int num_nodes;
+        PetscInt rowId, colId;
+
+        for (unsigned int eid = 0; eid < m_uiNumElems; eid ++) {
+            num_nodes = m_uiDofsPerElem[eid];
+            if (m_BcMeth == BC_METH::BC_IMATRIX){
+                for (unsigned int r = 0; r < num_nodes; r++) {
+                    rowId = m_ulpMap[eid][r];
+                    if (m_uipBdrMap[eid][r] == 1) {
+                        for (unsigned int c = 0; c < num_nodes; c++) {
+                            colId = m_ulpMap[eid][c];
+                            if (colId == rowId) {
+                                MatSetValue(m_pMat, rowId, colId, 1.0, INSERT_VALUES);
+                            } else {
+                                MatSetValue(m_pMat, rowId, colId, 0.0, INSERT_VALUES);
+                            }
+                        }
+                    } else {
+                        for (unsigned int c = 0; c < num_nodes; c++) {
+                            colId = m_ulpMap[eid][c];
+                            if (m_uipBdrMap[eid][c] == 1) {
+                                MatSetValue(m_pMat, rowId, colId, 0.0, INSERT_VALUES);
+                            }
+                        }
+                    }
+                }
+            } else if (m_BcMeth == BC_METH::BC_PENALTY){
+                for (unsigned int r = 0; r < num_nodes; r++){
+                    rowId = m_ulpMap[eid][r];
+                    if (m_uipBdrMap[eid][r] == 1) {
+                        for (unsigned int c = 0; c < num_nodes; c++) {
+                            colId = m_ulpMap[eid][c];
+                            if (colId == rowId) {
+                                MatSetValue(m_pMat, rowId, colId, PENALTY_FACTOR * m_dtTraceK, INSERT_VALUES);
+                            }
+                        }
+                    }
                 }
             }
         }
         return Error::SUCCESS;
-    }
+    } // aMatBased::apply_bc_mat
+
 
     template <typename DT, typename GI, typename LI>
-    par::Error aMat<DT, GI, LI>::mat_get_diagonal_block_dense(DT **diag_blk){
-        LI blocks_dim;
-        EigenMat e_mat;
-        GI glo_RowId, glo_ColId;
-        LI loc_RowId, loc_ColId;
-        LI rowID, colID;
-        unsigned int rank_r, rank_c;
+    Error aMatBased<DT,GI,LI>::apply_bc_rhs(Vec rhs){
 
-        std::vector<MatRecord<DT,LI>> matRec;
-        MatRecord<DT,LI> matr;
+        // set rows associated with constrained dofs to be equal to Uc
+        //LI num_nodes;
+        PetscInt global_Id;
+        PetscScalar value, value1, value2;
 
-        m_vMatRec.clear();
+        // compute KfcUc
+        if (m_BcMeth == BC_METH::BC_IMATRIX){
+            #ifdef AMAT_PROFILER
+                timing_aMat[static_cast<int>(PROFILER::PETSC_KfcUc)].start();
+            #endif
+            Vec uVec, vVec;
+            this->petsc_create_vec( uVec );
+            this->petsc_create_vec( vVec );
 
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-
-            // number of blocks in row (or column)
-            blocks_dim = (LI)sqrt(m_epMat[eid].size());
-            assert (blocks_dim * blocks_dim == m_epMat[eid].size());
-
-            LI block_row_offset = 0;
-            LI block_col_offset = 0;
-            LI num_dofs_per_block;
-
-            for (LI block_i = 0; block_i < blocks_dim; block_i++){
-
-                for (LI block_j = 0; block_j < blocks_dim; block_j++){
-
-                    LI index = block_i * blocks_dim + block_j;
-
-                    if (m_epMat[eid][index].size() != 0){
-
-                        e_mat = m_epMat[eid][index];
-                        assert(e_mat.rows() == e_mat.cols());
-
-                        // number of dofs per block
-                        num_dofs_per_block = e_mat.rows();
-                        assert(num_dofs_per_block == m_uiDofsPerElem[eid]/blocks_dim);
-
-                        for (LI r = 0; r < num_dofs_per_block; r++){
-
-                            // local row Id (include ghost nodes)
-                            rowID = m_uipLocalMap[eid][block_row_offset + r];
-
-                            // global row Id
-                            glo_RowId = m_ulpMap[eid][block_row_offset + r];
-
-                            //rank who owns global row Id
-                            rank_r = globalId_2_rank(glo_RowId);
-
-                            //local ID in that rank (not include ghost nodes)
-                            loc_RowId = (glo_RowId - m_uivLocalDofScan[rank_r]);
-
-                            for (LI c = 0; c < num_dofs_per_block; c++){
-                                // local column Id (include ghost nodes)
-                                colID = m_uipLocalMap[eid][block_col_offset + c];
-
-                                // global column Id
-                                glo_ColId = m_ulpMap[eid][block_col_offset + c];
-
-                                // rank who owns global column Id
-                                rank_c = globalId_2_rank(glo_ColId);
-
-                                // local column Id in that rank (not include ghost nodes)
-                                loc_ColId = (glo_ColId - m_uivLocalDofScan[rank_c]);
-
-                                // assemble to block diagonal matrix if both i and j belong to my rank
-                                if ((rowID >= m_uiDofLocalBegin) && (rowID < m_uiDofLocalEnd) && (colID >= m_uiDofLocalBegin) && (colID < m_uiDofLocalEnd)){
-                                    diag_blk[rowID - m_uiNumPreGhostDofs][colID - m_uiNumPreGhostDofs] += e_mat(r,c);
-                                }
-
-                                // set to matrix record when both i and j belong to the same rank
-                                if ((rank_r == rank_c)&&(rank_r != m_uiRank)){
-                                    matr.setRank(rank_r);
-                                    matr.setRowId(loc_RowId);
-                                    matr.setColId(loc_ColId);
-                                    matr.setVal(e_mat(r,c));
-                                    matRec.push_back(matr);
-                                }
-                            }
-                        }
-                    } // if block is not null
-
-                    block_col_offset += num_dofs_per_block;
-
-                } // for block_j
-
-                block_row_offset += num_dofs_per_block;
-
-            } // for block_i
-
-        } // for (eid = 0:m_uiNumElems)
-
-        std::sort(matRec.begin(), matRec.end());
-
-        // accumulate value if 2 components of matRec are equal, then reduce the size of matRec
-        unsigned int i = 0;
-        while (i < matRec.size()) {
-            matr.setRank(matRec[i].getRank());
-            matr.setRowId(matRec[i].getRowId());
-            matr.setColId(matRec[i].getColId());
-
-            DT val = matRec[i].getVal();
-            // since matRec is sorted, we keep increasing i for all members that are equal
-            while (((i + 1) < matRec.size()) && (matRec[i] == matRec[i + 1])) {
-                // accumulate value
-                val += matRec[i + 1].getVal();
-                // move i to the next member
-                i++;
+            // [uVec] contains the prescribed values at location of constrained dofs
+            for (LI r = 0; r < ownedConstrainedDofs.size(); r++){
+                value = ownedPrescribedValues[r];
+                global_Id = ownedConstrainedDofs[r];
+                VecSetValue(uVec, global_Id, value, INSERT_VALUES);
             }
-            matr.setVal(val);
 
-            // append the matr (with accumulated value) to m_vMatRec
-            m_vMatRec.push_back(matr);
+            // multiply [K][uVec] = [vVec] where locations of free dofs equal to [Kfc][Uc]
+            MatMult(m_pMat, uVec, vVec);
+            //dump_mat();
+            VecAssemblyBegin( vVec );
+            VecAssemblyEnd( vVec );
 
-            // move i to the next member
-            i++;
-        }
-
-        unsigned int* sendCounts = new unsigned int[m_uiSize];
-        unsigned int* recvCounts = new unsigned int[m_uiSize];
-        unsigned int* sendOffset = new unsigned int[m_uiSize];
-        unsigned int* recvOffset = new unsigned int[m_uiSize];
-
-        for (unsigned int i = 0; i < m_uiSize; i++){
-            sendCounts[i] = 0;
-            recvCounts[i] = 0;
-        }
-
-        // number of elements sending to each rank
-        for (unsigned int i = 0; i < m_vMatRec.size(); i++){
-            sendCounts[m_vMatRec[i].getRank()] ++;
-        }
-
-        // number of elements receiving from each rank
-        MPI_Alltoall(sendCounts, 1, MPI_UNSIGNED, recvCounts, 1, MPI_UNSIGNED, m_comm);
-
-        sendOffset[0] = 0;
-        recvOffset[0] = 0;
-        for (unsigned int i = 1; i < m_uiSize; i++){
-            sendOffset[i] = sendCounts[i-1] + sendOffset[i-1];
-            recvOffset[i] = recvCounts[i-1] + recvOffset[i-1];
-        }
-
-        // allocate receive buffer
-        std::vector<MatRecord<DT,LI>> recv_buff;
-        recv_buff.resize(recvCounts[m_uiSize-1]+recvOffset[m_uiSize-1]);
-
-        // send to all other ranks
-        for (unsigned int i = 0; i < m_uiSize; i++){
-            if (sendCounts[i] == 0) continue;
-            const MPI_Datatype dtype = par::MPI_datatype_matrecord<DT,LI>::value();
-            MPI_Send(&m_vMatRec[sendOffset[i]], sendCounts[i], dtype, i, m_iCommTag, m_comm);
-        }
-
-        // receive from all other ranks
-        for (unsigned int i = 0; i < m_uiSize; i++){
-            if (recvCounts[i] == 0) continue;
-            const MPI_Datatype dtype = par::MPI_datatype_matrecord<DT,LI>::value();
-            MPI_Status status;
-            MPI_Recv(&recv_buff[recvOffset[i]], recvCounts[i], dtype, i, m_iCommTag, m_comm, &status);
-        }
-
-        m_iCommTag++;
-
-        // accumulated to block diagonal matrix
-        for (unsigned int i = 0; i < recv_buff.size(); i++){
-            if (recv_buff[i].getRank() != m_uiRank) {
-                return Error::WRONG_COMMUNICATION;
-            } else {
-                loc_RowId = recv_buff[i].getRowId();
-                loc_ColId = recv_buff[i].getColId();
-                diag_blk[loc_RowId][loc_ColId] += recv_buff[i].getVal();
+            // extract the values of [Kfc][Uc] from vVec and set to KfcUcVec
+            std::vector<PetscScalar> KfcUc_values(ownedFreeDofs.size());
+            std::vector<PetscInt> KfcUc_indices(ownedFreeDofs.size());
+            for (LI r = 0; r < ownedFreeDofs.size(); r++){
+                KfcUc_indices[r] = ownedFreeDofs[r];
             }
+            VecGetValues(vVec, KfcUc_indices.size(), KfcUc_indices.data(), KfcUc_values.data());
+            for (LI r = 0; r < ownedFreeDofs.size(); r++){
+                KfcUc_values[r] = -1.0*KfcUc_values[r];
+            }
+
+            VecSetValues(KfcUcVec, KfcUc_indices.size(), KfcUc_indices.data(), KfcUc_values.data(), ADD_VALUES);
+
+            //petsc_destroy_vec(uVec);
+            //petsc_destroy_vec(vVec);
+            VecDestroy(&uVec);
+            VecDestroy(&vVec);
+
+            #ifdef AMAT_PROFILER
+                timing_aMat[static_cast<int>(PROFILER::PETSC_KfcUc)].stop();
+            #endif
+        } // if (m_BcMeth == BC_METH::BC_IMATRIX)
+
+        // modify Fc
+        for (LI nid = 0; nid < ownedConstrainedDofs.size(); nid++){
+            global_Id = ownedConstrainedDofs[nid];
+            if (m_BcMeth == BC_METH::BC_IMATRIX){
+                value = ownedPrescribedValues[nid];
+                VecSetValue(rhs, global_Id, value, INSERT_VALUES);
+            } else if (m_BcMeth == BC_METH::BC_PENALTY){
+                value = PENALTY_FACTOR * m_dtTraceK * ownedPrescribedValues[nid];
+                VecSetValue(rhs, global_Id, value, INSERT_VALUES);
+            }
+
         }
 
-        delete [] sendCounts;
-        delete [] recvCounts;
-        delete [] sendOffset;
-        delete [] recvOffset;
+        // modify Ff for the case of BC_IMATRIX
+        if (m_BcMeth == BC_METH::BC_IMATRIX){
+            // need to finalize vector KfcUcVec before extracting its value
+            VecAssemblyBegin( KfcUcVec );
+            VecAssemblyEnd( KfcUcVec );
+
+            for (LI nid = 0; nid < ownedFreeDofs.size(); nid++){
+                global_Id = ownedFreeDofs[nid];
+                VecGetValues(KfcUcVec, 1, &global_Id, &value1);
+                VecGetValues(rhs, 1, &global_Id, &value2);
+                value = value1 + value2;
+                VecSetValue(rhs, global_Id, value, INSERT_VALUES);
+            }
+            VecDestroy(&KfcUcVec);
+        }
+
+        //petsc_destroy_vec(KfcUcVec);
 
         return Error::SUCCESS;
-    } //mat_get_diagonal_block_dense
+    } // aMatBased::apply_bc_rhs
+
+
+    template <typename DT, typename GI, typename LI>
+    Error aMatBased<DT,GI,LI>::petsc_solve( const Vec rhs, Vec out ) const {
+        // abstract Krylov object, linear solver context
+        KSP ksp;
+        // abstract preconditioner object, pre conditioner context
+        PC  pc;
+        // default KSP context
+        KSPCreate( m_comm, &ksp );
+
+        // set default solver (e.g. KSPCG, KSPFGMRES, ...)
+        // could be overwritten at runtime using -ksp_type <type>
+        KSPSetType(ksp, KSPCG);
+        KSPSetFromOptions(ksp);
+
+        KSPSetTolerances(ksp,1E-12,1E-12,PETSC_DEFAULT, 20000);
+
+        // set the matrix associated the linear system
+        KSPSetOperators(ksp, m_pMat, m_pMat);
+
+        // set default preconditioner (e.g. PCJACOBI, PCBJACOBI, ...)
+        // could be overwritten at runtime using -pc_type <type>
+        KSPGetPC(ksp,&pc);
+        PCSetType(pc, PCJACOBI);
+        PCSetFromOptions(pc);
+
+        // solve the system
+        KSPSolve(ksp, rhs, out); // solve the linear system
+
+        // clean up
+        KSPDestroy( &ksp );
+
+        return Error::SUCCESS;
+    } // aMatBased::petsc_solve
+
 } // end of namespace par
