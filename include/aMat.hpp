@@ -71,7 +71,8 @@ namespace par {
                        UNKNOWN_DOF_TYPE,
                        UNKNOWN_CONSTRAINT,
                        UNKNOWN_BC_METH,
-                       NOT_IMPLEMENTED};
+                       NOT_IMPLEMENTED,
+                       GLOBAL_DOF_ID_NOT_FOUND };
 
     /**@brief  */
     enum class DOF_TYPE { FREE, PRESCRIBED, UNDEFINED };
@@ -419,7 +420,7 @@ namespace par {
         /**@brief max number of DoFs per element*/
         LI m_uiMaxDofsPerElem;
 
-        /**@brief map from local DoF of element to global DoF: m_ulpMap[eid][local_id]  = global_id */
+        /**@brief map from element to global DoF: m_ulpMap[eid][local_id]  = global_id */
         GI** m_ulpMap;
 
         /**@brief number of dofs per element */
@@ -462,7 +463,7 @@ namespace par {
         }
 
         /**@brief set mapping from element local node to global node */
-        virtual Error set_map( const LI      n_elements_on_rank,
+        virtual Error set_map( const LI           n_elements_on_rank,
                                 const LI* const * element_to_rank_map,
                                 const LI        * dofs_per_element,
                                 const LI          n_all_dofs_on_rank, // Note: includes ghost dofs
@@ -564,11 +565,13 @@ namespace par {
         /**@brief storage of element matrices */
         std::vector< DT* >* m_epMat;
 
-        /**@brief map from local DoF of element to local DoF: m_uiMap[eid][element_node]  = local node-ID */
-        const LI* const*  m_uipLocalMap;
+        /**@brief map from local DoF of element to local DoF: m_uipLocalMap[eid][element_node]  = local dof ID */
+        //const LI* const*  m_uipLocalMap;
+        LI** m_uipLocalMap;
 
         /**@brief map from local DoF to global DoF */
-        const GI* m_ulpLocal2Global;
+        //const GI* m_ulpLocal2Global;
+        GI* m_ulpLocal2Global;
 
         /**@brief number of DoFs owned by each rank, NOT include ghost DoFs */
         std::vector<LI> m_uivLocalDofCounts;
@@ -577,7 +580,7 @@ namespace par {
         std::vector<LI> m_uivLocalElementCounts;
 
         /**@brief exclusive scan of (local) number of DoFs */
-        std::vector<GI> m_uivLocalDofScan;
+        std::vector<GI> m_ulvLocalDofScan;
 
         /**@brief exclusive scan of (local) number of elements */
         std::vector<GI> m_uivLocalElementScan;
@@ -715,10 +718,8 @@ namespace par {
             return Error::NOT_IMPLEMENTED;
         }
 
-        Error petsc_dump_mat( const char* filename ){
-            printf("petsc_dump_mat is not yet implemented for matrix-free approach\n");
-            return Error::NOT_IMPLEMENTED;
-        }
+        /**@brief display global matrix to filename using matrix free approach */
+        Error petsc_dump_mat( const char* filename );
 
         /**@brief pointer function points to MatMult_mt */
         std::function<PetscErrorCode(Mat,Vec,Vec)>* get_MatMult_func(){
@@ -901,27 +902,27 @@ namespace par {
         ~aMatBased();
 
         /**@brief overriden version for matrix-based approach */
-        Error set_map( const LI          n_elements_on_rank,
-                            const LI* const * element_to_rank_map,
-                            const LI        * dofs_per_element,
-                            const LI          n_all_dofs_on_rank, // Note: includes ghost dofs
-                            const GI        * rank_to_global_map,
-                            const GI          owned_global_dof_range_begin,
-                            const GI          owned_global_dof_range_end,
-                            const GI          n_global_dofs );
+        Error set_map( const LI       n_elements_on_rank,
+                    const LI* const * element_to_rank_map,
+                    const LI        * dofs_per_element,
+                    const LI          n_all_dofs_on_rank, // Note: includes ghost dofs
+                    const GI        * rank_to_global_map,
+                    const GI          owned_global_dof_range_begin,
+                    const GI          owned_global_dof_range_end,
+                    const GI          n_global_dofs );
 
         /**@brief overridden version for matrix-based approach */
-        Error update_map(const LI* new_to_old_rank_map,
-                            const LI old_n_all_dofs_on_rank,
-                            const GI* old_rank_to_global_map,
-                            const LI n_elements_on_rank,
-                            const LI* const * element_to_rank_map,
-                            const LI* dofs_per_element,
-                            const LI n_all_dofs_on_rank,
-                            const GI* rank_to_global_map,
-                            const GI owned_global_dof_range_begin,
-                            const GI owned_global_dof_range_end,
-                            const GI n_global_dofs);
+        Error update_map(const LI*        new_to_old_rank_map,
+                        const LI          old_n_all_dofs_on_rank,
+                        const GI*         old_rank_to_global_map,
+                        const LI          n_elements_on_rank,
+                        const LI* const * element_to_rank_map,
+                        const LI*         dofs_per_element,
+                        const LI          n_all_dofs_on_rank,
+                        const GI*         rank_to_global_map,
+                        const GI          owned_global_dof_range_begin,
+                        const GI          owned_global_dof_range_end,
+                        const GI          n_global_dofs);
 
         /**@brief overidden version of aMatFree */
         Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim );
@@ -1031,12 +1032,12 @@ namespace par {
         m_uiNumDofs        = 0;             // number of owned dofs
         m_ulNumDofsGlobal  = 0;             // total number of global dofs of all ranks
         m_uiNumElems       = 0;             // number of owned elements
-        m_uiNumDofsTotal  = 0;             // total number of owned dofs + ghost dofs
+        m_uiNumDofsTotal   = 0;             // total number of owned dofs + ghost dofs
         m_ulGlobalDofStart = 0;
         m_ulGlobalDofEnd   = 0;
         m_uiMaxDofsPerElem = 0;
 
-        m_ulpMap           = nullptr;       // local-to-global map
+        m_ulpMap           = nullptr;       // element-to-global map
         m_uiDofsPerElem    = nullptr;       // number of dofs per element
         m_comm             = MPI_COMM_NULL; // communication of aMat
 
@@ -1049,7 +1050,7 @@ namespace par {
     aMat<DT,GI,LI>::~aMat() {
         // free memory allocated for global map
         if (m_ulpMap != nullptr){
-            for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
                 if (m_ulpMap[eid] != nullptr) {
                     delete [] m_ulpMap[eid];
                 }
@@ -1139,6 +1140,8 @@ namespace par {
         m_epMat    = nullptr;   // element matrices (Eigen matrix), used in matrix-free
         m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
 
+        m_uipLocalMap = nullptr;
+
         Uc = nullptr;
 
         #ifdef USE_OMP
@@ -1156,6 +1159,21 @@ namespace par {
 
     template <typename DT,typename GI, typename LI>
     aMatFree<DT,GI,LI>::~aMatFree() {
+        // free memory allocated for element-to-local map (allocated in set_map)
+        if (m_uipLocalMap != nullptr){
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                if (m_uipLocalMap[eid] != nullptr){
+                    delete [] m_uipLocalMap[eid];
+                }
+            }
+            delete [] m_uipLocalMap;
+        }
+
+        // free memory allocated for rank-to-global map (allocated in buildScatterMap)
+        if (m_ulpLocal2Global != nullptr){
+            delete [] m_ulpLocal2Global;
+        }
+
         // free memory allocated for m_epMat storing elemental matrices
         if (m_epMat != nullptr){
             for (LI eid = 0; eid < m_uiNumElems; eid++){
@@ -1202,20 +1220,20 @@ namespace par {
 
     template <typename DT,typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::set_map( const LI       n_elements_on_rank,
-                                        const LI * const * element_to_rank_map,
-                                        const LI         * dofs_per_element,
-                                        const LI           n_all_dofs_on_rank,
-                                        const GI         * rank_to_global_map,
-                                        const GI           owned_global_dof_range_begin,
-                                        const GI           owned_global_dof_range_end,
-                                        const GI           n_global_dofs ){
+                                    const LI * const * element_to_rank_map,
+                                    const LI         * dofs_per_element,
+                                    const LI           n_all_dofs_on_rank,
+                                    const GI         * rank_to_global_map,
+                                    const GI           owned_global_dof_range_begin,
+                                    const GI           owned_global_dof_range_end,
+                                    const GI           n_global_dofs ){
         // number of owned elements
         m_uiNumElems = n_elements_on_rank;
 
-        // number  of owned dofs
+        // number of owned dofs
         m_uiNumDofs = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
-        // number of dofs of ALL ranks, currently this is not used in aMatFree
+        // number of dofs of ALL ranks, currently this is only used in aMatFree::petsc_dump_mat()
         m_ulNumDofsGlobal = n_global_dofs;
 
         // these are assertion in buildScatterMap
@@ -1226,8 +1244,8 @@ namespace par {
         // point to provided array giving number of dofs of each element
         m_uiDofsPerElem = dofs_per_element;
 
-        // point to provided array giving global dof id of local dof id
-        m_ulpLocal2Global = rank_to_global_map;
+        // 2020.05.23 no longer use provided Local2Global map, will build in buildScatterMap
+        //m_ulpLocal2Global = rank_to_global_map;
 
         // create global map based on provided local map and Local2Global
         m_ulpMap = new GI* [m_uiNumElems];
@@ -1235,9 +1253,15 @@ namespace par {
             m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
         }
         for( LI eid = 0; eid < m_uiNumElems; eid++ ){
-            for( unsigned int nid = 0; nid < m_uiDofsPerElem[eid]; nid++ ){
+            for( LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++ ){
                 m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
             }
+        }
+
+        // 05.21.20: create local map that will be built in buildScatterMap
+        m_uipLocalMap = new LI* [m_uiNumElems];
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            m_uipLocalMap[eid] = new LI [m_uiDofsPerElem[eid]];
         }
 
         // clear elemental matrices stored in m_epMat (if it is not empty)
@@ -1258,10 +1282,11 @@ namespace par {
         // we do not know how many blocks and size of blocks for each element at this time
         m_epMat = new std::vector<DT*> [m_uiNumElems];
 
-        // point to provided local Map
-        m_uipLocalMap = element_to_rank_map;
+        // 2020.05.21: no longer use the provided localMap, will build it in buildScatterMap
+        //m_uipLocalMap = element_to_rank_map;
 
         // build scatter map for communication before and after matvec
+        // 05.21.20: also build m_uipLocalMap
         buildScatterMap();
 
         // compute the largest number of dofs per elements, will be used for allocation ue and ve...
@@ -1284,34 +1309,48 @@ namespace par {
                                     const GI owned_global_dof_range_end,
                                     const GI n_global_dofs) {
 
-        // It is assumed that total number of owned elements is unchanged
+        // Number of owned elements should not be changed (extra dofs are enriched)
         assert(m_uiNumElems == n_elements_on_rank);
 
         // point to new provided array giving number of dofs of each element
         m_uiDofsPerElem = dofs_per_element;
 
-        // point to new provided array giving global dof id of local dof id
-        m_ulpLocal2Global = rank_to_global_map;
+        // 2020.05.23 no longer use provided Local2Global map, will build in buildScatterMap
+        //m_ulpLocal2Global = rank_to_global_map;
 
-        // update new global map (number dofs per element is changed, but number of owned elements is intact)
+        // delete the current global map in order to increase the size of 2nd dimension (i.e. number of dofs per element)
         if (m_ulpMap != nullptr){
             for (LI eid = 0; eid < m_uiNumElems; eid++){
-                delete[] m_ulpMap[eid];
+                delete [] m_ulpMap[eid];
             }
         }
+        // reallocate according to the new number of dofs per element
         for (LI eid = 0; eid < m_uiNumElems; eid++){
             m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
         }
+        // new global map
         for (LI eid = 0; eid < m_uiNumElems; eid++){
             for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
                 m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
             }
         }
 
+        // 2020.05.21: delete the current local map in order to increase the size of 2nd dimension (i.e. number of dofs per element)
+        if (m_uipLocalMap != nullptr){
+            for (LI eid = 0; eid < m_uiNumElems; eid++){
+                delete [] m_uipLocalMap[eid];
+            }
+        }
+        // reallocate according to the new number of dofs per element
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            m_uipLocalMap[eid] = new LI [m_uiDofsPerElem[eid]];
+        }
+        // new local map will be re-build in buildScatterMap which will called below
+
         // update number of owned dofs
         m_uiNumDofs = owned_global_dof_range_end - owned_global_dof_range_begin + 1;
 
-        // update total dofs of all ranks, currently not use by aMatFree
+        // update total dofs of all ranks, currently is only used by aMatFree::petsc_dump_mat()
         m_ulNumDofsGlobal = n_global_dofs;
 
         /*unsigned long nl = m_uiNumDofs;
@@ -1338,11 +1377,12 @@ namespace par {
             // we do not delete [] m_epMat because the number of elements do not change when map is updated
         }
 
-        // point to new local map
-        m_uipLocalMap = element_to_rank_map;
+        // 2020.05.21: no longer use the provided local Map, will build it in buildScatterMap
+        //m_uipLocalMap = element_to_rank_map;
 
         // build scatter map
         buildScatterMap();
+
         // compute the largest number of dofs per elements, will be used for allocation ue and ve...
         get_max_dof_per_elem();
 
@@ -1352,58 +1392,67 @@ namespace par {
 
     template <typename DT,typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::buildScatterMap() {
-        /* Assumptions: We assume that the global nodes are continuously partitioned across processors.
-            Currently we do not account for twin elements
-            "node" is actually "dof" because the map is in terms of dofs */
+        /* Assumptions: We assume that the global nodes are continuously partitioned across processors. */
 
-        // total dofs (owned + ghost) received from set_map
+        // save the total dofs (owned + ghost) provided in set_map for assertion
+        // m_uiNumDofsTotal will be re-computed based on: m_ulpMap, m_uiNumDofs, m_uiNumElems
         const LI m_uiNumDofsTotal_received_in_setmap = m_uiNumDofsTotal;
 
-        if( m_ulpMap == nullptr ) { return Error::NULL_L2G_MAP; }
+        // save the global number of dofs (of all ranks) provided in set_map for assertion
+        // m_ulNumDofsGlobal will be re-computed based on: m_uiNumDofs
+        const GI m_ulNumDofsGlobal_received_in_setmap = m_ulNumDofsGlobal;
+
+        if ( m_ulpMap == nullptr ) { return Error::NULL_L2G_MAP; }
 
         m_uivLocalDofCounts.clear();
         m_uivLocalElementCounts.clear();
-        m_uivLocalDofScan.clear();
+        m_ulvLocalDofScan.clear();
         m_uivLocalElementScan.clear();
 
         m_uivLocalDofCounts.resize(m_uiSize);
         m_uivLocalElementCounts.resize(m_uiSize);
-        m_uivLocalDofScan.resize(m_uiSize);
+        m_ulvLocalDofScan.resize(m_uiSize);
         m_uivLocalElementScan.resize(m_uiSize);
 
         // gather local counts
-        MPI_Allgather(&m_uiNumDofs, 1, MPI_INT, &(*(m_uivLocalDofCounts.begin())), 1, MPI_INT, m_comm);
-        MPI_Allgather(&m_uiNumElems, 1, MPI_INT, &(*(m_uivLocalElementCounts.begin())), 1, MPI_INT, m_comm);
+        //MPI_Allgather(&m_uiNumDofs, 1, MPI_INT, &(*(m_uivLocalDofCounts.begin())), 1, MPI_INT, m_comm);
+        //MPI_Allgather(&m_uiNumElems, 1, MPI_INT, &(*(m_uivLocalElementCounts.begin())), 1, MPI_INT, m_comm);
+        MPI_Allgather(&m_uiNumDofs, 1, MPI_INT, m_uivLocalDofCounts.data(), 1, MPI_INT, m_comm);
+        MPI_Allgather(&m_uiNumElems, 1, MPI_INT, m_uivLocalElementCounts.data(), 1, MPI_INT, m_comm);
 
         // scan local counts to determine owned-range:
-        // range of global ID of owned dofs = [m_uivLocalDofScan[m_uiRank], m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)
-        m_uivLocalDofScan[0] = 0;
+        // range of global ID of owned dofs = [m_ulvLocalDofScan[m_uiRank], m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs)
+        m_ulvLocalDofScan[0] = 0;
         m_uivLocalElementScan[0] = 0;
         for (unsigned int p = 1; p < m_uiSize; p++) {
-            m_uivLocalDofScan[p] = m_uivLocalDofScan[p-1] + m_uivLocalDofCounts[p-1];
+            m_ulvLocalDofScan[p] = m_ulvLocalDofScan[p-1] + m_uivLocalDofCounts[p-1];
             m_uivLocalElementScan[p] = m_uivLocalElementScan[p-1] + m_uivLocalElementCounts[p-1];
         }
+
+        // global number of dofs of all ranks
+        m_ulNumDofsGlobal = m_ulvLocalDofScan[m_uiSize - 1] + m_uivLocalDofCounts[m_uiSize - 1];
+        assert( m_ulNumDofsGlobal == m_ulNumDofsGlobal_received_in_setmap );
 
         // dofs are not owned by me: stored in pre or post lists
         std::vector<GI> preGhostGIds;
         std::vector<GI> postGhostGIds;
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++) {
-            unsigned int num_nodes = m_uiDofsPerElem[eid];
-            for (unsigned int i = 0; i < num_nodes; i++) {
+        for (LI eid = 0; eid < m_uiNumElems; eid++) {
+            for (LI i = 0; i < m_uiDofsPerElem[eid]; i++) {
                 // global ID
-                const unsigned int nid = m_ulpMap[eid][i];
-                if (nid < m_uivLocalDofScan[m_uiRank]) {
+                const GI global_dof_id = m_ulpMap[eid][i];
+                if (global_dof_id < m_ulvLocalDofScan[m_uiRank]) {
                     // dofs with global ID < owned-range --> pre-ghost dofs
-                    assert( nid < m_ulGlobalDofStart);
-                    preGhostGIds.push_back(nid);
-                } else if (nid >= (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)){
+                    assert( global_dof_id < m_ulGlobalDofStart ); // m_ulGlobalDofStart was passed in set_map
+                    preGhostGIds.push_back( global_dof_id );
+                } else if (global_dof_id >= (m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs)){
                     // dofs with global ID > owned-range --> post-ghost dofs
-                    // note: m_uivLocalDofScan[m_uiRank] + m_uiNumDofs = m_ulGlobalDofEnd + 1
-                    assert( nid > m_ulGlobalDofEnd);
-                    postGhostGIds.push_back(nid);
+                    // note: m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs - 1 = m_ulGlobalDofEnd
+                    assert( global_dof_id > m_ulGlobalDofEnd ); // m_ulGlobalDofEnd was passed in set_map
+                    postGhostGIds.push_back( global_dof_id );
                 } else {
-                    assert ((nid >= m_uivLocalDofScan[m_uiRank])  && (nid < (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)));
-                    assert((nid >= m_ulGlobalDofStart) && (nid <= m_ulGlobalDofEnd));
+                    assert (( global_dof_id >= m_ulvLocalDofScan[m_uiRank] )
+                            && ( global_dof_id < ( m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs )));
+                    assert(( global_dof_id >= m_ulGlobalDofStart ) && ( global_dof_id <= m_ulGlobalDofEnd ));
                 }
             }
         }
@@ -1416,7 +1465,7 @@ namespace par {
         preGhostGIds.erase(std::unique(preGhostGIds.begin(), preGhostGIds.end()), preGhostGIds.end());
         postGhostGIds.erase(std::unique(postGhostGIds.begin(), postGhostGIds.end()), postGhostGIds.end());
 
-        // number of ghost dofs
+        // number of pre and post ghost dofs
         m_uiNumPreGhostDofs = preGhostGIds.size();
         m_uiNumPostGhostDofs = postGhostGIds.size();
 
@@ -1445,19 +1494,21 @@ namespace par {
         postGhostOwner.resize(m_uiNumPostGhostDofs);
 
         // pre-ghost
-        unsigned int pcount = 0; // processor count, start from 0
-        unsigned int gcount = 0; // global ID count
+        unsigned int pcount = 0; // processor counter, start from 0
+        LI gcount = 0; // counter of ghost dof
         while (gcount < m_uiNumPreGhostDofs) {
             // global ID of pre-ghost dof gcount
-            unsigned int nid = preGhostGIds[gcount];
+            GI global_dof_id = preGhostGIds[gcount];
             while ((pcount < m_uiRank) &&
-                    (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))) {
-                // nid is not in the range of global ID of dofs owned by pcount
+                    (!((global_dof_id >= m_ulvLocalDofScan[pcount])
+                    && (global_dof_id < (m_ulvLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))) {
+                // global_dof_id is not owned by pcount
                 pcount++;
             }
-            // check if nid is really in the range of global ID of dofs owned by pcount
-            if (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount])))) {
-                std::cout << "m_uiRank: " << m_uiRank << " pre ghost gid : " << nid << " was not found in any processor" << std::endl;
+            // check if global_dof_id is really in the range of global ID of dofs owned by pcount
+            if (!((global_dof_id >= m_ulvLocalDofScan[pcount])
+                && (global_dof_id < (m_ulvLocalDofScan[pcount] + m_uivLocalDofCounts[pcount])))) {
+                std::cout << "m_uiRank: " << m_uiRank << " pre ghost gid : " << global_dof_id << " was not found in any processor" << std::endl;
                 return Error::GHOST_NODE_NOT_FOUND;
             }
             preGhostOwner[gcount] = pcount;
@@ -1465,30 +1516,39 @@ namespace par {
         }
 
         // post-ghost
-        pcount = m_uiRank; // start from my rank
+        pcount = m_uiRank; // processor counter, start from my rank
         gcount = 0;
-        while(gcount < m_uiNumPostGhostDofs)
-            {
+        while(gcount < m_uiNumPostGhostDofs) {
                 // global ID of post-ghost dof gcount
-                unsigned int nid = postGhostGIds[gcount];
+                GI global_dof_id = postGhostGIds[gcount];
                 while ((pcount < m_uiSize) &&
-                        (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))){
-                    // nid is not the range of global ID of dofs owned by pcount
+                        (!((global_dof_id >= m_ulvLocalDofScan[pcount])
+                        && (global_dof_id < (m_ulvLocalDofScan[pcount] + m_uivLocalDofCounts[pcount]))))){
+                    // global_dof_id is not owned by pcount
                     pcount++;
                 }
-                // check if nid is really in the range of global ID of dofs owned by pcount
-                if (!((nid >= m_uivLocalDofScan[pcount]) && (nid < (m_uivLocalDofScan[pcount] + m_uivLocalDofCounts[pcount])))) {
-                    std::cout << "m_uiRank: " << m_uiRank << " post ghost gid : " << nid << " was not found in any processor" << std::endl;
+                // check if global_dof_id is really in the range of global ID of dofs owned by pcount
+                if (!((global_dof_id >= m_ulvLocalDofScan[pcount])
+                    && (global_dof_id < (m_ulvLocalDofScan[pcount] + m_uivLocalDofCounts[pcount])))) {
+                    std::cout << "m_uiRank: " << m_uiRank << " post ghost gid : " << global_dof_id << " was not found in any processor" << std::endl;
                     return Error::GHOST_NODE_NOT_FOUND;
                 }
                 postGhostOwner[gcount] = pcount;
                 gcount++;
             }
+        /* printf("rank %d, num of pre-ghost = %d\n", m_uiRank, preGhostGIds.size());
+        printf("rank %d, num of post-ghost = %d\n", m_uiRank, postGhostGIds.size());
+        for (unsigned int i = 0; i < m_uiNumPreGhostDofs; i++){
+            printf("rank %d, preGhostOwner[%d]= %d\n", m_uiRank, i, preGhostOwner[i]);
+        }
+        for (unsigned int i = 0; i < m_uiNumPostGhostDofs; i++){
+            printf("rank %d, postGhostOwner[%d]= %d\n", m_uiRank, i, postGhostOwner[i]);
+        } */
 
-        unsigned int * sendCounts = new unsigned int[m_uiSize];
-        unsigned int * recvCounts = new unsigned int[m_uiSize];
-        unsigned int * sendOffset = new unsigned int[m_uiSize];
-        unsigned int * recvOffset = new unsigned int[m_uiSize];
+        LI * sendCounts = new unsigned int[m_uiSize];
+        LI * recvCounts = new unsigned int[m_uiSize];
+        LI * sendOffset = new unsigned int[m_uiSize];
+        LI * recvOffset = new unsigned int[m_uiSize];
 
         // Note: the send here is just for use in MPI_Alltoallv, it is NOT the send in communications between processors later
         for (unsigned int i = 0; i < m_uiSize; i++) {
@@ -1497,12 +1557,14 @@ namespace par {
         }
 
         // count number of pre-ghost dofs to corresponding owners
-        for (unsigned int i = 0; i < m_uiNumPreGhostDofs; i++) {
+        for (LI i = 0; i < m_uiNumPreGhostDofs; i++) {
+            // preGhostOwner[i] = rank who owns the ith pre-ghost dof
             sendCounts[preGhostOwner[i]] += 1;
         }
 
         // count number of post-ghost dofs to corresponding owners
-        for (unsigned int i = 0; i < m_uiNumPostGhostDofs; i++) {
+        for (LI i = 0; i < m_uiNumPostGhostDofs; i++) {
+            // postGhostOwner[i] = rank who owns the ith post-ghost dof
             sendCounts[postGhostOwner[i]] += 1;
         }
 
@@ -1512,24 +1574,29 @@ namespace par {
         // compute offsets from sends
         sendOffset[0]=0;
         recvOffset[0]=0;
-        for(unsigned int i=1; i<m_uiSize; i++) {
+        for(unsigned int i = 1; i < m_uiSize; i++) {
             sendOffset[i] = sendOffset[i-1] + sendCounts[i-1];
             recvOffset[i] = recvOffset[i-1] + recvCounts[i-1];
         }
 
+        // size of sendBuf = # ghost dofs (i.e. # dofs I need but not own)
+        // later, this is used as number of dofs that I need to receive from corresponding rank before doing matvec
         std::vector<GI> sendBuf;
-        std::vector<GI> recvBuf;
+        sendBuf.resize(sendOffset[m_uiSize-1] + sendCounts[m_uiSize-1]); //size also = (m_uiNumPreGhostDofs + m_uiNumPostGhostDofs)
 
-        // total elements to be sent => global ID of ghost dofs that are owned by destination rank
-        sendBuf.resize(sendOffset[m_uiSize-1] + sendCounts[m_uiSize-1]);
-        // total elements to be received => global ID of owned dofs that are ghost in source rank
+        // size of recvBuf = sum of dofs each other rank needs from me
+        // later, this is used as the number of dofs that I need to send to ranks (before doing matvec) who need them as ghost dofs
+        std::vector<GI> recvBuf;
         recvBuf.resize(recvOffset[m_uiSize-1] + recvCounts[m_uiSize-1]);
 
         // put global ID of pre- and post-ghost dofs to sendBuf
-        for(unsigned int i = 0; i < m_uiNumPreGhostDofs; i++)
+        for (LI i = 0; i < m_uiNumPreGhostDofs; i++)
             sendBuf[i] = preGhostGIds[i];
-        for(unsigned int i = 0; i < m_uiNumPostGhostDofs; i++)
+        for(LI i = 0; i < m_uiNumPostGhostDofs; i++)
             sendBuf[i + m_uiNumPreGhostDofs] = postGhostGIds[i];
+
+        /* for (unsigned int i = 0; i < sendBuf.size(); i++)
+            printf("rank %d, sendBuf[%d]= %d\n", m_uiRank, i, sendBuf[i]); */
 
         for(unsigned int i = 0; i < m_uiSize; i++) {
             sendCounts[i] *= sizeof(GI);
@@ -1539,8 +1606,10 @@ namespace par {
         }
 
         // exchange the global ID of ghost dofs with ranks who own them
-        MPI_Alltoallv(&(*(sendBuf.begin())), (int*)sendCounts, (int*)sendOffset, MPI_BYTE,
-                        &(*(recvBuf.begin())), (int*)recvCounts, (int*)recvOffset, MPI_BYTE, m_comm);
+        //MPI_Alltoallv(&(*(sendBuf.begin())), (int*)sendCounts, (int*)sendOffset, MPI_BYTE,
+        //                &(*(recvBuf.begin())), (int*)recvCounts, (int*)recvOffset, MPI_BYTE, m_comm);
+        MPI_Alltoallv(sendBuf.data(), (int*)sendCounts, (int*)sendOffset, MPI_BYTE,
+                        recvBuf.data(), (int*)recvCounts, (int*)recvOffset, MPI_BYTE, m_comm);
 
         for(unsigned int i = 0; i < m_uiSize; i++) {
             sendCounts[i] /= sizeof(GI);
@@ -1549,20 +1618,24 @@ namespace par {
             recvOffset[i] /= sizeof(GI);
         }
 
-        // compute local ID of owned dofs i (i = 0..recBuf.size()) that need to be send data to where i is a ghost dof
+        /* for (unsigned int i = 0; i < recvBuf.size(); i++)
+            printf("rank %d, recvBuf[%d]= %d\n", m_uiRank, i, recvBuf[i]); */
+
+        // convert global Ids in recvBuf (dofs that I need to send to before matvec) to local Ids
         m_uivSendDofIds.resize(recvBuf.size());
 
-        for(unsigned int i = 0; i < recvBuf.size(); i++) {
+        for(LI i = 0; i < recvBuf.size(); i++) {
             // global ID of recvBuf[i]
-            const unsigned int gid = recvBuf[i];
-            // check if gid is really owned by my rank (if not then something goes wrong with sendBuf above
-            if (gid < m_uivLocalDofScan[m_uiRank]  || gid >=  (m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
+            const GI global_dof_id = recvBuf[i];
+            // check if global_dof_id is really owned by my rank, if not then something went wrong with sendBuf above
+            if (global_dof_id < m_ulvLocalDofScan[m_uiRank]  || global_dof_id >=  (m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs)) {
                 std::cout<<" m_uiRank: "<<m_uiRank<< "scatter map error : "<<__func__<<std::endl;
                 Error::GHOST_NODE_NOT_FOUND;
             }
-            assert((gid >= m_ulGlobalDofStart) && (gid <= m_ulGlobalDofEnd));
-            // local ID
-            m_uivSendDofIds[i] = m_uiNumPreGhostDofs + (gid - m_uivLocalDofScan[m_uiRank]);
+            // also check with data passed in set_map
+            assert((global_dof_id >= m_ulGlobalDofStart) && (global_dof_id <= m_ulGlobalDofEnd));
+            // convert global id to local id (id local to rank)
+            m_uivSendDofIds[i] = m_uiNumPreGhostDofs + (global_dof_id - m_ulvLocalDofScan[m_uiRank]);
         }
 
         m_uivSendDofCounts.resize(m_uiSize);
@@ -1586,35 +1659,71 @@ namespace par {
                 m_uivRecvRankIds.push_back(i);
             }
         }
+        /* for (unsigned int i = 0; i < m_uivSendRankIds.size(); i++){
+            printf("[r%d] m_uivSendRankIds[%d]= %d\n", m_uiRank, i, m_uivSendRankIds[i]);
+        }
+        for (unsigned int i = 0; i < m_uivRecvRankIds.size(); i++){
+            printf("[r%d] m_uivRecvRankIds[%d]= %d\n", m_uiRank, i, m_uivRecvRankIds[i]);
+        } */
+        /* for (unsigned int i = 0; i < m_uiSize; i++){
+            printf("rank %d, m_uivSendDofCounts[%d]= %d\n", m_uiRank, i, m_uivSendDofCounts[i]);
+        }
+        for (unsigned int i = 0; i < m_uiSize; i++){
+            printf("rank %d, m_uivSendDofOffset[%d]= %d\n", m_uiRank, i, m_uivSendDofOffset[i]);
+        } */
 
-        // assert local map m_uipLocalMap[eid][nid]
-        // structure displ vector = [0, ..., (m_uiNumPreGhostDofs - 1), --> ghost nodes owned by someone before me
-        //    m_uiNumPreGhostDofs, ..., (m_uiNumPreGhostDofs + m_uiNumDofs - 1), --> nodes owned by me
-        //    (m_uiNumPreGhostDofs + m_uiNumDofs), ..., (m_uiNumPreGhostDofs + m_uiNumDofs + m_uiNumPostGhostDofs - 1)] --> nodes owned by someone after me
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            unsigned int num_nodes = m_uiDofsPerElem[eid];
+        /* for (unsigned int i = 0; i < m_uivSendDofIds.size(); i++){
+            printf("rank %d, m_uivSendDofIds[%d]= %d\n", m_uiRank, i, m_uivSendDofIds[i]);
+        }
 
-            for (unsigned int i = 0; i < num_nodes; i++){
-                const unsigned int nid = m_ulpMap[eid][i];
-                if (nid >= m_uivLocalDofScan[m_uiRank] &&
-                    nid < (m_uivLocalDofScan[m_uiRank] + m_uivLocalDofCounts[m_uiRank])) {
-                    // nid is owned by me
-                    assert(m_uipLocalMap[eid][i] == nid - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs);
-                } else if (nid < m_uivLocalDofScan[m_uiRank]){
-                    // nid is owned by someone before me
-                    const unsigned int lookUp = std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), nid) - preGhostGIds.begin();
-                    assert(m_uipLocalMap[eid][i] == lookUp);
-                } else if (nid >= (m_uivLocalDofScan[m_uiRank] + m_uivLocalDofCounts[m_uiRank])){
-                    // nid is owned by someone after me
-                    const unsigned int lookUp = std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), nid) - postGhostGIds.begin();
-                    assert(m_uipLocalMap[eid][i] ==  (m_uiNumPreGhostDofs + m_uiNumDofs) + lookUp);
+        for (unsigned int i = 0; i < m_uiSize; i++){
+            printf("rank %d, m_uivRecvDofCounts[%d]= %d\n", m_uiRank, i, m_uivRecvDofCounts[i]);
+        } */
+
+        // 2020.05.21: build rank-to-global map and element-to-rank map
+        // local vector = [0, ..., (m_uiNumPreGhostDofs - 1), --> ghost nodes owned by someone before me
+        // m_uiNumPreGhostDofs, ..., (m_uiNumPreGhostDofs + m_uiNumDofs - 1), --> nodes owned by me
+        // (m_uiNumPreGhostDofs + m_uiNumDofs), ..., (m_uiNumPreGhostDofs + m_uiNumDofs + m_uiNumPostGhostDofs - 1)] --> nodes owned by someone after me
+        m_ulpLocal2Global = new GI [m_uiNumDofsTotal];
+        LI local_dof_id;
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (LI i = 0; i < m_uiDofsPerElem[eid]; i++){
+                // global Id of i
+                const GI global_dof_id = m_ulpMap[eid][i];
+                if (global_dof_id >= m_ulvLocalDofScan[m_uiRank] &&
+                    global_dof_id < (m_ulvLocalDofScan[m_uiRank] + m_uivLocalDofCounts[m_uiRank])) {
+                    // global_dof_id is owned by me
+                    local_dof_id = global_dof_id - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
+
+                } else if (global_dof_id < m_ulvLocalDofScan[m_uiRank]){
+                    // global_dof_id is owned by someone before me
+                    const LI lookUp = std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), global_dof_id) - preGhostGIds.begin();
+                    local_dof_id = lookUp;
+
+                } else if (global_dof_id >= (m_ulvLocalDofScan[m_uiRank] + m_uivLocalDofCounts[m_uiRank])){
+                    // global_dof_id is owned by someone after me
+                    const LI lookUp = std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), global_dof_id) - postGhostGIds.begin();
+                    local_dof_id = (m_uiNumPreGhostDofs + m_uiNumDofs) + lookUp;
+                } else {
+                    std::cout << " m_uiRank: " << m_uiRank << "scatter map error : " << __func__ << std::endl;
+                    Error::GLOBAL_DOF_ID_NOT_FOUND;
                 }
+                m_uipLocalMap[eid][i] = local_dof_id;
+                m_ulpLocal2Global[local_dof_id] = global_dof_id;
             }
         }
+
+        /* for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
+                printf("m_uipLocalMap[r%d,e%d,n%d]= %d\n",m_uiRank,eid,nid,m_uipLocalMap[eid][nid]);
+            }
+        } */
+
         delete [] sendCounts;
         delete [] recvCounts;
         delete [] sendOffset;
         delete [] recvOffset;
+
         return Error::SUCCESS;
     } // aMatFree::buildScatterMap()
 
@@ -1628,11 +1737,11 @@ namespace par {
         }
         // initialize
         if (isGhosted) {
-            for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
+            for (LI i = 0; i < m_uiNumDofsTotal; i++){
                 vec[i] = alpha;
             }
         } else {
-            for (unsigned int i = 0; i < m_uiNumDofs; i++){
+            for (LI i = 0; i < m_uiNumDofs; i++){
                 vec[i] = alpha;
             }
         }
@@ -1784,7 +1893,7 @@ namespace par {
         // are checked to see if any dof is constrained. Howerver it is not so bad because that function is called only once
         /* LI local_Id;
         for (LI nid = 0; nid < n_owned_constraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
+            local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             if (m_BcMeth == BC_METH::BC_IMATRIX){
                 // replace the current diagonal of Kcc block by 1.0
                 diag[local_Id] = 1.0;
@@ -1802,11 +1911,11 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     unsigned int aMatFree<DT, GI, LI>::globalId_2_rank(GI gId) const {
         unsigned int rank;
-        if (gId >= m_uivLocalDofScan[m_uiSize - 1]){
+        if (gId >= m_ulvLocalDofScan[m_uiSize - 1]){
             rank = m_uiSize - 1;
         } else {
             for (unsigned int i = 0; i < (m_uiSize - 1); i++){
-                if (gId >= m_uivLocalDofScan[i] && gId < m_uivLocalDofScan[i+1] && (i < (m_uiSize -1))) {
+                if (gId >= m_ulvLocalDofScan[i] && gId < m_ulvLocalDofScan[i+1] && (i < (m_uiSize -1))) {
                     rank = i;
                     break;
                 }
@@ -1865,7 +1974,7 @@ namespace par {
                             rank_r = globalId_2_rank(glo_RowId);
 
                             //local ID in that rank (not include ghost nodes)
-                            loc_RowId = (glo_RowId - m_uivLocalDofScan[rank_r]);
+                            loc_RowId = (glo_RowId - m_ulvLocalDofScan[rank_r]);
 
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 // local column Id (include ghost nodes)
@@ -1878,7 +1987,7 @@ namespace par {
                                 rank_c = globalId_2_rank(glo_ColId);
 
                                 // local column Id in that rank (not include ghost nodes)
-                                loc_ColId = (glo_ColId - m_uivLocalDofScan[rank_c]);
+                                loc_ColId = (glo_ColId - m_ulvLocalDofScan[rank_c]);
 
                                 if( rank_r == rank_c ){
                                     // put all data in a MatRecord object
@@ -2078,17 +2187,17 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::ghost_receive_begin(DT* vec) {
-        if(m_uiSize==1)
+        if (m_uiSize == 1)
             return Error::SUCCESS;
 
         // exchange context for vec
         AsyncExchangeCtx ctx((const void*)vec);
 
         // total number of DoFs to be sent
-        const unsigned int total_send = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
+        const LI total_send = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
 
         // total number of DoFs to be received
-        const unsigned  int total_recv = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
+        const LI total_recv = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
 
         // send data of owned DoFs to corresponding ghost DoFs in all other ranks
         if (total_send > 0){
@@ -2097,7 +2206,7 @@ namespace par {
             // get the address of sending buffer
             DT* send_buf = (DT*)ctx.getSendBuffer();
             // put all sending values to buffer
-            for (unsigned int i = 0; i < total_send; i++){
+            for (LI i = 0; i < total_send; i++){
                 send_buf[i] = vec[m_uivSendDofIds[i]];
             }
             for (unsigned int r = 0; r < m_uivSendRankIds.size(); r++){
@@ -2134,12 +2243,12 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::ghost_receive_end(DT* vec) {
-        if(m_uiSize==1)
+        if (m_uiSize == 1)
             return Error::SUCCESS;
 
         // get the context associated with vec
         unsigned int ctx_index;
-        for (unsigned i = 0; i < m_vAsyncCtx.size(); i++){
+        for (unsigned int i = 0; i < m_vAsyncCtx.size(); i++){
             if (vec == (DT*)m_vAsyncCtx[i].getBuffer()){
                 ctx_index = i;
                 break;
@@ -2159,9 +2268,9 @@ namespace par {
 
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
         // copy values of pre-ghost nodes from recv_buf to vec
-        std::memcpy(vec, recv_buf, m_uiNumPreGhostDofs*sizeof(DT));
+        std::memcpy(vec, recv_buf, m_uiNumPreGhostDofs * sizeof(DT));
         // copy values of post-ghost nodes from recv_buf to vec
-        std::memcpy(&vec[m_uiNumPreGhostDofs + m_uiNumDofs], &recv_buf[m_uiNumPreGhostDofs], m_uiNumPostGhostDofs*sizeof(DT));
+        std::memcpy(&vec[m_uiNumPreGhostDofs + m_uiNumDofs], &recv_buf[m_uiNumPreGhostDofs], m_uiNumPostGhostDofs * sizeof(DT));
 
         // free memory of send and receive buffers
         ctx.deAllocateRecvBuffer();
@@ -2174,15 +2283,15 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::ghost_send_begin(DT* vec) {
-        if(m_uiSize==1)
+        if (m_uiSize == 1)
             return Error::SUCCESS;
 
         AsyncExchangeCtx ctx((const void*)vec);
 
         // number of DoFs to be received (= number of DoFs that are sent before calling matvec)
-        const unsigned  int total_recv = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
+        const LI total_recv = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
         // number of DoFs to be sent (= number of DoFs that are received before calling matvec)
-        const unsigned  int total_send = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
+        const LI total_send = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
 
         // receive data for owned DoFs that are sent back to my rank from other ranks (after matvec is done)
         if (total_recv > 0){
@@ -2190,6 +2299,7 @@ namespace par {
             DT* recv_buf = (DT*) ctx.getRecvBuffer();
             for (unsigned int r = 0; r < m_uivSendRankIds.size(); r++){
                 unsigned int i = m_uivSendRankIds[r];
+                //printf("rank %d receives from %d, after matvec\n",m_uiRank,i);
                 MPI_Request* req = new MPI_Request();
                 MPI_Irecv(&recv_buf[m_uivSendDofOffset[i]], m_uivSendDofCounts[i]*sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 ctx.getRequestList().push_back(req);
@@ -2198,20 +2308,20 @@ namespace par {
         
         // send data of ghost DoFs to ranks owning the DoFs
         if (total_send > 0){
-            
             ctx.allocateSendBuffer(sizeof(DT) * total_send);
             DT* send_buf = (DT*) ctx.getSendBuffer();
 
             // pre-ghost DoFs
-            for (unsigned int i = 0; i < m_uiNumPreGhostDofs; i++){
+            for (LI i = 0; i < m_uiNumPreGhostDofs; i++){
                 send_buf[i] = vec[i];
             }
             // post-ghost DoFs
-            for (unsigned int i = m_uiNumPreGhostDofs + m_uiNumDofs; i < m_uiNumPreGhostDofs + m_uiNumDofs + m_uiNumPostGhostDofs; i++){
+            for (LI i = m_uiNumPreGhostDofs + m_uiNumDofs; i < m_uiNumPreGhostDofs + m_uiNumDofs + m_uiNumPostGhostDofs; i++){
                 send_buf[i - m_uiNumDofs] = vec[i];
             }
             for (unsigned int r = 0; r < m_uivRecvRankIds.size(); r++){
                 unsigned int i = m_uivRecvRankIds[r];
+                //printf("rank %d sends to %d, after matvec\n",m_uiRank,i);
                 MPI_Request* req = new MPI_Request();
                 MPI_Isend(&send_buf[m_uivRecvDofOffset[i]], m_uivRecvDofCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
                 ctx.getRequestList().push_back(req);
@@ -2225,7 +2335,7 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::ghost_send_end(DT* vec) {
-        if(m_uiSize==1)
+        if (m_uiSize == 1)
             return Error::SUCCESS;
 
         unsigned int ctx_index;
@@ -2239,17 +2349,17 @@ namespace par {
         int num_req = ctx.getRequestList().size();
 
         MPI_Status sts;
-        for(unsigned int i=0;i<num_req;i++)
-            {
-                MPI_Wait(ctx.getRequestList()[i],&sts);
-            }
+        for (unsigned int i = 0; i < num_req; i++){
+            MPI_Wait(ctx.getRequestList()[i],&sts);
+        }
 
         //const unsigned  int total_recv = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
 
         for (unsigned int i = 0; i < m_uiSize; i++){
-            for (unsigned int j = 0; j < m_uivSendDofCounts[i]; j++){
-                vec[m_uivSendDofIds[m_uivSendDofOffset[i]] + j] += recv_buf[m_uivSendDofOffset[i] + j];
+            for (LI j = 0; j < m_uivSendDofCounts[i]; j++){
+                //vec[m_uivSendDofIds[m_uivSendDofOffset[i]] + j] += recv_buf[m_uivSendDofOffset[i] + j]; // bug fixed on 2020.05.23
+                vec[m_uivSendDofIds[m_uivSendDofOffset[i] + j]] += recv_buf[m_uivSendDofOffset[i] + j];
             }
         }
         ctx.deAllocateRecvBuffer();
@@ -2264,15 +2374,14 @@ namespace par {
         #ifdef AMAT_PROFILER
             timing_aMat[static_cast<int>(PROFILER::MATVEC)].start();
         #endif
-        if( isGhosted ) {
+        if ( isGhosted ) {
             // std::cout << "GHOSTED MATVEC" << std::endl;
             #ifdef USE_OMP
                 matvec_ghosted_OMP(v, (DT*)u);
             #else
                 matvec_ghosted_noOMP(v, (DT*)u);
             #endif
-        }
-        else {
+        } else {
             // std::cout << "NON GHOSTED MATVEC" << std::endl;
             DT* gv;
             DT* gu;
@@ -2311,11 +2420,11 @@ namespace par {
             v[i] = 0.0;
         }
 
-        // apply BC (could be moved to MatMult_mf)
+        // apply BC (is moved to MatMult_mf, 2020.05.25)
         // this must be done before communication so that ranks that do not own constraint dofs have correct bc
-        LI local_Id;
+        /* LI local_Id;
         for (LI nid = 0; nid < n_owned_constraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
+            local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             if (m_BcMeth == BC_METH::BC_IMATRIX){
                 // save Uc and set u(Uc) = 0
                 Uc[nid] = u[local_Id];
@@ -2324,7 +2433,7 @@ namespace par {
                 // save Uc and multiply with penalty coefficient
                 Uc[nid] = u[local_Id] * PENALTY_FACTOR * m_dtTraceK;
             }
-        }
+        } */
         // end of apply BC
 
         // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
@@ -2509,10 +2618,10 @@ namespace par {
         ghost_send_begin(v);
         ghost_send_end(v);
 
-        // apply BC (could be moved to MatMult_mf)
+        // apply BC (is moved to MatMult_mf, 2020.05.25)
         // this must be done after communication to finalize value of constrained dofs owned by me
-        for (LI nid = 0; nid < n_owned_constraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
+        /* for (LI nid = 0; nid < n_owned_constraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             if (m_BcMeth == BC_METH::BC_IMATRIX){
                 //set v(Uc) = Uc which is saved before doing matvec
                 v[local_Id] = Uc[nid];
@@ -2520,7 +2629,7 @@ namespace par {
                 // accumulate v(Uc) = v(Uc) + Uc[nid] where Uc[nid] = u[local_Id] * PENALTY_FACTOR * m_dtTraceK;
                 v[local_Id] += Uc[nid];
             }
-        }
+        } */
         // end of apply BC
 
         return Error::SUCCESS;
@@ -2542,11 +2651,11 @@ namespace par {
 
         LI rowID, colID;
 
-        // apply BC: save Uc and set u(Uc) = 0 (could be moved to MatMult_mf)
+        // apply BC: save Uc and set u(Uc) = 0 (is moved to MatMult_mf, 2020.05.25)
         // this must be done before communication so that ranks that do not own constraint dofs have correct bc
-        LI local_Id;
+        /* LI local_Id;
         for (LI nid = 0; nid < n_owned_constraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
+            local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             if (m_BcMeth == BC_METH::BC_IMATRIX){
                 // save Uc and set u(Uc) = 0
                 Uc[nid] = u[local_Id];
@@ -2555,7 +2664,7 @@ namespace par {
                 // save Uc and multiply with penalty coefficient
                 Uc[nid] = u[local_Id] * PENALTY_FACTOR * m_dtTraceK;
             }
-        }
+        } */
         // end of apply BC
 
         // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
@@ -2734,10 +2843,10 @@ namespace par {
         ghost_send_begin(v);
         ghost_send_end(v);
 
-        // apply BC (could be moved to MatMult_mf)
+        // apply BC (is moved to MatMult_mf, 2020.05.25)
         // this must be done after communication to finalize value of constrained dofs owned by me
-        for (LI nid = 0; nid < n_owned_constraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
+        /* for (LI nid = 0; nid < n_owned_constraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             if (m_BcMeth == BC_METH::BC_IMATRIX){
                 //set v(Uc) = Uc which is saved before doing matvec
                 v[local_Id] = Uc[nid];
@@ -2745,7 +2854,7 @@ namespace par {
                 // accumulate v(Uc) = v(Uc) + Uc[nid] where Uc[nid] = u[local_Id] * PENALTY_FACTOR * m_dtTraceK;
                 v[local_Id] += Uc[nid];
             }
-        }
+        } */
         // end of apply BC
 
         return Error::SUCCESS;
@@ -2777,24 +2886,24 @@ namespace par {
         local_to_ghost(uug, uu);
 
         // apply BC: save value of U_c, then make U_c = 0
-        /* const LI numConstraints = ownedConstrainedDofs.size();
+        const LI numConstraints = ownedConstrainedDofs.size();
         DT* Uc = new DT [numConstraints];
         for (LI nid = 0; nid < numConstraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
+            local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             Uc[nid] = uug[local_Id];
             uug[local_Id] = 0.0;
-        } */
+        }
         // end of apply BC
 
         // vvg = K * uug
         matvec(vvg, uug, true); // this gives V_f = (K_ff * U_f) + (K_fc * 0) = K_ff * U_f
 
         // apply BC: now set V_c = U_c which was saved in U'_c
-        /* for (LI nid = 0; nid < numConstraints; nid++){
-            local_Id = ownedConstrainedDofs[nid] - m_uivLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
+        for (LI nid = 0; nid < numConstraints; nid++){
+            local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
             vvg[local_Id] = Uc[nid];
         }
-        delete [] Uc; */
+        delete [] Uc;
         // end of apply BC
 
         ghost_to_local(vv,vvg);
@@ -2982,7 +3091,7 @@ namespace par {
 
         for (LI i = 0; i < numConstraints; i++){
             global_Id = constrainedDofs[i];
-            if ((global_Id >= m_uivLocalDofScan[m_uiRank]) && (global_Id < m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
+            if ((global_Id >= m_ulvLocalDofScan[m_uiRank]) && (global_Id < m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs)) {
                 ownedConstrainedDofs.push_back(global_Id);
                 ownedPrescribedValues.push_back(prescribedValues[i]);
             }
@@ -3010,7 +3119,7 @@ namespace par {
                 if (index == numConstraints){
                     m_uipBdrMap[eid][nid] = 0;
                     m_dtPresValMap[eid][nid] = -1E16; // for testing
-                    if ((global_Id >= m_uivLocalDofScan[m_uiRank]) && (global_Id < m_uivLocalDofScan[m_uiRank] + m_uiNumDofs)) {
+                    if ((global_Id >= m_ulvLocalDofScan[m_uiRank]) && (global_Id < m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs)) {
                         ownedFreeDofs.push_back(global_Id);
                     }
                 }
@@ -3088,11 +3197,13 @@ namespace par {
             // loop on all dofs of element
             for (unsigned int r = 0; r < num_nodes; r++) {
                 loc_rowId = m_uipLocalMap[eid][r];
-                if ((loc_rowId >= m_uiDofLocalBegin) && (loc_rowId <= m_uiDofLocalEnd)) {
+                // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+                if ((loc_rowId >= m_uiDofLocalBegin) && (loc_rowId < m_uiDofLocalEnd)) {
                     if (m_uipBdrMap[eid][r] == 1) {
                         for (unsigned int c = 0; c < num_nodes; c++) {
                             loc_colId = m_uipLocalMap[eid][c];
-                            if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId <= m_uiDofLocalEnd)) {
+                            // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+                            if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd)) {
                                 if (loc_rowId == loc_colId) {
                                     // 05/01/2020: add the case of penalty method for apply bc
                                     if (m_BcMeth == BC_METH::BC_IMATRIX){
@@ -3115,7 +3226,8 @@ namespace par {
                     } else {
                         for (unsigned int c = 0; c < num_nodes; c++) {
                             loc_colId = m_uipLocalMap[eid][c];
-                            if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId <= m_uiDofLocalEnd)) {
+                            // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+                            if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd)) {
                                 if (m_uipBdrMap[eid][c] == 1) {
                                     // 05/01/2020: only for identity-matrix method, not for penalty method
                                     if (m_BcMeth == BC_METH::BC_IMATRIX){
@@ -3332,7 +3444,86 @@ namespace par {
         #endif
     } // aMatFree::delete_aligned_array
 
+    template <typename DT, typename GI, typename LI>
+    Error aMatFree<DT,GI,LI>::petsc_dump_mat( const char* filename ){
+        // this prints out the global matrix by using matvec(u,v) in oder to test the implementation of matvec(u,v)
+        // algorithm:
+        // u0 = [1 0 0 ... 0] --> matvec(v0,u0) will give v0 is the first column of the global matrix
+        // u1 = [0 1 0 ... 0] --> matvec(v1,u1) will give v1 is the second column of the global matrix
+        // u2 = [0 0 1 ... 0] --> matvec(v2,u2) will give v2 is the third column of the global matrix
+        // ... up to the last column of the global matrix
 
+        // create matrix computed by matrix-free
+        Mat m_pMatFree;
+        MatCreate(m_comm, &m_pMatFree);
+        MatSetSizes(m_pMatFree, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
+        if(m_uiSize > 1) {
+            MatSetType(m_pMatFree, MATMPIAIJ);
+            MatMPIAIJSetPreallocation( m_pMatFree, NNZ, PETSC_NULL, NNZ, PETSC_NULL );
+        } else {
+            MatSetType(m_pMatFree, MATSEQAIJ);
+            MatSeqAIJSetPreallocation(m_pMatFree, NNZ, PETSC_NULL);
+        }
+        MatSetOption(m_pMatFree, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
+
+        // create vectors ui and vi preparing for multiple matrix-vector multiplications
+        DT* ui;
+        DT* vi;
+        ui = new DT [m_uiNumDofsTotal];
+        vi = new DT [m_uiNumDofsTotal];
+        LI localId;
+        PetscScalar value;
+        PetscInt rowId, colId;
+
+        // loop over all dofs of the global vector
+        for (GI globalId = 0; globalId < m_ulNumDofsGlobal; globalId++){
+            // initialize input ui and output vi
+            for (LI i = 0; i < m_uiNumDofsTotal; i++){
+                ui[i] = 0.0;
+                vi[i] = 0.0;
+            }
+
+            // check if globalId is owned by me --> set input ui = [0...1...0] (if not ui = [0...0])
+            if ((globalId >= m_ulvLocalDofScan[m_uiRank]) && (globalId < (m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs))){
+                localId = m_uiNumPreGhostDofs + (globalId - m_ulvLocalDofScan[m_uiRank]);
+                ui[localId] = 1.0;
+            }
+
+            // doing vi = matrix * ui
+            matvec(vi, ui, true);
+
+            // set vi to (globalId)th column of the matrix
+            colId = globalId;
+            for (LI r = 0; r < m_uiNumDofs; r++){
+                rowId = m_ulpLocal2Global[r + m_uiNumPreGhostDofs];
+                value = vi[r + m_uiNumPreGhostDofs];
+                if (fabs(value) > 1e-16){
+                    MatSetValue(m_pMatFree, rowId, colId, value, ADD_VALUES);
+                }
+            }
+        }
+
+        MatAssemblyBegin(m_pMatFree, MAT_FINAL_ASSEMBLY);
+        MatAssemblyEnd(m_pMatFree, MAT_FINAL_ASSEMBLY);
+
+        // display matrix
+        if (filename == nullptr){
+            MatView(m_pMatFree, PETSC_VIEWER_STDOUT_WORLD);
+        } else {
+            PetscViewer viewer;
+            PetscViewerASCIIOpen( m_comm, filename, &viewer );
+            // write to file readable by Matlab (filename must be filename.m in order to execute in Matlab)
+            //PetscViewerPushFormat( viewer, PETSC_VIEWER_ASCII_MATLAB );
+            MatView( m_pMatFree, viewer );
+            PetscViewerDestroy( &viewer );
+        }
+
+        delete [] ui;
+        delete [] vi;
+        MatDestroy(&m_pMatFree);
+
+        return Error::SUCCESS;
+    }
 
     //==============================================================================================================
     template <typename DT,typename GI, typename LI>
