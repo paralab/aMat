@@ -29,7 +29,7 @@
 #    include <petsc.h>
 #endif
 
-#include "Eigen/Dense"
+#include <Eigen/Dense>
 
 #include "ke_matrix.hpp"
 #include "fe_vector.hpp"
@@ -63,6 +63,15 @@ void usage()
     exit( 0 ) ;
 }
 
+void compute_nodal_body_force(double* xe, unsigned int nnode, double* be){
+    double x, y, z;
+    for (unsigned int nid = 0; nid < nnode; nid++){
+        x = xe[nid * 3];
+        y = xe[nid * 3 + 1];
+        z = xe[nid * 3 + 2];
+        be[nid] = sin(2 * M_PI * x) * sin(2 * M_PI * y) * sin(2 * M_PI * z);
+    }
+}
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int main( int argc, char *argv[] ) {
@@ -105,9 +114,12 @@ int main( int argc, char *argv[] ) {
     // nodal coordinates of element
     double* xe = new double[NDIM * NNODE_PER_ELEM];
 
+    // nodal body force
+    double* be = new double[NNODE_PER_ELEM];
+
     // matrix block
     double* ke = new double[(NDOF_PER_NODE * NNODE_PER_ELEM) * (NDOF_PER_NODE * NNODE_PER_ELEM)];
-
+    
     // element force vector (contains multiple vector blocks)
     std::vector< Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, 1 > > fee;
     fee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
@@ -133,21 +145,35 @@ int main( int argc, char *argv[] ) {
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
         std::cout << "\t\tLx : "<< Lx << " Ly: " << Ly << " Lz: " << Lz << "\n";
-        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
-        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
         std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
+        std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
-
-    #ifdef AVX_512
-    if (!rank) {std::cout << "\t\tRun with AVX_512\n";}
-    #elif AVX_256
-    if (!rank) {std::cout << "\t\tRun with AVX_256\n";}
-    #elif OMP_SIMD
-    if (!rank) {std::cout << "\t\tRun with OMP_SIMD\n";}
+    
+    #ifdef VECTORIZED_AVX512
+    if (!rank) {std::cout << "\t\tVectorization using AVX_512\n";}
+    #elif VECTORIZED_AVX256
+    if (!rank) {std::cout << "\t\tVectorization using AVX_256\n";}
+    #elif VECTORIZED_OPENMP
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP\n";}
+    #elif VECTORIZED_OPENMP_PADDING
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP with paddings\n";}
     #else
-    if (!rank) {std::cout << "\t\tRun with no vectorization\n";}
+    if (!rank) {std::cout << "\t\tNo vectorization\n";}
     #endif
 
+    #ifdef HYBRID_PARALLEL
+    if (!rank) {
+        std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
+        std::cout << "\t\tMax number of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #else
+    if (!rank) {
+        std::cout << "\t\tOnly MPI parallel\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #endif
+    
     if( rank == 0 ) {
         if (size > Nez) {
             printf("The number of processes must be less than or equal Nez, program stops.\n");
@@ -373,7 +399,7 @@ int main( int argc, char *argv[] ) {
     stMat->set_map(nelem, localMap, nnode_per_elem, numLocalNodes, local2GlobalMap, start_global_node,
                   end_global_node, nnode_total);
 
-
+    
     // set boundary maps
     stMat->set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
 
@@ -409,17 +435,21 @@ int main( int argc, char *argv[] ) {
             ke_hex8(ke, xe, intData.Pts_n_Wts, NGT);
         }
 
-        // Note: fe_hex8_eig is still ad-hoc --> must manually modify expression of force vector
-        fe_hex8_eig(fee[0], xe, intData.Pts_n_Wts, NGT);
+        // compute nodal values of body force
+        compute_nodal_body_force(xe, 8, be);
+
+        // compute element load vector due to body force
+        fe_hex8_eig(fee[0], xe, be, intData.Pts_n_Wts, NGT);
 
         // assemble element stiffness matrix to global K
         stMat->set_element_matrix(eid, kee[0], 0, 0, 1);
-
+        
         // assemble element load vector to global F
         stMat->petsc_set_element_vec(rhs, eid, fee[0], 0, ADD_VALUES); // 0 is block_i which is only one block for this case
     }
     delete [] ke;
     delete [] xe;
+    delete [] be;
 
     // Pestc begins and completes assembling the global stiffness matrix
     if (matType == 0){
@@ -444,7 +474,7 @@ int main( int argc, char *argv[] ) {
         stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
-
+    
 
     // solve
     stMat->petsc_solve((const Vec) rhs, out);
@@ -491,7 +521,6 @@ int main( int argc, char *argv[] ) {
 
     if (rank == 0){
         printf("L_inf norm= %20.10f\n", norm);
-        printf("If solution is not expected, remind that fe_hex8_eig is ad-hoc for particular body force\n");
     }
 
     #ifdef AMAT_PROFILER

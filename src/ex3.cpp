@@ -109,7 +109,7 @@ int main( int argc, char *argv[] ) {
     const unsigned int bcMethod = atoi(argv[5]); // method of applying BC
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
+    const double Lx = 1.0, Ly = 1.0, Lz = 100.0;
 
     // element sizes
     hx = Lx/double(Nex);// element size in x direction
@@ -153,21 +153,34 @@ int main( int argc, char *argv[] ) {
         std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
         std::cout << "\t\tLx : "<< Lx << " Ly: " << Ly << " Lz: " << Lz << "\n";
         std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
-        std::cout << "\t\tBC method: " << bcMethod << "\n";
-        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
-        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
-
-    #ifdef AVX_512
-    if (!rank) {std::cout << "\t\tUse AVX_512\n";}
-    #elif AVX_256
-    if (!rank) {std::cout << "\t\tUse AVX_256\n";}
-    #elif OMP_SIMD
-    if (!rank) {std::cout << "\t\tUse OMP_SIMD\n";}
+    
+    #ifdef VECTORIZED_AVX512
+    if (!rank) {std::cout << "\t\tVectorization using AVX_512\n";}
+    #elif VECTORIZED_AVX256
+    if (!rank) {std::cout << "\t\tVectorization using AVX_256\n";}
+    #elif VECTORIZED_OPENMP
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP\n";}
+    #elif VECTORIZED_OPENMP_PADDING
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP with paddings\n";}
     #else
     if (!rank) {std::cout << "\t\tNo vectorization\n";}
     #endif
 
+    #ifdef HYBRID_PARALLEL
+    if (!rank) {
+        std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
+        std::cout << "\t\tMax number of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #else
+    if (!rank) {
+        std::cout << "\t\tOnly MPI parallel\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #endif
+    
 
     if( rank == 0 ) {
         if (size > Nez) {
@@ -567,7 +580,7 @@ int main( int argc, char *argv[] ) {
     } */
 
     total_time.start();
-
+    
     /// declare aMat object =================================
     par::aMat<double, unsigned long, unsigned int> * stMat;
     if (matType == 0){
@@ -596,7 +609,7 @@ int main( int argc, char *argv[] ) {
     // compute element stiffness matrix and force vector, then assemble
     // nodal value of body force
     double beN [24] = {0.0};
-
+    
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
             gNodeId = globalMap[eid][nid];
@@ -678,7 +691,7 @@ int main( int argc, char *argv[] ) {
     // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
     VecAssemblyBegin(rhs);
     VecAssemblyEnd(rhs);
-
+    
     // apply bc for rhs: this must be done before applying bc for the matrix
     // because we use the original matrix to compute KfcUc in matrix-based method
     stMat->apply_bc(rhs);
@@ -698,10 +711,10 @@ int main( int argc, char *argv[] ) {
         stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
         petsc_time.stop();
-        //sprintf(fname,"matrix_%d.dat",size);
+        //sprintf(fname,"matrix_%d.dat",size);    
         //stMat.dump_mat(fname);
     }
-
+    
     //sprintf(fname,"rhsVec_%d.dat",size);
     //stMat.dump_vec(rhs,fname);
 
@@ -712,8 +725,8 @@ int main( int argc, char *argv[] ) {
         petsc_time.start();
     }
     stMat->petsc_solve((const Vec) rhs, out);
-    VecAssemblyBegin(out);
-    VecAssemblyEnd(out);
+    //VecAssemblyBegin(out);
+    //VecAssemblyEnd(out);
     if (matType != 0){
         aMat_time.stop();
     } else {
@@ -724,24 +737,43 @@ int main( int argc, char *argv[] ) {
 
     // display timing
     if (matType != 0){
-        long double aMat_maxTime;
-        MPI_Reduce(&aMat_time.seconds, &aMat_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
-        if (rank == 0){
-            std::cout << "aMat time = " << aMat_maxTime << "\n";
+        if (size > 1){
+            long double aMat_maxTime;
+            MPI_Reduce(&aMat_time.seconds, &aMat_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0){
+                std::cout << "aMat time = " << aMat_maxTime << "\n";
+            }
+        } else {
+            if (rank == 0){
+                std::cout << "aMat time = " << aMat_time.seconds << "\n";
+            }
         }
     } else {
-        long double petsc_maxTime;
-        MPI_Reduce(&petsc_time.seconds, &petsc_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+        if (size > 1){
+            long double petsc_maxTime;
+            MPI_Reduce(&petsc_time.seconds, &petsc_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0){
+                std::cout << "PETSC time = " << petsc_maxTime << "\n";
+            }
+        } else {
+            if (rank == 0){
+                std::cout << "PETSC time = " << petsc_time.seconds << "\n";
+            }
+        }
+        
+    }
+    if (size > 1){
+        long double total_time_max;
+        MPI_Reduce(&total_time.seconds, &total_time_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
         if (rank == 0){
-            std::cout << "PETSC time = " << petsc_maxTime << "\n";
+            std::cout << "total time = " << total_time_max << "\n";
+        }
+    } else {
+        if (rank == 0){
+            std::cout << "total time = " << total_time.seconds << "\n";
         }
     }
-    long double total_time_max;
-    MPI_Reduce(&total_time.seconds, &total_time_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
-    if (rank == 0){
-        std::cout << "total time = " << total_time_max << "\n";
-    }
-
+    
     //sprintf(fname,"outVec_%d.dat",size);
     //stMat.dump_vec(out,fname);
 
@@ -889,7 +921,7 @@ int main( int argc, char *argv[] ) {
     VecDestroy(&out);
     VecDestroy(&sol_exact);
     VecDestroy(&rhs);
-
+    
     PetscFinalize();
     return 0;
 }

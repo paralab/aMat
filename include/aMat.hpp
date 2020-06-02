@@ -32,17 +32,21 @@
 #include <stdlib.h>
 #include <iostream>
 
-// vector length and alignment
-#ifdef AVX_512
-    #define SIMD_LENGTH (512/(sizeof(DT) * 8))
-    #define ALIGNMENT 32
-#elif AVX_256
-    #define SIMD_LENGTH (256/(sizeof(DT) * 8))
-    #define ALIGNMENT 32
-#elif OMP_SIMD
-    #define SIMD_LENGTH (512/(sizeof(DT) * 8))
+// alternatives for vectorization, alignment = cache line
+#ifdef VECTORIZED_AVX512
+    #define SIMD_LENGTH (512/(sizeof(DT) * 8)) // length of vector register = 512 bytes
+    #define ALIGNMENT 64
+#elif VECTORIZED_AVX256
+    #define SIMD_LENGTH (256/(sizeof(DT) * 8)) // length of vector register = 256 bytes
+    #define ALIGNMENT 64
+#elif VECTORIZED_OPENMP
+    #define SIMD_LENGTH (512/(sizeof(DT) * 8)) // could be deleted, openMP automatically detect length of vector register
     #define ALIGNMENT 16
+#elif VECTORIZED_OPENMP_PADDING
+    #define SIMD_LENGTH (512/(sizeof(DT) * 8)) // could be deleted, openMP automatically detect length of vector register
+    #define ALIGNMENT 64
 #else
+    // this is not used since we do not align memory
     #define ALIGNMENT 16
 #endif
 
@@ -417,9 +421,6 @@ namespace par {
         /**@brief (local) number of elements owned by rank */
         LI m_uiNumElems;
 
-        /**@brief max number of DoFs per element*/
-        LI m_uiMaxDofsPerElem;
-
         /**@brief map from element to global DoF: m_ulpMap[eid][local_id]  = global_id */
         GI** m_ulpMap;
 
@@ -545,7 +546,6 @@ namespace par {
         using aMat<DT,GI,LI>::m_ulGlobalDofEnd;
         using aMat<DT,GI,LI>::m_uiNumDofsTotal;
         using aMat<DT,GI,LI>::m_uiNumElems;
-        using aMat<DT,GI,LI>::m_uiMaxDofsPerElem;
 
         using aMat<DT,GI,LI>::m_ulpMap;
         using aMat<DT,GI,LI>::m_uiDofsPerElem;
@@ -583,7 +583,7 @@ namespace par {
         std::vector<GI> m_ulvLocalDofScan;
 
         /**@brief exclusive scan of (local) number of elements */
-        std::vector<GI> m_uivLocalElementScan;
+        std::vector<GI> m_ulvLocalElementScan;
 
         /**@brief number of ghost DoFs owned by "pre" processes (whose ranks are smaller than m_uiRank) */
         LI m_uiNumPreGhostDofs;
@@ -633,6 +633,12 @@ namespace par {
         /**@brief total number of dofs including ghost dofs and dofs owned by me */
         //LI m_uiNumDofsTotal;
 
+        /**@brief max number of DoFs per element */
+        LI m_uiMaxDofsPerBlock;
+
+        /**@brief max number of pads to be added to the end of ve */
+        LI m_uiMaxNumPads;
+
         /**@brief MPI communication tag*/
         int m_iCommTag;
 
@@ -648,7 +654,7 @@ namespace par {
         /**@brief number of owned constraints */
         LI n_owned_constraints;
 
-        #ifdef USE_OMP
+        #ifdef HYBRID_PARALLEL
             /**@brief max number of omp threads */
             unsigned int m_uiNumThreads;
             /**@brief elemental vectors used in matvec */
@@ -801,8 +807,12 @@ namespace par {
         /**@brief get diagonal block matrix (sparse matrix) */
         Error mat_get_diagonal_block(std::vector<MatRecord<DT,LI>> &diag_blk);
 
-        /**@brief get max number of DoF per element and put to m_uiMaxDofsPerElem */
-        Error get_max_dof_per_elem();
+        /**@brief get max number of DoF per block (over all elements)*/
+        // this function is not needed since max_dof_per_block is computed in set_map and it is unchanged later on
+        //Error get_max_dof_per_block();
+
+        /**@brief allocate memory for ue and ve used for elemental matrix-vector multiplication */
+        Error allocate_ue_ve();
 
         /**@brief begin: owned DoFs send, ghost DoFs receive, called before matvec() */
         Error ghost_receive_begin(DT* vec);
@@ -823,7 +833,7 @@ namespace par {
         Error matvec(DT* v, const DT* u, bool isGhosted = false);
 
         /**@brief v = K * u; v and u are of size including ghost DoFs. */
-        #ifdef USE_OMP
+        #ifdef HYBRID_PARALLEL
             Error matvec_ghosted_OMP(DT* v, DT* u);
         #else
             Error matvec_ghosted_noOMP(DT* v, DT* u);
@@ -844,11 +854,20 @@ namespace par {
         /**@brief apply Dirichlet BCs to block diagonal matrix */
         Error apply_bc_blkdiag(Mat* blkdiagMat);
 
-        /**@brief: allocate an aligned memory */
+        /**@brief allocate an aligned memory */
         DT* create_aligned_array(unsigned int alignment, unsigned int length);
 
-        /**@brief: deallocate an aligned memory */
+        /**@brief deallocate an aligned memory */
         void delete_algined_array(DT* array);
+
+        /**@brief compute number of paddings inserted at the end of each column of elemental block matrix */
+        /* LI get_column_paddings(size_t alignment, LI column_length){
+            if ((column_length % (alignment/sizeof(DT))) != 0){
+                return (alignment/sizeof(DT)) - (column_length % (alignment/sizeof(DT)));
+            } else {
+                return 0;
+            }
+        } */
 
     }; //class aMatFree
 
@@ -874,7 +893,6 @@ namespace par {
         using aMat<DT,GI,LI>::m_ulGlobalDofEnd;
         using aMat<DT,GI,LI>::m_uiNumDofsTotal;
         using aMat<DT,GI,LI>::m_uiNumElems;
-        using aMat<DT,GI,LI>::m_uiMaxDofsPerElem;
 
         using aMat<DT,GI,LI>::m_ulpMap;
         using aMat<DT,GI,LI>::m_uiDofsPerElem;
@@ -1035,7 +1053,6 @@ namespace par {
         m_uiNumDofsTotal   = 0;             // total number of owned dofs + ghost dofs
         m_ulGlobalDofStart = 0;
         m_ulGlobalDofEnd   = 0;
-        m_uiMaxDofsPerElem = 0;
 
         m_ulpMap           = nullptr;       // element-to-global map
         m_uiDofsPerElem    = nullptr;       // number of dofs per element
@@ -1081,16 +1098,16 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     Error aMat<DT,GI,LI>::petsc_set_element_vec(Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode){
 
-        unsigned int num_rows = e_vec.size();
+        LI num_dofs_per_block = e_vec.size();
         assert(e_vec.size() == e_vec.rows()); // since EigenVec is defined as matrix with 1 column
 
         PetscScalar value;
         PetscInt rowId;
 
-        for (unsigned int r = 0; r < num_rows; ++r) {
+        for (LI r = 0; r < num_dofs_per_block; ++r) {
 
             // this ONLY WORKS with assumption that all blocks have the same number of dofs (that is true for R-XFEM ?)
-            rowId = m_ulpMap[eid][block_i * num_rows + r];
+            rowId = m_ulpMap[eid][block_i * num_dofs_per_block + r];
             value = e_vec(r);
             VecSetValue(vec, rowId, value, mode);
         }
@@ -1144,7 +1161,9 @@ namespace par {
 
         Uc = nullptr;
 
-        #ifdef USE_OMP
+        m_uiMaxDofsPerBlock = 0;
+
+        #ifdef HYBRID_PARALLEL
             // (thread local) ve and ue
             m_veBufs = nullptr;
             m_ueBufs = nullptr;
@@ -1196,7 +1215,7 @@ namespace par {
         }
 
         // free memory allocated for storing elemental vectors ue and ve
-        #ifdef USE_OMP
+        #ifdef HYBRID_PARALLEL
             for (unsigned int tid = 0; tid < m_uiNumThreads; tid++){
                 if (m_ueBufs[tid] != nullptr) delete_algined_array(m_ueBufs[tid]);
                 if (m_veBufs[tid] != nullptr) delete_algined_array(m_veBufs[tid]);
@@ -1289,8 +1308,24 @@ namespace par {
         // 05.21.20: also build m_uipLocalMap
         buildScatterMap();
 
-        // compute the largest number of dofs per elements, will be used for allocation ue and ve...
-        get_max_dof_per_elem();
+        // compute the largest number of dofs per block, to be used for allocation of ue and ve...
+        // ASSUME that initially every element has only one block, AND the size of block is unchanged during crack growth
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            if (m_uiMaxDofsPerBlock < m_uiDofsPerElem[eid]) m_uiMaxDofsPerBlock = m_uiDofsPerElem[eid];
+        }
+
+        // get number of pads added to ve (where ve = block_matrix * ue)
+        #ifdef VECTORIZED_OPENMP_PADDING
+            assert((ALIGNMENT % sizeof(DT)) == 0);
+            if ((m_uiMaxDofsPerBlock % (ALIGNMENT/sizeof(DT))) != 0){
+                m_uiMaxNumPads = (ALIGNMENT/sizeof(DT)) - (m_uiMaxDofsPerBlock % (ALIGNMENT/sizeof(DT)));
+            } else {
+                m_uiMaxNumPads = 0;
+            }
+        #endif
+
+        // allocate memory for ue and ve used in elemental matrix-vector multiplication
+        allocate_ue_ve();
 
         return Error::SUCCESS;
     } // aMatFree::set_map
@@ -1384,7 +1419,7 @@ namespace par {
         buildScatterMap();
 
         // compute the largest number of dofs per elements, will be used for allocation ue and ve...
-        get_max_dof_per_elem();
+        //get_max_dof_per_elem();
 
         return Error::SUCCESS;
     } // aMatFree::update_map()
@@ -1407,12 +1442,12 @@ namespace par {
         m_uivLocalDofCounts.clear();
         m_uivLocalElementCounts.clear();
         m_ulvLocalDofScan.clear();
-        m_uivLocalElementScan.clear();
+        m_ulvLocalElementScan.clear();
 
         m_uivLocalDofCounts.resize(m_uiSize);
         m_uivLocalElementCounts.resize(m_uiSize);
         m_ulvLocalDofScan.resize(m_uiSize);
-        m_uivLocalElementScan.resize(m_uiSize);
+        m_ulvLocalElementScan.resize(m_uiSize);
 
         // gather local counts
         //MPI_Allgather(&m_uiNumDofs, 1, MPI_INT, &(*(m_uivLocalDofCounts.begin())), 1, MPI_INT, m_comm);
@@ -1423,10 +1458,10 @@ namespace par {
         // scan local counts to determine owned-range:
         // range of global ID of owned dofs = [m_ulvLocalDofScan[m_uiRank], m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs)
         m_ulvLocalDofScan[0] = 0;
-        m_uivLocalElementScan[0] = 0;
+        m_ulvLocalElementScan[0] = 0;
         for (unsigned int p = 1; p < m_uiSize; p++) {
             m_ulvLocalDofScan[p] = m_ulvLocalDofScan[p-1] + m_uivLocalDofCounts[p-1];
-            m_uivLocalElementScan[p] = m_uivLocalElementScan[p-1] + m_uivLocalElementCounts[p-1];
+            m_ulvLocalElementScan[p] = m_ulvLocalElementScan[p-1] + m_uivLocalElementCounts[p-1];
         }
 
         // global number of dofs of all ranks
@@ -1518,7 +1553,7 @@ namespace par {
         // post-ghost
         pcount = m_uiRank; // processor counter, start from my rank
         gcount = 0;
-        while(gcount < m_uiNumPostGhostDofs) {
+        while (gcount < m_uiNumPostGhostDofs) {
                 // global ID of post-ghost dof gcount
                 GI global_dof_id = postGhostGIds[gcount];
                 while ((pcount < m_uiSize) &&
@@ -1536,19 +1571,12 @@ namespace par {
                 postGhostOwner[gcount] = pcount;
                 gcount++;
             }
-        /* printf("rank %d, num of pre-ghost = %d\n", m_uiRank, preGhostGIds.size());
-        printf("rank %d, num of post-ghost = %d\n", m_uiRank, postGhostGIds.size());
-        for (unsigned int i = 0; i < m_uiNumPreGhostDofs; i++){
-            printf("rank %d, preGhostOwner[%d]= %d\n", m_uiRank, i, preGhostOwner[i]);
-        }
-        for (unsigned int i = 0; i < m_uiNumPostGhostDofs; i++){
-            printf("rank %d, postGhostOwner[%d]= %d\n", m_uiRank, i, postGhostOwner[i]);
-        } */
 
-        LI * sendCounts = new unsigned int[m_uiSize];
-        LI * recvCounts = new unsigned int[m_uiSize];
-        LI * sendOffset = new unsigned int[m_uiSize];
-        LI * recvOffset = new unsigned int[m_uiSize];
+
+        LI * sendCounts = new LI [m_uiSize];
+        LI * recvCounts = new LI [m_uiSize];
+        LI * sendOffset = new LI [m_uiSize];
+        LI * recvOffset = new LI [m_uiSize];
 
         // Note: the send here is just for use in MPI_Alltoallv, it is NOT the send in communications between processors later
         for (unsigned int i = 0; i < m_uiSize; i++) {
@@ -1595,9 +1623,6 @@ namespace par {
         for(LI i = 0; i < m_uiNumPostGhostDofs; i++)
             sendBuf[i + m_uiNumPreGhostDofs] = postGhostGIds[i];
 
-        /* for (unsigned int i = 0; i < sendBuf.size(); i++)
-            printf("rank %d, sendBuf[%d]= %d\n", m_uiRank, i, sendBuf[i]); */
-
         for(unsigned int i = 0; i < m_uiSize; i++) {
             sendCounts[i] *= sizeof(GI);
             sendOffset[i] *= sizeof(GI);
@@ -1618,8 +1643,6 @@ namespace par {
             recvOffset[i] /= sizeof(GI);
         }
 
-        /* for (unsigned int i = 0; i < recvBuf.size(); i++)
-            printf("rank %d, recvBuf[%d]= %d\n", m_uiRank, i, recvBuf[i]); */
 
         // convert global Ids in recvBuf (dofs that I need to send to before matvec) to local Ids
         m_uivSendDofIds.resize(recvBuf.size());
@@ -1659,26 +1682,6 @@ namespace par {
                 m_uivRecvRankIds.push_back(i);
             }
         }
-        /* for (unsigned int i = 0; i < m_uivSendRankIds.size(); i++){
-            printf("[r%d] m_uivSendRankIds[%d]= %d\n", m_uiRank, i, m_uivSendRankIds[i]);
-        }
-        for (unsigned int i = 0; i < m_uivRecvRankIds.size(); i++){
-            printf("[r%d] m_uivRecvRankIds[%d]= %d\n", m_uiRank, i, m_uivRecvRankIds[i]);
-        } */
-        /* for (unsigned int i = 0; i < m_uiSize; i++){
-            printf("rank %d, m_uivSendDofCounts[%d]= %d\n", m_uiRank, i, m_uivSendDofCounts[i]);
-        }
-        for (unsigned int i = 0; i < m_uiSize; i++){
-            printf("rank %d, m_uivSendDofOffset[%d]= %d\n", m_uiRank, i, m_uivSendDofOffset[i]);
-        } */
-
-        /* for (unsigned int i = 0; i < m_uivSendDofIds.size(); i++){
-            printf("rank %d, m_uivSendDofIds[%d]= %d\n", m_uiRank, i, m_uivSendDofIds[i]);
-        }
-
-        for (unsigned int i = 0; i < m_uiSize; i++){
-            printf("rank %d, m_uivRecvDofCounts[%d]= %d\n", m_uiRank, i, m_uivRecvDofCounts[i]);
-        } */
 
         // 2020.05.21: build rank-to-global map and element-to-rank map
         // local vector = [0, ..., (m_uiNumPreGhostDofs - 1), --> ghost nodes owned by someone before me
@@ -1761,7 +1764,7 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::local_to_ghost( DT*  gVec, const DT* local ) const {
-        for (unsigned int i = 0; i < m_uiNumDofsTotal; i++){
+        for (LI i = 0; i < m_uiNumDofsTotal; i++){
             if ((i >= m_uiNumPreGhostDofs) && (i < m_uiNumPreGhostDofs + m_uiNumDofs)) {
                 gVec[i] = local[i - m_uiNumPreGhostDofs];
             }
@@ -1775,7 +1778,7 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::ghost_to_local(DT* local, const DT* gVec) const {
-        for (unsigned int i = 0; i < m_uiNumDofs; i++) {
+        for (LI i = 0; i < m_uiNumDofs; i++) {
             local[i] = gVec[i + m_uiNumPreGhostDofs];
         }
         return Error::SUCCESS;
@@ -1799,37 +1802,61 @@ namespace par {
         LI index = (block_i * blocks_dim) + block_j;
 
         // allocate memory to store e_mat (e_mat is one of blocks of the elemental matrix of element eid)
-        LI num_rows = e_mat.rows();
-        assert (num_rows == e_mat.cols());
+        LI num_dofs_per_block = e_mat.rows();
+        assert (num_dofs_per_block == e_mat.cols());
         
         // allocate and align memory for elemental matrices
-        #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
-            m_epMat[eid][index] = create_aligned_array(ALIGNMENT, (num_rows * num_rows));
+        #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
+        m_epMat[eid][index] = create_aligned_array(ALIGNMENT, (num_dofs_per_block * num_dofs_per_block));
+
+        #elif VECTORIZED_OPENMP_PADDING
+        // number of paddings inserted to the end of each column of elemental block matrix
+        assert((ALIGNMENT % sizeof(DT)) == 0);
+        unsigned int nPads = 0;
+        //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+        if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+            nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+        }
+
+        // allocate block matrix with added paddings
+        m_epMat[eid][index] = create_aligned_array(ALIGNMENT, ((num_dofs_per_block + nPads) * num_dofs_per_block));
+
         #else
-            m_epMat[eid][index] = (DT*)malloc((num_rows * num_rows) * sizeof(DT));
+        m_epMat[eid][index] = (DT*)malloc((num_dofs_per_block * num_dofs_per_block) * sizeof(DT));
+
         #endif
         
         // store block matrix in column-major for simpd, row-major for non-simd
         LI ind = 0;
-        #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
-            for (LI c = 0; c < num_rows; c++){
-                for (LI r = 0; r < num_rows; r++){
-                    m_epMat[eid][index][ind] = e_mat(r,c);
-                    ind++;
-                }
+
+        #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
+        for (LI c = 0; c < num_dofs_per_block; c++){
+            for (LI r = 0; r < num_dofs_per_block; r++){
+                m_epMat[eid][index][ind] = e_mat(r,c);
+                ind++;
+                //if (eid == 0) printf("e_mat[%d][%d,%d]= %f\n",eid,r,c,e_mat(r,c));
             }
+        }
+
+        #elif VECTORIZED_OPENMP_PADDING
+        for (LI c = 0; c < num_dofs_per_block; c++){
+            for (LI r = 0; r < num_dofs_per_block; r++){
+                m_epMat[eid][index][c * (num_dofs_per_block + nPads) + r] = e_mat(r,c);
+            }
+        }
+
         #else
-            for (LI r = 0; r < num_rows; r++){
-                for (LI c = 0; c < num_rows; c++){
-                    m_epMat[eid][index][ind] = e_mat(r,c);
-                    ind++;
-                }
+        for (LI r = 0; r < num_dofs_per_block; r++){
+            for (LI c = 0; c < num_dofs_per_block; c++){
+                m_epMat[eid][index][ind] = e_mat(r,c);
+                ind++;
             }
+        }
         #endif
         
         // compute the trace of matrix for penalty method
         if (m_BcMeth == BC_METH::BC_PENALTY){
-            for (LI r = 0; r < num_rows; r++) m_dtTraceK += e_mat(r,r);
+            for (LI r = 0; r < num_dofs_per_block; r++) m_dtTraceK += e_mat(r,r);
         }
 
         return Error::SUCCESS;
@@ -1854,8 +1881,12 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
         LI rowID;
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
 
+        #ifdef VECTORIZED_OPENMP_PADDING
+        unsigned int nPads = 0;
+        #endif
+
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
             // number of blocks in each direction (i.e. blocks_dim)
             LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
             
@@ -1864,7 +1895,14 @@ namespace par {
             
             // number of dofs per block, must be the same for all blocks
             const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
-            
+
+            #ifdef VECTORIZED_OPENMP_PADDING
+            //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+            if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+            }
+            #endif
+
             LI block_row_offset = 0;
             for (LI block_i = 0; block_i < blocks_dim; block_i++) {
 
@@ -1878,8 +1916,13 @@ namespace par {
                     // local (rank) row ID
                     rowID = m_uipLocalMap[eid][block_row_offset + r];
 
-                    // diagonals are the same for both simd and non-simd cases
+                    // get diagonal of elemental block matrix
+                    #ifdef VECTORIZED_OPENMP_PADDING
+                    diag[rowID] += m_epMat[eid][index][r * (num_dofs_per_block + nPads) + r];
+                    #else
+                    // diagonals are the same for both simd (column-major) and non-simd (row-major)
                     diag[rowID] += m_epMat[eid][index][r * num_dofs_per_block + r];
+                    #endif
                 }
                 block_row_offset += num_dofs_per_block;
             }
@@ -1935,6 +1978,10 @@ namespace par {
         DT value;
         LI ind = 0;
 
+        #ifdef VECTORIZED_OPENMP_PADDING
+        unsigned int nPads = 0;
+        #endif
+
         std::vector<MatRecord<DT,LI>> matRec1;
         std::vector<MatRecord<DT,LI>> matRec2;
 
@@ -1943,7 +1990,7 @@ namespace par {
         m_vMatRec.clear();
         diag_blk.clear();
 
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
 
             // number of blocks in row (or column)
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
@@ -1953,6 +2000,13 @@ namespace par {
             LI block_col_offset = 0;
 
             const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
+
+            #ifdef VECTORIZED_OPENMP_PADDING
+            //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+            if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+            }
+            #endif
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
@@ -1994,9 +2048,12 @@ namespace par {
                                     matr.setRank(rank_r);
                                     matr.setRowId(loc_RowId);
                                     matr.setColId(loc_ColId);
-                                    #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD) 
+                                    #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
                                         // elemental block matrix stored in column-major
                                         matr.setVal(m_epMat[eid][index][(c * num_dofs_per_block) + r]);
+                                    #elif VECTORIZED_OPENMP_PADDING
+                                        // paddings are inserted at columns' ends
+                                        matr.setVal(m_epMat[eid][index][c * (num_dofs_per_block + nPads) + r]);
                                     #else
                                         // elemental block matrix stored in row-major
                                         matr.setVal(m_epMat[eid][index][(r * num_dofs_per_block) + c]);
@@ -2055,10 +2112,10 @@ namespace par {
             ind++;
         }
 
-        unsigned int* sendCounts = new unsigned int[m_uiSize];
-        unsigned int* recvCounts = new unsigned int[m_uiSize];
-        unsigned int* sendOffset = new unsigned int[m_uiSize];
-        unsigned int* recvOffset = new unsigned int[m_uiSize];
+        LI* sendCounts = new LI[m_uiSize];
+        LI* recvCounts = new LI[m_uiSize];
+        LI* sendOffset = new LI[m_uiSize];
+        LI* recvOffset = new LI[m_uiSize];
 
         for (unsigned int i = 0; i < m_uiSize; i++){
             sendCounts[i] = 0;
@@ -2066,7 +2123,7 @@ namespace par {
         }
 
         // number of elements sending to each rank
-        for (unsigned int i = 0; i < m_vMatRec.size(); i++){
+        for (LI i = 0; i < m_vMatRec.size(); i++){
             sendCounts[m_vMatRec[i].getRank()] ++;
         }
 
@@ -2102,7 +2159,7 @@ namespace par {
         m_iCommTag++;
 
         // add the received data to matRec1
-        for (unsigned int i = 0; i < recv_buff.size(); i++){
+        for (LI i = 0; i < recv_buff.size(); i++){
             if (recv_buff[i].getRank() != m_uiRank) {
                 return Error::WRONG_COMMUNICATION;
             } else {
@@ -2151,38 +2208,67 @@ namespace par {
     } // aMatFree::mat_get_diagonal_block
 
 
-    template <typename DT, typename  GI, typename LI>
-    Error aMatFree<DT,GI,LI>::get_max_dof_per_elem(){
-        unsigned int num_dofs;
-        unsigned int max_dpe = 0;
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_dofs = m_uiDofsPerElem[eid];
-            if (max_dpe < num_dofs) max_dpe = num_dofs;
+    /* template <typename DT, typename  GI, typename LI>
+    Error aMatFree<DT,GI,LI>::get_max_dof_per_block(){
+        LI num_dofs, blocks_dim;
+
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            // number of blocks in row (or column)
+            blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            assert (blocks_dim * blocks_dim == m_epMat[eid].size());
+
+            // number of dofs per block
+            assert((m_uiDofsPerElem[eid]%blocks_dim) == 0);
+            num_dofs = m_uiDofsPerElem[eid]/blocks_dim;
+
+            if (m_uiMaxDofsPerBlock < num_dofs) m_uiMaxDofsPerBlock = num_dofs;
         }
-        m_uiMaxDofsPerElem = max_dpe;
-        
-        // allocate memory for ue and ve used in matvec
-        #ifdef USE_OMP
-            // (thread local) ue and ve
+
+        // get number of pads added to ve (where ve = block_matrix * ue)
+        #ifdef OMP_SIMD_PADDING
+            assert((ALIGNMENT % sizeof(DT)) == 0);
+            if ((m_uiMaxDofsPerBlock % (ALIGNMENT/sizeof(DT))) != 0){
+                m_uiMaxNumPads = (ALIGNMENT/sizeof(DT)) - (m_uiMaxDofsPerBlock % (ALIGNMENT/sizeof(DT)));
+            } else {
+                m_uiMaxNumPads = 0;
+            }
+        #endif
+        printf("m_uiMaxNumPads= %d\n",m_uiMaxNumPads);
+
+        return Error::SUCCESS;
+    } */ // aMatFree::get_max_dof_per_block
+
+
+    template <typename DT, typename GI, typename LI>
+    Error aMatFree<DT,GI,LI>::allocate_ue_ve(){
+        #ifdef HYBRID_PARALLEL
+            // ue and ve are local to each thread, they will be allocated after #pragma omp parallel
+            // at the moment, we only allocate an array (of size = number of threads) of DT*
             m_ueBufs = (DT**)malloc(m_uiNumThreads * sizeof(DT*));
             m_veBufs = (DT**)malloc(m_uiNumThreads * sizeof(DT*));
             for (unsigned int i = 0; i < m_uiNumThreads; i++){
                 m_ueBufs[i] = nullptr;
                 m_veBufs[i] = nullptr;
             }
+
         #else
-            // allocate ue and ve: to benefit "omp parallel for" ue and ve should not be one shared among threads
-            #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
-                ve = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerElem);
-                ue = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerElem);
+            #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
+                // allocate and align ue and ve as normal
+                ve = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
+                ue = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
+            #elif VECTORIZED_OPENMP_PADDING
+                // allocate and align ve = MaxDofsPerBlock + MaxNumPads, ue as normal
+                ve = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock + m_uiMaxNumPads);
+                ue = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
             #else
-                ue = (DT*)malloc(m_uiMaxDofsPerElem * sizeof(DT));
-                ve = (DT*)malloc(m_uiMaxDofsPerElem * sizeof(DT));
+                // allocate ve and ue without alignment
+                ue = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
+                ve = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
             #endif
         #endif
 
         return Error::SUCCESS;
-    }// aMatFree::get_max_dof_per_elem
+    } // aMatFree::allocate_ue_ve
 
 
     template <typename DT, typename GI, typename LI>
@@ -2195,6 +2281,7 @@ namespace par {
 
         // total number of DoFs to be sent
         const LI total_send = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
+        assert(total_send == m_uivSendDofIds.size());
 
         // total number of DoFs to be received
         const LI total_recv = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
@@ -2225,10 +2312,10 @@ namespace par {
             DT* recv_buf = (DT*) ctx.getRecvBuffer();
             
             for (unsigned int r = 0; r < m_uivRecvRankIds.size(); r++){
-                unsigned int i = m_uivRecvRankIds[r];
+                unsigned int i = m_uivRecvRankIds[r]; // rank that I will receive from
                 MPI_Request* req = new MPI_Request();
                 MPI_Irecv(&recv_buf[m_uivRecvDofOffset[i]], m_uivRecvDofCounts[i] * sizeof(DT), MPI_BYTE, i, m_iCommTag, m_comm, req);
-                // pout output request req of receiving into Request list of ctx
+                // put output request req of receiving into Request list of ctx
                 ctx.getRequestList().push_back(req);
             }
         }
@@ -2267,16 +2354,18 @@ namespace par {
         //const unsigned  int total_recv = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
 
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
-        // copy values of pre-ghost nodes from recv_buf to vec
+
+        // received values are now put at pre-ghost and post-ghost positions of vec
         std::memcpy(vec, recv_buf, m_uiNumPreGhostDofs * sizeof(DT));
-        // copy values of post-ghost nodes from recv_buf to vec
         std::memcpy(&vec[m_uiNumPreGhostDofs + m_uiNumDofs], &recv_buf[m_uiNumPreGhostDofs], m_uiNumPostGhostDofs * sizeof(DT));
 
-        // free memory of send and receive buffers
+        // free memory of send and receive buffers of ctx
         ctx.deAllocateRecvBuffer();
         ctx.deAllocateSendBuffer();
 
+        // erase the context associated with ctx in m_vAsyncCtx
         m_vAsyncCtx.erase(m_vAsyncCtx.begin() + ctx_index);
+
         return Error::SUCCESS;
     } // aMatFree::ghost_receive_end
 
@@ -2288,12 +2377,12 @@ namespace par {
 
         AsyncExchangeCtx ctx((const void*)vec);
 
-        // number of DoFs to be received (= number of DoFs that are sent before calling matvec)
+        // number of owned dofs to be received from other ranks (i.e. number of dofs that I sent out before doing matvec)
         const LI total_recv = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
-        // number of DoFs to be sent (= number of DoFs that are received before calling matvec)
+        // number of dofs to be sent back to their owners (i.e. number of dofs that I received before doing matvec)
         const LI total_send = m_uivRecvDofOffset[m_uiSize-1] + m_uivRecvDofCounts[m_uiSize-1];
 
-        // receive data for owned DoFs that are sent back to my rank from other ranks (after matvec is done)
+        // receive data
         if (total_recv > 0){
             ctx.allocateRecvBuffer(sizeof(DT) * total_recv);
             DT* recv_buf = (DT*) ctx.getRecvBuffer();
@@ -2356,15 +2445,24 @@ namespace par {
         //const unsigned  int total_recv = m_uivSendDofOffset[m_uiSize-1] + m_uivSendDofCounts[m_uiSize-1];
         DT* recv_buf = (DT*) ctx.getRecvBuffer();
 
+        // accumulate the received data at the positions that I sent out before doing matvec
+        // these positions are indicated in m_uivSendDofIds[]
+        // note: size of recv_buf[] = size of m_uivSendDofIds[]
         for (unsigned int i = 0; i < m_uiSize; i++){
             for (LI j = 0; j < m_uivSendDofCounts[i]; j++){
-                //vec[m_uivSendDofIds[m_uivSendDofOffset[i]] + j] += recv_buf[m_uivSendDofOffset[i] + j]; // bug fixed on 2020.05.23
-                vec[m_uivSendDofIds[m_uivSendDofOffset[i] + j]] += recv_buf[m_uivSendDofOffset[i] + j];
+                // bug fixed on 2020.05.23:
+                //vec[m_uivSendDofIds[m_uivSendDofOffset[i]] + j] += recv_buf[m_uivSendDofOffset[i] + j];
+                vec[ m_uivSendDofIds[m_uivSendDofOffset[i] + j] ] += recv_buf[m_uivSendDofOffset[i] + j];
             }
         }
+
+        // free memory of send and receive buffers of ctx
         ctx.deAllocateRecvBuffer();
         ctx.deAllocateSendBuffer();
+
+        // erase the contex associated wit ctx in m_vAsyncCtx
         m_vAsyncCtx.erase(m_vAsyncCtx.begin() + ctx_index);
+
         return Error::SUCCESS;
     } // aMatFree::ghost_send_end
 
@@ -2376,8 +2474,9 @@ namespace par {
         #endif
         if ( isGhosted ) {
             // std::cout << "GHOSTED MATVEC" << std::endl;
-            #ifdef USE_OMP
+            #ifdef HYBRID_PARALLEL
                 matvec_ghosted_OMP(v, (DT*)u);
+
             #else
                 matvec_ghosted_noOMP(v, (DT*)u);
             #endif
@@ -2391,7 +2490,7 @@ namespace par {
             // copy u to gu
             local_to_ghost(gu, u);
 
-            #ifdef USE_OMP
+            #ifdef HYBRID_PARALLEL
                 matvec_ghosted_OMP(v, (DT*)u);
             #else
                 matvec_ghosted_noOMP(v, (DT*)u);
@@ -2410,13 +2509,13 @@ namespace par {
 
     } // aMatFree::matvec
 
-    #ifdef USE_OMP
+    #ifdef HYBRID_PARALLEL
 
     template <typename  DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::matvec_ghosted_OMP( DT* v, DT* u ) {
 
         // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumDofsTotal)
-        for (unsigned int i = 0; i < m_uiDofPostGhostEnd; i++){
+        for (LI i = 0; i < m_uiDofPostGhostEnd; i++){
             v[i] = 0.0;
         }
 
@@ -2446,17 +2545,38 @@ namespace par {
         LI rowID, colID;
         LI blocks_dim, num_dofs_per_block;
 
-        // allocate private variables for elemental matrix-vector multiplication
+        // get thread id
         const unsigned int tId = omp_get_thread_num();
+
+        // number of pads used in padding
+        #ifdef VECTORIZED_OPENMP_PADDING
+        unsigned int nPads = 0;
+        #endif
+
+        // allocate private ve and ue (if not allocated yet)
         if (m_veBufs[tId] == nullptr){
-            m_veBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerElem);
-            m_ueBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerElem);
+            #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
+                // allocate and align ue and ve as normal
+                m_veBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
+                m_ueBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
+
+            #elif VECTORIZED_OPENMP_PADDING
+                // allocate and align ve = MaxDofsPerBlock + MaxNumPads, ue as normal
+                m_veBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock + m_uiMaxNumPads);
+                m_ueBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
+
+            #else
+                // allocate ve and ue without alignment
+                m_veBufs[tId] = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
+                m_ueBufs[tId] = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
+            #endif
+
         }
         DT* ueLocal = m_ueBufs[tId];
         DT* veLocal = m_veBufs[tId];
 
         #pragma omp for
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
             // get number of blocks of element eid
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
             LI block_row_offset = 0;
@@ -2464,6 +2584,14 @@ namespace par {
             
             // number of dofs per block must be the same for all blocks
             num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
+
+            // compute needed pads added to the end of each column of block matrix
+            #ifdef VECTORIZED_OPENMP_PADDING
+            //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+            if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+            }
+            #endif
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
@@ -2480,7 +2608,7 @@ namespace par {
                         }
 
                         // ve = elemental matrix * ue
-                        #ifdef AVX_512
+                        #ifdef VECTORIZED_AVX512
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
                                 unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
@@ -2527,10 +2655,8 @@ namespace par {
                                 }
                             }
                             
-                        #elif AVX_256
-                        
+                        #elif VECTORIZED_AVX256
                             for (LI c = 0; c < num_dofs_per_block; c++){
-                                
                                 unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
                                 unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
                                 DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
@@ -2578,16 +2704,27 @@ namespace par {
                                     delete [] yVec_remain;
                                 }
                             }
-                        #elif OMP_SIMD
+
+                        #elif VECTORIZED_OPENMP
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 const DT alpha = ueLocal[c];
                                 const DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
-                                //DT* y = ve;
                                 #pragma omp simd aligned(x, veLocal : ALIGNMENT) safelen(512)
                                 for (LI r = 0; r < num_dofs_per_block; r++){
                                     veLocal[r] += alpha * x[r];
                                 }
                             }
+
+                        #elif VECTORIZED_OPENMP_PADDING
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                const DT alpha = ueLocal[c];
+                                const DT* x = &m_epMat[eid][block_ID][c * (num_dofs_per_block + nPads)];
+                                #pragma omp simd aligned(x, veLocal : ALIGNMENT) safelen(512)
+                                for (LI r = 0; r < (num_dofs_per_block + nPads); r++){
+                                    veLocal[r] += alpha * x[r];
+                                }
+                            }
+
                         #else
                             #pragma novector noparallel nounroll
                             for (LI r = 0; r < num_dofs_per_block; r++){
@@ -2596,11 +2733,13 @@ namespace par {
                                     veLocal[r] += m_epMat[eid][block_ID][(r * num_dofs_per_block) + c] * ueLocal[c];
                                 }
                             }
+
                         #endif
 
                         // accumulate element vector ve to structure vector v
-                        for (unsigned int r = 0; r < num_dofs_per_block; r++){
+                        for (LI r = 0; r < num_dofs_per_block; r++){
                             rowID = m_uipLocalMap[eid][block_row_offset + r];
+                            //printf("v[%d]= %f\n",r,v[r]);
                             #pragma omp atomic
                             v[rowID] += veLocal[r];
                         }
@@ -2645,7 +2784,7 @@ namespace par {
         LI blocks_dim, num_dofs_per_block;
 
         // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumDofsTotal)
-        for (unsigned int i = 0; i < m_uiDofPostGhostEnd; i++){
+        for (LI i = 0; i < m_uiDofPostGhostEnd; i++){
             v[i] = 0.0;
         }
 
@@ -2671,14 +2810,27 @@ namespace par {
         ghost_receive_begin(u);
         ghost_receive_end(u);
 
+        // number of pads used in padding
+        #ifdef VECTORIZED_OPENMP_PADDING
+        unsigned int nPads = 0;
+        #endif
+
         // multiply [ve] = [ke][ue] for all elements
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
             LI block_row_offset = 0;
             LI block_col_offset = 0;
 
             // number of dofs per block must be the same for all blocks
             num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
+
+            // compute number of paddings inserted to the end of each column of block matrix
+            #ifdef VECTORIZED_OPENMP_PADDING
+            //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+            if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+            }
+            #endif
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
@@ -2698,7 +2850,7 @@ namespace par {
                         }
 
                         // ve = elemental matrix * ue
-                        #ifdef AVX_512
+                        #ifdef VECTORIZED_AVX512
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
                                 unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
@@ -2745,7 +2897,7 @@ namespace par {
                                 }
                             }
 
-                        #elif AVX_256
+                        #elif VECTORIZED_AVX256
 
                             for (LI c = 0; c < num_dofs_per_block; c++){
 
@@ -2796,13 +2948,23 @@ namespace par {
                                     delete [] yVec_remain;
                                 }
                             }
-                        #elif OMP_SIMD
+                        #elif VECTORIZED_OPENMP
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 const DT alpha = ue[c];
                                 const DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
                                 DT* y = ve;
                                 #pragma omp simd aligned(x, y : ALIGNMENT) safelen(512)
                                 for (LI r = 0; r < num_dofs_per_block; r++){
+                                    y[r] += alpha * x[r];
+                                }
+                            }
+                        #elif VECTORIZED_OPENMP_PADDING
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                const DT alpha = ue[c];
+                                const DT* x = &m_epMat[eid][block_ID][c * (num_dofs_per_block + nPads)];
+                                DT* y = ve;
+                                #pragma omp simd aligned(x, y : ALIGNMENT) safelen(512)
+                                for (LI r = 0; r < (num_dofs_per_block + nPads); r++){
                                     y[r] += alpha * x[r];
                                 }
                             }
@@ -2823,7 +2985,7 @@ namespace par {
                             timing_aMat[static_cast<int>(PROFILER::MATVEC_ACC)].start();
                         #endif
                         // accumulate element vector ve to structure vector v
-                        for (unsigned int r = 0; r < num_dofs_per_block; r++){
+                        for (LI r = 0; r < num_dofs_per_block; r++){
                             rowID = m_uipLocalMap[eid][block_row_offset + r];
                             v[rowID] += ve[r];
                         }
@@ -2935,7 +3097,7 @@ namespace par {
 
         // copy ddg (ghosted) into (non-ghosted) dd
         ghost_to_local(dd, ddg);
-        /*for (unsigned int i = 0; i < m_uiNumDofs; i++){
+        /*for (LI i = 0; i < m_uiNumDofs; i++){
             printf("[%d,%d,%f]\n",m_uiRank,i,dd[i]);
         }*/
 
@@ -2969,8 +3131,8 @@ namespace par {
 
         /*std::ofstream myfile;
         myfile.open("blk_diag.dat");
-        for (unsigned int r = 0; r < local_size; r++){
-            for (unsigned int c = 0; c < local_size; c++){
+        for (LI r = 0; r < local_size; r++){
+            for (LI c = 0; c < local_size; c++){
                 //printf("[r%d][%d,%d]= %f; ",m_uiRank,r,c,aag[r][c]);
                 myfile << "[r" << m_uiRank << "][" << r << "," << c << "]= " << aag[r][c] << " , ";
             }
@@ -3063,8 +3225,8 @@ namespace par {
         double** aag;
         create_mat(aag, false, 0.0); //allocate, not include ghost nodes
         mat_get_diagonal_block_dense(aag);
-        for (unsigned int i = 0; i < local_size; i++){
-            for (unsigned int j = 0; j < local_size; j++){
+        for (LI i = 0; i < local_size; i++){
+            for (LI j = 0; j < local_size; j++){
                 aa[(i*local_size) + j] = aag[i][j];
             }
         }
@@ -3132,16 +3294,6 @@ namespace par {
             ownedFreeDofs.erase(std::unique(ownedFreeDofs.begin(),ownedFreeDofs.end()), ownedFreeDofs.end());
         }
 
-        if (m_uiRank == 0){
-            if (m_BcMeth == BC_METH::BC_IMATRIX){
-                printf("Apply BC: use identity-matrix method\n");
-            } else if (m_BcMeth == BC_METH::BC_PENALTY){
-                printf("Apply BC: use penaly method\n");
-            } else {
-                return Error::UNKNOWN_BC_METH;
-            }
-        }
-
         if (m_BcMeth == BC_METH::BC_IMATRIX){
             // allocate KfcUc with size = m_uiNumDofs, this will be subtracted from rhs to apply bc
             this->petsc_create_vec( KfcUcVec );
@@ -3149,6 +3301,9 @@ namespace par {
         } else if (m_BcMeth == BC_METH::BC_PENALTY){
             // initialize the trace of matrix, used to form the (big) penalty number
             m_dtTraceK = 0.0;
+
+        } else {
+            return Error::UNKNOWN_BC_METH;
         }
 
         // allocate memory for Uc used in matvec_ghosted when applying BC
@@ -3163,12 +3318,10 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::apply_bc_diagonal(Vec diag) {
-        unsigned int num_nodes;
         PetscInt rowId;
 
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
-            num_nodes = m_uiDofsPerElem[eid];
-            for (unsigned int r = 0; r < num_nodes; r++){
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (LI r = 0; r < m_uiDofsPerElem[eid]; r++){
                 if (m_uipBdrMap[eid][r] == 1){
                     // global row ID
                     rowId = m_ulpMap[eid][r];
@@ -3188,19 +3341,19 @@ namespace par {
     // apply Dirichlet BC to block diagonal matrix
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::apply_bc_blkdiag(Mat* blkdiagMat) {
-        unsigned int num_nodes;
+        LI num_dofs_per_elem;
         PetscInt loc_rowId, loc_colId;
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid++){
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
             // total number of dofs per element eid
-            num_nodes = m_uiDofsPerElem[eid];
-            //printf("eid = %d, num_nodes = % d\n", eid, num_nodes);
+            num_dofs_per_elem = m_uiDofsPerElem[eid];
+
             // loop on all dofs of element
-            for (unsigned int r = 0; r < num_nodes; r++) {
+            for (LI r = 0; r < num_dofs_per_elem; r++) {
                 loc_rowId = m_uipLocalMap[eid][r];
                 // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
                 if ((loc_rowId >= m_uiDofLocalBegin) && (loc_rowId < m_uiDofLocalEnd)) {
                     if (m_uipBdrMap[eid][r] == 1) {
-                        for (unsigned int c = 0; c < num_nodes; c++) {
+                        for (LI c = 0; c < num_dofs_per_elem; c++) {
                             loc_colId = m_uipLocalMap[eid][c];
                             // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
                             if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd)) {
@@ -3224,7 +3377,7 @@ namespace par {
                             }
                         }
                     } else {
-                        for (unsigned int c = 0; c < num_nodes; c++) {
+                        for (LI c = 0; c < num_dofs_per_elem; c++) {
                             loc_colId = m_uipLocalMap[eid][c];
                             // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
                             if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd)) {
@@ -3252,7 +3405,6 @@ namespace par {
     Error aMatFree<DT,GI,LI>::apply_bc_rhs(Vec rhs){
 
         // set rows associated with constrained dofs to be equal to Uc
-        //LI num_nodes;
         PetscInt global_Id;
         PetscScalar value, value1, value2;
 
@@ -3267,12 +3419,23 @@ namespace par {
             PetscScalar temp;
             bool bdrFlag, rowFlag;
 
+            #ifdef VECTORIZED_OPENMP_PADDING
+            unsigned int nPads = 0;
+            #endif
+
             for (LI eid = 0; eid < m_uiNumElems; eid++){
                 block_dims = (LI)sqrt(m_epMat[eid].size());
                 assert((block_dims*block_dims) == m_epMat[eid].size());
                 LI block_row_offset = 0;
                 LI block_col_offset = 0;
                 num_dofs_per_block = m_uiDofsPerElem[eid]/block_dims;
+
+                #ifdef VECTORIZED_OPENMP_PADDING
+                //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+                if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                    nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+                }
+                #endif
 
                 // clear the vectors storing values of KfcUc for element eid
                 KfcUc_elem.clear();
@@ -3294,9 +3457,12 @@ namespace par {
                                         // continue if column is associated with a constrained dof
                                         if (m_uipBdrMap[eid][block_j * num_dofs_per_block + c] == 1){
                                             // accumulate Kfc[r,c]*Uc[c]
-                                            #if defined(AVX_512) || defined(AVX_256) || defined(OMP_SIMD)
+                                            #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
                                                 // block m_epMat[eid][block_index] is stored in column-major
                                                 temp += m_epMat[eid][block_index][(c*num_dofs_per_block) + r] *
+                                                        m_dtPresValMap[eid][block_j * num_dofs_per_block + c];
+                                            #elif VECTORIZED_OPENMP_PADDING
+                                                temp += m_epMat[eid][block_index][c*(num_dofs_per_block + nPads) + r] *
                                                         m_dtPresValMap[eid][block_j * num_dofs_per_block + c];
                                             #else
                                                 // block m_epMat[eid][block_index] is stored in row-major
@@ -3523,7 +3689,7 @@ namespace par {
         MatDestroy(&m_pMatFree);
 
         return Error::SUCCESS;
-    }
+    }//aMatFree::petsc_dump_mat
 
     //==============================================================================================================
     template <typename DT,typename GI, typename LI>
@@ -3569,7 +3735,7 @@ namespace par {
             m_ulpMap[eid] = new GI [m_uiDofsPerElem[eid]];
         }
         for( LI eid = 0; eid < m_uiNumElems; eid++ ){
-            for( unsigned int nid = 0; nid < m_uiDofsPerElem[eid]; nid++ ){
+            for( LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++ ){
                 m_ulpMap[eid][nid] = rank_to_global_map[element_to_rank_map[eid][nid]];
             }
         }
@@ -3673,19 +3839,19 @@ namespace par {
         #endif
 
         // this is number of dofs per block:
-        unsigned int num_rows = e_mat.rows();
-        assert(num_rows == e_mat.cols());
+        LI num_dofs_per_block = e_mat.rows();
+        assert(num_dofs_per_block == e_mat.cols());
 
         // assemble global matrix (petsc matrix)
         // now set values ...
-        std::vector<PetscScalar> values(num_rows);
-        std::vector<PetscInt> colIndices(num_rows);
+        std::vector<PetscScalar> values(num_dofs_per_block);
+        std::vector<PetscInt> colIndices(num_dofs_per_block);
         PetscInt rowId;
-        for (unsigned int r = 0; r < num_rows; ++r) {
+        for (LI r = 0; r < num_dofs_per_block; ++r) {
             // this ONLY WORKS with assumption that all blocks have the same number of dofs (that is true for RXFEM ?)
-            rowId = m_ulpMap[eid][block_i * num_rows + r];
-            for (unsigned int c = 0; c < num_rows; ++c) {
-                colIndices[c] = m_ulpMap[eid][block_j * num_rows + c];
+            rowId = m_ulpMap[eid][block_i * num_dofs_per_block + r];
+            for (LI c = 0; c < num_dofs_per_block; ++c) {
+                colIndices[c] = m_ulpMap[eid][block_j * num_dofs_per_block + c];
                 values[c] = e_mat(r,c);
             } // c
             //MatSetValues(m_pMat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
@@ -3694,7 +3860,7 @@ namespace par {
 
         // compute the trace of matrix for penalty method
         if (m_BcMeth == BC_METH::BC_PENALTY){
-            for (LI r = 0; r < num_rows; r++) m_dtTraceK += e_mat(r,r);
+            for (LI r = 0; r < num_dofs_per_block; r++) m_dtTraceK += e_mat(r,r);
         }
 
         #ifdef AMAT_PROFILER
@@ -3811,16 +3977,16 @@ namespace par {
     // apply Dirichlet bc by modifying matrix, only used in matrix-based approach
     template <typename DT, typename GI, typename LI>
     Error aMatBased<DT,GI,LI>::apply_bc_mat() {
-        unsigned int num_nodes;
+        LI num_dofs_per_elem;
         PetscInt rowId, colId;
 
-        for (unsigned int eid = 0; eid < m_uiNumElems; eid ++) {
-            num_nodes = m_uiDofsPerElem[eid];
+        for (LI eid = 0; eid < m_uiNumElems; eid ++) {
+            num_dofs_per_elem = m_uiDofsPerElem[eid];
             if (m_BcMeth == BC_METH::BC_IMATRIX){
-                for (unsigned int r = 0; r < num_nodes; r++) {
+                for (LI r = 0; r < num_dofs_per_elem; r++) {
                     rowId = m_ulpMap[eid][r];
                     if (m_uipBdrMap[eid][r] == 1) {
-                        for (unsigned int c = 0; c < num_nodes; c++) {
+                        for (LI c = 0; c < num_dofs_per_elem; c++) {
                             colId = m_ulpMap[eid][c];
                             if (colId == rowId) {
                                 MatSetValue(m_pMat, rowId, colId, 1.0, INSERT_VALUES);
@@ -3829,7 +3995,7 @@ namespace par {
                             }
                         }
                     } else {
-                        for (unsigned int c = 0; c < num_nodes; c++) {
+                        for (LI c = 0; c < num_dofs_per_elem; c++) {
                             colId = m_ulpMap[eid][c];
                             if (m_uipBdrMap[eid][c] == 1) {
                                 MatSetValue(m_pMat, rowId, colId, 0.0, INSERT_VALUES);
@@ -3838,10 +4004,10 @@ namespace par {
                     }
                 }
             } else if (m_BcMeth == BC_METH::BC_PENALTY){
-                for (unsigned int r = 0; r < num_nodes; r++){
+                for (LI r = 0; r < num_dofs_per_elem; r++){
                     rowId = m_ulpMap[eid][r];
                     if (m_uipBdrMap[eid][r] == 1) {
-                        for (unsigned int c = 0; c < num_nodes; c++) {
+                        for (LI c = 0; c < num_dofs_per_elem; c++) {
                             colId = m_ulpMap[eid][c];
                             if (colId == rowId) {
                                 MatSetValue(m_pMat, rowId, colId, PENALTY_FACTOR * m_dtTraceK, INSERT_VALUES);
@@ -3859,7 +4025,6 @@ namespace par {
     Error aMatBased<DT,GI,LI>::apply_bc_rhs(Vec rhs){
 
         // set rows associated with constrained dofs to be equal to Uc
-        //LI num_nodes;
         PetscInt global_Id;
         PetscScalar value, value1, value2;
 

@@ -29,10 +29,11 @@ void fe_hex8(double* fe, const double* xe, const double* xw, const unsigned int 
 /**
  * @brief: element load vector of 8-node hex element for Poisson equation, use Eigen vector
  * @param[in] xe nodal coordinates
+ * @param[in] be nodal body force
  * @param[out] fe element load vector
  * @author Han Tran
 * */
-void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe, const double* xw, const unsigned int NGT);
+void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe, const double* be, const double* xw, const unsigned int NGT);
 
 /**
  * @brief: element load vector of 8-node hex element for 3D elasticity, due to body force

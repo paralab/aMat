@@ -98,22 +98,36 @@ int main(int argc, char *argv[]){
     MPI_Comm_size(comm, &size);
 
     if(!rank) {
-        std::cout<<"============ parameters read  =======================\n";
-        std::cout << "\t\tNumber of elements Nex = " << Nex << "; Ney = " << Ney << "\n";
+        std::cout << "============ parameters read  =======================\n";
+        std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << "\n";
         std::cout << "\t\tLx : "<< Lx << " Ly: " << Ly << "\n";
-        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
-        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
         std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
+        std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
-
-    #ifdef AVX_512
-    if (!rank) {std::cout << "\t\tRun with AVX_512\n";}
-    #elif AVX_256
-    if (!rank) {std::cout << "\t\tRun with AVX_256\n";}
-    #elif OMP_SIMD
-    if (!rank) {std::cout << "\t\tRun with OMP_SIMD\n";}
+    
+    #ifdef VECTORIZED_AVX512
+    if (!rank) {std::cout << "\t\tVectorization using AVX_512\n";}
+    #elif VECTORIZED_AVX256
+    if (!rank) {std::cout << "\t\tVectorization using AVX_256\n";}
+    #elif VECTORIZED_OPENMP
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP\n";}
+    #elif VECTORIZED_OPENMP_PADDING
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP with paddings\n";}
     #else
-    if (!rank) {std::cout << "\t\tRun with no vectorization\n";}
+    if (!rank) {std::cout << "\t\tNo vectorization\n";}
+    #endif
+
+    #ifdef HYBRID_PARALLEL
+    if (!rank) {
+        std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
+        std::cout << "\t\tMax number of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #else
+    if (!rank) {
+        std::cout << "\t\tOnly MPI parallel\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
     #endif
 
     int rc;
@@ -363,11 +377,18 @@ int main(int argc, char *argv[]){
         stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
 
+    char fname[256];
+    sprintf(fname,"matrix_%d.dat",matType);
+    stMat->petsc_dump_mat(fname);
+
     // These are needed because we used ADD_VALUES for rhs when assembling
     // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
     VecAssemblyBegin(rhs);
     VecAssemblyEnd(rhs);
 
+    sprintf(fname,"rhs_beforebc_%d.dat",matType);
+    stMat->petsc_dump_vec(rhs,fname);
+    
     // apply bc for rhs: this must be done before applying bc for the matrix
     // because we use the original matrix to compute KfcUc in matrix-based method
     stMat->apply_bc(rhs); // this includes applying bc for matrix in matrix-based approach
@@ -380,6 +401,9 @@ int main(int argc, char *argv[]){
         stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
     }
+
+    sprintf(fname,"rhs_%d.dat",matType);
+    stMat->petsc_dump_vec(rhs,fname);
 
     // solve
     stMat->petsc_solve((const Vec) rhs, out);

@@ -35,10 +35,12 @@ set(SOURCE_FILES
 # cmake options, which will be visible at ccmake ../
 option(BUILD_WITH_PETSC "Build code with the petsc" ON)
 option(AMAT_PROFILER "turn on the amat profiler counters" OFF)
-option(AVX_512 "turn on use AVX-512" OFF)
-option(AVX_256 "turn on use AVX-256" OFF)
-option(OMP_SIMD "turn on use OMP-SIMD" OFF)
-option(USE_OMP "turn on use OMP" OFF)
+option(VECTORIZED_AVX512 "turn on use AVX-512" OFF)
+option(VECTORIZED_AVX256 "turn on use AVX-256" OFF)
+option(VECTORIZED_OPENMP "turn on use OMP-SIMD" OFF)
+option(VECTORIZED_OPENMP_PADDING "turn on use OMP-SIMD-PADDING" OFF)
+
+option(HYBRID_PARALLEL "turn on use OMP" ON)
 
 # if BUILD_WITH_PETSC ON , #define BUILD_WITH_PETSC
 if(BUILD_WITH_PETSC)
@@ -52,27 +54,31 @@ if(AMAT_PROFILER)
     add_definitions(-DAMAT_PROFILER)
 endif(AMAT_PROFILER)
 
-if(AVX_512)
-    add_definitions(-DAVX_512)
+if(VECTORIZED_AVX512)
+    add_definitions(-DVECTORIZED_AVX512)
     #set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=corei7-avx")
     #set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=corei7-avx")
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-endif(AVX_512)
+endif(VECTORIZED_AVX512)
 
-if(AVX_256)
-    add_definitions(-DAVX_256)
+if(VECTORIZED_AVX256)
+    add_definitions(-DVECTORIZED_AVX256)
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-endif(AVX_256)
+endif(VECTORIZED_AVX256)
 
-if(OMP_SIMD)
-    add_definitions(-DOMP_SIMD)
-endif(OMP_SIMD)
+if(VECTORIZED_OPENMP)
+    add_definitions(-DVECTORIZED_OPENMP)
+endif(VECTORIZED_OPENMP)
 
-if(USE_OMP)
-    add_definitions(-DUSE_OMP)
-endif(USE_OMP)
+if(VECTORIZED_OPENMP_PADDING)
+    add_definitions(-DVECTORIZED_OPENMP_PADDING)
+endif(VECTORIZED_OPENMP_PADDING)
+
+if(HYBRID_PARALLEL)
+    add_definitions(-DHYBRID_PARALLEL)
+endif(HYBRID_PARALLEL)
 
 #set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -qopt-report=5 -qopt-report-phase=vec -qopt-report-file=stdout")
 #set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -qopt-report=5 -qopt-report-phase=vec -qopt-report-file=stdout")
@@ -102,12 +108,6 @@ target_include_directories(ex1 PUBLIC include)
 target_include_directories(ex1 PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(ex1 PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(ex1 ${MPI_LIBRARIES} m)
-
-add_executable(ex1a src/ex1a.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
-target_include_directories(ex1a PUBLIC include)
-target_include_directories(ex1a PRIVATE ${MPI_INCLUDE_PATH})
-target_include_directories(ex1a PRIVATE ${EIGEN_HEADER_DIR})
-target_link_libraries(ex1a ${MPI_LIBRARIES} m)
 
 add_executable(ex2 src/ex2.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(ex2 PUBLIC include)
@@ -139,9 +139,6 @@ if(BUILD_WITH_PETSC)
 
     target_include_directories(ex1 PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(ex1 ${PETSC_LIBRARIES})
-
-    target_include_directories(ex1a PUBLIC ${PETSC_INCLUDES})
-    target_link_libraries(ex1a ${PETSC_LIBRARIES})
 
     target_include_directories(ex2 PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(ex2 ${PETSC_LIBRARIES})

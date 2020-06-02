@@ -129,7 +129,7 @@ int main( int argc, char *argv[] ) {
 
     // material properties of alumina
     //const double E = 300.0; // GPa
-    const double E = 1.0;
+    const double E = 1.0E6;
     //const double nu = 0.2;
     const double nu = 0.3;
     //const double rho = 3950;// kg.m^-3
@@ -149,13 +149,13 @@ int main( int argc, char *argv[] ) {
     const unsigned int bcMethod = atoi(argv[5]); // method of applying BC
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
+    const double Lx = 1.0, Ly = 1.0, Lz = 100.0;
 
     // element sizes
     hx = Lx/double(Nex);// element size in x direction
     hy = Ly/double(Ney);// element size in y direction
     hz = Lz/double(Nez);// element size in z direction
-
+    
     const double zero_number = 1E-12;
 
     PetscInitialize(&argc, &argv, NULL, NULL);
@@ -193,21 +193,33 @@ int main( int argc, char *argv[] ) {
         std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
         std::cout << "\t\tLx : "<< Lx << " Ly: " << Ly << " Lz: " << Lz << "\n";
         std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
-        std::cout << "\t\tBC method: " << bcMethod << "\n";
-        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
-        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
-
-    #ifdef AVX_512
-    if (!rank) {std::cout << "\t\tUse AVX_512\n";}
-    #elif AVX_256
-    if (!rank) {std::cout << "\t\tUse AVX_256\n";}
-    #elif OMP_SIMD
-    if (!rank) {std::cout << "\t\tUse OMP_SIMD\n";}
+    
+    #ifdef VECTORIZED_AVX512
+    if (!rank) {std::cout << "\t\tVectorization using AVX_512\n";}
+    #elif VECTORIZED_AVX256
+    if (!rank) {std::cout << "\t\tVectorization using AVX_256\n";}
+    #elif VECTORIZED_OPENMP
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP\n";}
+    #elif VECTORIZED_OPENMP_PADDING
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP with paddings\n";}
     #else
     if (!rank) {std::cout << "\t\tNo vectorization\n";}
     #endif
-    //if(!rank) { std::cout<<"=====================================================\n"; }
+
+    #ifdef HYBRID_PARALLEL
+    if (!rank) {
+        std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
+        std::cout << "\t\tMax number of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #else
+    if (!rank) {
+        std::cout << "\t\tOnly MPI parallel\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #endif
 
     if( rank == 0 ) {
         if (size > Nez) {
@@ -323,11 +335,6 @@ int main( int argc, char *argv[] ) {
             }
         }
     }
-    /* for (unsigned int eid = 0; eid < nelem; eid++){
-        printf("[rank %d] localMap[%d][0,1,2,3]= %d,%d,%d,%d; [4,5,6,7]= %d,%d,%d,%d\n", rank, eid, localMap[eid][0],localMap[eid][1],localMap[eid][2],localMap[eid][3],localMap[eid][4],localMap[eid][5],localMap[eid][6],localMap[eid][7]);
-        printf("[rank %d] localMap[%d][8,9,10,11]= %d,%d,%d,%d; [12,13,14,15]= %d,%d,%d,%d\n", rank, eid, localMap[eid][8],localMap[eid][9],localMap[eid][10],localMap[eid][11],localMap[eid][12],localMap[eid][13],localMap[eid][14],localMap[eid][15]);
-        printf("[rank %d] localMap[%d][16,17,18,19]= %d,%d,%d,%d\n", rank, eid, localMap[eid][16],localMap[eid][17],localMap[eid][18],localMap[eid][19]);
-    } */
 
     // map from local dof to global dof
     unsigned int* * localDofMap;
@@ -371,7 +378,7 @@ int main( int argc, char *argv[] ) {
     ndofs_total = nnode_total * NDOF_PER_NODE;
     if (rank == 0) printf("Total dofs = %d\n",ndofs_total);
     
-
+    
     // build global map from local map
     unsigned long gNodeId;
     unsigned long int* * globalMap;
@@ -388,12 +395,7 @@ int main( int argc, char *argv[] ) {
             }
         }
     }
-    /* for (unsigned int eid = 0; eid < nelem; eid++){
-        printf("[rank %d, eid %d] = %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d\n", rank, eid,
-        globalMap[eid][0], globalMap[eid][1], globalMap[eid][2], globalMap[eid][3], globalMap[eid][4], globalMap[eid][5], globalMap[eid][6],
-        globalMap[eid][7], globalMap[eid][8], globalMap[eid][9], globalMap[eid][10], globalMap[eid][11], globalMap[eid][12], globalMap[eid][13],
-        globalMap[eid][14], globalMap[eid][15], globalMap[eid][16], globalMap[eid][17], globalMap[eid][18], globalMap[eid][19]);
-    } */
+    
 
     // map from elemental dof to global dof
     unsigned long int* * globalDofMap;
@@ -735,11 +737,6 @@ int main( int argc, char *argv[] ) {
         // compute element force vector due to body force
         fe_hex20_iso(fee[0], xe, beN, intData.Pts_n_Wts, NGT);
 
-        /* for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
-            printf("[e %d][n %d] fee= %f, %f, %f\n",eid,nid,fee[0](nid * NDOF_PER_NODE ),
-            fee[0](nid * NDOF_PER_NODE +1),fee[0](nid * NDOF_PER_NODE +2));
-        } */
-
         // assemble element load vector due to body force
         if (matType == 0) petsc_time.start();
         else aMat_time.start();
@@ -766,91 +763,83 @@ int main( int argc, char *argv[] ) {
         petsc_time.stop();
     }
 
+    // char fname[256];
+    // sprintf(fname,"matrix_%d.dat",matType);
+    // stMat->petsc_dump_mat(fname);
+
     // Pestc begins and completes assembling the global load vector
-    if (matType != 0){
-        aMat_time.start();
-    } else {
-        petsc_time.start();
-    }
     // These are needed because we used ADD_VALUES for rhs when assembling
     // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
+    if (matType != 0) aMat_time.start();
+    else petsc_time.start();
+
     VecAssemblyBegin(rhs);
     VecAssemblyEnd(rhs);
-    if (matType != 0){
-        aMat_time.stop();
-    } else {
-        petsc_time.stop();
-    }
-
-    if (matType != 0){
-        aMat_time.start();
-    } else {
-        petsc_time.start();
-    }
     // apply bc for rhs: this must be done before applying bc for the matrix
     // because we use the original matrix to compute KfcUc in matrix-based method
     stMat->apply_bc(rhs);
     VecAssemblyBegin(rhs);
     VecAssemblyEnd(rhs);
-    if (matType != 0){
-        aMat_time.stop();
-    } else {
-        petsc_time.stop();
-    }
 
-    //char fname[256];
-    // apply dirichlet BCs to the matrix
+    if (matType != 0) aMat_time.stop();
+    else petsc_time.stop();
+
+    // this is needed because the matrix is applied bc in apply_bc(rhs)
     if (matType == 0){
         petsc_time.start();
-        //stMat.apply_bc_mat();
         stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
         petsc_time.stop();
-        //sprintf(fname,"matrix_%d.dat",size);
-        //stMat.dump_mat(fname);
     }
-
-
-    //sprintf(fname,"rhsVec_%d.dat",size);
-    //stMat.dump_vec(rhs,fname);
-
+    
     // solve
-    if (matType != 0) {
-        aMat_time.start();
-    } else {
-        petsc_time.start();
-    }
+    if (matType != 0) aMat_time.start();
+    else petsc_time.start();
     stMat->petsc_solve((const Vec) rhs, out);
-    VecAssemblyBegin(out);
-    VecAssemblyEnd(out);
-    if (matType != 0){
-        aMat_time.stop();
-    } else {
-        petsc_time.stop();
-    }
+    if (matType != 0) aMat_time.stop();
+    else petsc_time.stop();
 
     total_time.stop();
 
     // display timing
     if (matType != 0){
-        long double aMat_maxTime;
-        MPI_Reduce(&aMat_time.seconds, &aMat_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+        if (size > 1){
+            long double aMat_maxTime;
+            MPI_Reduce(&aMat_time.seconds, &aMat_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0){
+                std::cout << "aMat time = " << aMat_maxTime << "\n";
+            }
+        } else {
+            if (rank == 0){
+                std::cout << "aMat time = " << aMat_time.seconds << "\n";
+            }
+        }
+        
+    } else {
+        if (size > 1){
+            long double petsc_maxTime;
+            MPI_Reduce(&petsc_time.seconds, &petsc_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0){
+                std::cout << "PETSC time = " << petsc_maxTime << "\n";
+            }
+        } else {
+            if (rank == 0){
+                std::cout << "PETSC time = " << petsc_time.seconds << "\n";
+            }
+        }
+    }
+    if (size > 1){
+        long double total_time_max;
+        MPI_Reduce(&total_time.seconds, &total_time_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
         if (rank == 0){
-            std::cout << "aMat time = " << aMat_maxTime << "\n";
+            std::cout << "total time = " << total_time_max << "\n";
         }
     } else {
-        long double petsc_maxTime;
-        MPI_Reduce(&petsc_time.seconds, &petsc_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
         if (rank == 0){
-            std::cout << "PETSC time = " << petsc_maxTime << "\n";
+            std::cout << "total time = " << total_time.seconds << "\n";
         }
     }
-    long double total_time_max;
-    MPI_Reduce(&total_time.seconds, &total_time_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
-    if (rank == 0){
-        std::cout << "total time = " << total_time_max << "\n";
-    }
-
+    
     //sprintf(fname,"outVec_%d.dat",size);
     //stMat.dump_vec(out,fname);
 

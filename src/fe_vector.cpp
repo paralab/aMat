@@ -77,7 +77,7 @@ void fe_hex8(double* fe,const double* xe, const double* xw, const unsigned int N
 
 
 
-void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe, const double* xw, const unsigned int NGT) {
+void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe, const double* be, const double* xw, const unsigned int NGT) {
 
     double x[3], w[3]; // x=[xi,eta,zeta], w=[weight_xi, weight_eta,weight_zeta]
     double *N;
@@ -129,6 +129,14 @@ void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe, const double* 
                     exit(0);
                 }
 
+                // compute element force vector using "approximation" of body force
+                for (unsigned int iN = 0; iN < 8; iN++){
+                    for (unsigned int jN = 0; jN < 8; jN++){
+                        fe(iN) += N[iN] * N[jN] * jaco * w[1] * w[0] * be[jN];
+                    }
+                }
+
+                /* // compute element force vector using analytic function of body force
                 // physical coordinates of Gauss points
                 xp = 0.0;
                 yp = 0.0;
@@ -139,12 +147,13 @@ void fe_hex8_eig(Eigen::Matrix<double,8,1> &fe, const double* xe, const double* 
                     zp += xe[(n*3) + 2] * N[n];
                 }
                 // loading function (USER-DEFINED, ad-hoc at the moment, fixme)
-                force = sin(2*M_PI*xp) * sin(2*M_PI*yp) * sin(2*M_PI*zp);
+                //force = sin(2*M_PI*xp) * sin(2*M_PI*yp) * sin(2*M_PI*zp); // this is for fem3d
+                force = 3.0*sin(xp) * sin(yp) * sin(zp);   // this is for fem3da
 
                 // fe vector
                 for (unsigned int n = 0; n < 8; n++){
                     fe(n) += force * N[n] * jaco * w[2] * w[1] * w[0];
-                }
+                } */
 
             } // k integration
         } // j integration

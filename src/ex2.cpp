@@ -37,8 +37,6 @@
 #endif
 
 #include "Eigen/Dense"
-
-#include "shfunction.hpp"
 #include "ke_matrix.hpp"
 #include "fe_vector.hpp"
 #include "aMat.hpp"
@@ -116,22 +114,36 @@ int main(int argc, char *argv[]){
     MPI_Comm_size(comm, &size);
 
     if(!rank) {
-        std::cout<<"============ parameters read  =======================\n";
-        std::cout << "\t\tNumber of elements Nex = " << Nex << "; Ney = " << Ney << "\n";
+        std::cout << "============ parameters read  =======================\n";
+        std::cout << "\t\tNex : "<< Nex << " Ney: " << Ney << "\n";
+        std::cout << "\t\tLx : "<< Lx << " Ly: " << Ly << "\n";
         std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
-        std::cout << "\t\tBC method: " << bcMethod << "\n";
-        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
-        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
-
-    #ifdef AVX_512
-    if (!rank) {std::cout << "\t\tUse AVX_512\n";}
-    #elif AVX_256
-    if (!rank) {std::cout << "\t\tUse AVX_256\n";}
-    #elif OMP_SIMD
-    if (!rank) {std::cout << "\t\tUse OMP_SIMD\n";}
+    
+    #ifdef VECTORIZED_AVX512
+    if (!rank) {std::cout << "\t\tVectorization using AVX_512\n";}
+    #elif VECTORIZED_AVX256
+    if (!rank) {std::cout << "\t\tVectorization using AVX_256\n";}
+    #elif VECTORIZED_OPENMP
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP\n";}
+    #elif VECTORIZED_OPENMP_PADDING
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP with paddings\n";}
     #else
     if (!rank) {std::cout << "\t\tNo vectorization\n";}
+    #endif
+
+    #ifdef HYBRID_PARALLEL
+    if (!rank) {
+        std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
+        std::cout << "\t\tMax number of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #else
+    if (!rank) {
+        std::cout << "\t\tOnly MPI parallel\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
     #endif
 
     // partition in y direction...

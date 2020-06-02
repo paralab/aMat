@@ -74,7 +74,7 @@ int main(int argc, char *argv[]){
     const double h = L/double(Ne);
 
     const double zero_number = 1E-12;
-
+    
     // MPI initialize
     PetscInitialize(&argc, &argv, NULL, NULL);
     int rank, size;
@@ -83,21 +83,36 @@ int main(int argc, char *argv[]){
     MPI_Comm_size(comm, &size);
 
     if(!rank) {
-        std::cout<<"============ parameters read  =======================\n";
-        std::cout << "\t\tNumber of elements Ne = " << Ne << "\n";
-        std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
+        std::cout << "============ parameters read  =======================\n";
+        std::cout << "\t\tNe : "<< Ne << "\n";
         std::cout << "\t\tL : "<< L << "\n";
-        std::cout<<"\t\tRunning with: "<< size << " ranks \n";
-        std::cout<<"\t\tNumber of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
+        std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
-    #ifdef AVX_512
-    if (!rank) {std::cout << "\t\tRun with AVX_512\n";}
-    #elif AVX_256
-    if (!rank) {std::cout << "\t\tRun with AVX_256\n";}
-    #elif OMP_SIMD
-    if (!rank) {std::cout << "\t\tRun with OMP_SIMD\n";}
+    
+    #ifdef VECTORIZED_AVX512
+    if (!rank) {std::cout << "\t\tVectorization using AVX_512\n";}
+    #elif VECTORIZED_AVX256
+    if (!rank) {std::cout << "\t\tVectorization using AVX_256\n";}
+    #elif VECTORIZED_OPENMP
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP\n";}
+    #elif VECTORIZED_OPENMP_PADDING
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP with paddings\n";}
     #else
-    if (!rank) {std::cout << "\t\tRun with no vectorization\n";}
+    if (!rank) {std::cout << "\t\tNo vectorization\n";}
+    #endif
+
+    #ifdef HYBRID_PARALLEL
+    if (!rank) {
+        std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
+        std::cout << "\t\tMax number of threads: "<< omp_get_max_threads() << "\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
+    #else
+    if (!rank) {
+        std::cout << "\t\tOnly MPI parallel\n";
+        std::cout << "\t\tNumber of MPI processes: "<< size << "\n";
+    }
     #endif
 
     int rc;
@@ -108,7 +123,7 @@ int main(int argc, char *argv[]){
             exit(0);
         }
     }
-
+    
     // partition in x direction...
     unsigned int emin = 0, emax = 0;
     unsigned int nelem;
@@ -293,7 +308,7 @@ int main(int argc, char *argv[]){
     } else {
         stMat = new par::aMatFree<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
     }
-
+    
     stMat->set_comm(comm);
     stMat->set_map(nelem, localMap, nnode_per_elem, numLocalNodes, local2GlobalMap, start_global_node, end_global_node, nnode_total);
     stMat->set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
@@ -313,7 +328,8 @@ int main(int argc, char *argv[]){
         fe(1) = 0.0;
         stMat->petsc_set_element_vec(rhs, eid, fe, 0, ADD_VALUES);
     }
-
+    char fname[256];
+    sprintf(fname,"matrix_%d.dat",size);
     // Pestc begins and completes assembling the global stiffness matrix
     if (matType == 0){
         stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
@@ -336,15 +352,16 @@ int main(int argc, char *argv[]){
         //stMat->apply_bc_mat();
         stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
         stMat->petsc_finalize_mat(MAT_FINAL_ASSEMBLY);
+        stMat->petsc_dump_mat(fname);
     }
-
+    
     // solve
     stMat->petsc_solve((const Vec) rhs, out);
 
-    // display solution on screen
-    if (!rank) std::cout << "Computed solution = \n";
+    // display solution on screen 
+    if (!rank) std::cout << "Computed solution = \n";      
     stMat->petsc_dump_vec(out);
-
+    
     // following exact solution is only for the problem of u(0) = 0 and u(L) = 1
     // exact solution: u(x) = (1/L)*x
     Vec sol_exact;
