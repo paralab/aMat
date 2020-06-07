@@ -35,12 +35,12 @@ set(SOURCE_FILES
 # cmake options, which will be visible at ccmake ../
 option(BUILD_WITH_PETSC "Build code with the petsc" ON)
 option(AMAT_PROFILER "turn on the amat profiler counters" OFF)
-option(VECTORIZED_AVX512 "turn on use AVX-512" OFF)
-option(VECTORIZED_AVX256 "turn on use AVX-256" OFF)
-option(VECTORIZED_OPENMP "turn on use OMP-SIMD" OFF)
-option(VECTORIZED_OPENMP_PADDING "turn on use OMP-SIMD-PADDING" OFF)
+option(VECTORIZED_AVX512 "vectorization using AVX-512" OFF)
+option(VECTORIZED_AVX256 "vectorization using AVX-256" OFF)
+option(VECTORIZED_OPENMP "vectorization using OpenMP SIMD" OFF)
+option(VECTORIZED_OPENMP_ALIGNED "vectorization using OpenMP SIMD with aligned memory" OFF)
 
-option(HYBRID_PARALLEL "turn on use OMP" ON)
+option(HYBRID_PARALLEL "hybrid parallelism OpenMP and MPI" ON)
 
 # if BUILD_WITH_PETSC ON , #define BUILD_WITH_PETSC
 if(BUILD_WITH_PETSC)
@@ -72,9 +72,9 @@ if(VECTORIZED_OPENMP)
     add_definitions(-DVECTORIZED_OPENMP)
 endif(VECTORIZED_OPENMP)
 
-if(VECTORIZED_OPENMP_PADDING)
-    add_definitions(-DVECTORIZED_OPENMP_PADDING)
-endif(VECTORIZED_OPENMP_PADDING)
+if(VECTORIZED_OPENMP_ALIGNED)
+    add_definitions(-DVECTORIZED_OPENMP_ALIGNED)
+endif(VECTORIZED_OPENMP_ALIGNED)
 
 if(HYBRID_PARALLEL)
     add_definitions(-DHYBRID_PARALLEL)

@@ -32,22 +32,15 @@
 #include <stdlib.h>
 #include <iostream>
 
-// alternatives for vectorization, alignment = cache line
+// alternatives for vectorization, alignment = cacheline = vector register
 #ifdef VECTORIZED_AVX512
     #define SIMD_LENGTH (512/(sizeof(DT) * 8)) // length of vector register = 512 bytes
     #define ALIGNMENT 64
 #elif VECTORIZED_AVX256
     #define SIMD_LENGTH (256/(sizeof(DT) * 8)) // length of vector register = 256 bytes
     #define ALIGNMENT 64
-#elif VECTORIZED_OPENMP
-    #define SIMD_LENGTH (512/(sizeof(DT) * 8)) // could be deleted, openMP automatically detect length of vector register
-    #define ALIGNMENT 16
-#elif VECTORIZED_OPENMP_PADDING
-    #define SIMD_LENGTH (512/(sizeof(DT) * 8)) // could be deleted, openMP automatically detect length of vector register
+#elif VECTORIZED_OPENMP_ALIGNED
     #define ALIGNMENT 64
-#else
-    // this is not used since we do not align memory
-    #define ALIGNMENT 16
 #endif
 
 // number of nonzero terms in the matrix (used in matrix-base and block Jacobi preconditioning)
@@ -1315,7 +1308,7 @@ namespace par {
         }
 
         // get number of pads added to ve (where ve = block_matrix * ue)
-        #ifdef VECTORIZED_OPENMP_PADDING
+        #ifdef VECTORIZED_OPENMP_ALIGNED
             assert((ALIGNMENT % sizeof(DT)) == 0);
             if ((m_uiMaxDofsPerBlock % (ALIGNMENT/sizeof(DT))) != 0){
                 m_uiMaxNumPads = (ALIGNMENT/sizeof(DT)) - (m_uiMaxDofsPerBlock % (ALIGNMENT/sizeof(DT)));
@@ -1417,9 +1410,6 @@ namespace par {
 
         // build scatter map
         buildScatterMap();
-
-        // compute the largest number of dofs per elements, will be used for allocation ue and ve...
-        //get_max_dof_per_elem();
 
         return Error::SUCCESS;
     } // aMatFree::update_map()
@@ -1805,58 +1795,47 @@ namespace par {
         LI num_dofs_per_block = e_mat.rows();
         assert (num_dofs_per_block == e_mat.cols());
         
-        // allocate and align memory for elemental matrices
-        #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
-        m_epMat[eid][index] = create_aligned_array(ALIGNMENT, (num_dofs_per_block * num_dofs_per_block));
+        // allocate memory for elemental matrices
+        #ifdef VECTORIZED_OPENMP_ALIGNED
+            // compute number of paddings appended to each column of elemental block matrix so that each column is aligned with ALIGNMENT
+            assert((ALIGNMENT % sizeof(DT)) == 0);
+            unsigned int nPads = 0;
+            if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+            }
 
-        #elif VECTORIZED_OPENMP_PADDING
-        // number of paddings inserted to the end of each column of elemental block matrix
-        assert((ALIGNMENT % sizeof(DT)) == 0);
-        unsigned int nPads = 0;
-        //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
-        if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
-            nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
-        }
-
-        // allocate block matrix with added paddings
-        m_epMat[eid][index] = create_aligned_array(ALIGNMENT, ((num_dofs_per_block + nPads) * num_dofs_per_block));
-
+            // allocate block matrix with added paddings and aligned with ALIGNMENT
+            m_epMat[eid][index] = create_aligned_array(ALIGNMENT, ((num_dofs_per_block + nPads) * num_dofs_per_block));
         #else
-        m_epMat[eid][index] = (DT*)malloc((num_dofs_per_block * num_dofs_per_block) * sizeof(DT));
-
+            // allocate block matrix as normal
+            m_epMat[eid][index] = (DT*)malloc((num_dofs_per_block * num_dofs_per_block) * sizeof(DT));
         #endif
         
-        // store block matrix in column-major for simpd, row-major for non-simd
-        LI ind = 0;
-
+        // store block matrix in column-major for all methods of vectorization, row-major for non vectorization
         #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
-        for (LI c = 0; c < num_dofs_per_block; c++){
-            for (LI r = 0; r < num_dofs_per_block; r++){
-                m_epMat[eid][index][ind] = e_mat(r,c);
-                ind++;
-                //if (eid == 0) printf("e_mat[%d][%d,%d]= %f\n",eid,r,c,e_mat(r,c));
+            for (LI col = 0; col < num_dofs_per_block; col++){
+                for (LI row = 0; row < num_dofs_per_block; row++){
+                    m_epMat[eid][index][(col * num_dofs_per_block) + row] = e_mat(row,col);
+                    //if (eid == 0) printf("e_mat[%d][%d,%d]= %f\n",eid,r,c,e_mat(r,c));
+                }
             }
-        }
-
-        #elif VECTORIZED_OPENMP_PADDING
-        for (LI c = 0; c < num_dofs_per_block; c++){
-            for (LI r = 0; r < num_dofs_per_block; r++){
-                m_epMat[eid][index][c * (num_dofs_per_block + nPads) + r] = e_mat(r,c);
+        #elif VECTORIZED_OPENMP_ALIGNED
+            for (LI col = 0; col < num_dofs_per_block; col++){
+                for (LI row = 0; row < num_dofs_per_block; row++){
+                    m_epMat[eid][index][(col * (num_dofs_per_block + nPads)) + row] = e_mat(row,col);
+                }
             }
-        }
-
         #else
-        for (LI r = 0; r < num_dofs_per_block; r++){
-            for (LI c = 0; c < num_dofs_per_block; c++){
-                m_epMat[eid][index][ind] = e_mat(r,c);
-                ind++;
+            for (LI row = 0; row < num_dofs_per_block; row++){
+                for (LI col = 0; col < num_dofs_per_block; col++){
+                    m_epMat[eid][index][(row * num_dofs_per_block) + col] = e_mat(row,col);
+                }
             }
-        }
         #endif
         
         // compute the trace of matrix for penalty method
         if (m_BcMeth == BC_METH::BC_PENALTY){
-            for (LI r = 0; r < num_dofs_per_block; r++) m_dtTraceK += e_mat(r,r);
+            for (LI row = 0; row < num_dofs_per_block; row++) m_dtTraceK += e_mat(row,row);
         }
 
         return Error::SUCCESS;
@@ -1882,7 +1861,7 @@ namespace par {
     Error aMatFree<DT,GI,LI>::mat_get_diagonal_ghosted(DT* diag){
         LI rowID;
 
-        #ifdef VECTORIZED_OPENMP_PADDING
+        #ifdef VECTORIZED_OPENMP_ALIGNED
         unsigned int nPads = 0;
         #endif
 
@@ -1896,8 +1875,8 @@ namespace par {
             // number of dofs per block, must be the same for all blocks
             const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
 
-            #ifdef VECTORIZED_OPENMP_PADDING
-            //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+            // compute number of paddings appended to each column
+            #ifdef VECTORIZED_OPENMP_ALIGNED
             if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
                 nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
             }
@@ -1917,7 +1896,7 @@ namespace par {
                     rowID = m_uipLocalMap[eid][block_row_offset + r];
 
                     // get diagonal of elemental block matrix
-                    #ifdef VECTORIZED_OPENMP_PADDING
+                    #ifdef VECTORIZED_OPENMP_ALIGNED
                     diag[rowID] += m_epMat[eid][index][r * (num_dofs_per_block + nPads) + r];
                     #else
                     // diagonals are the same for both simd (column-major) and non-simd (row-major)
@@ -1978,7 +1957,7 @@ namespace par {
         DT value;
         LI ind = 0;
 
-        #ifdef VECTORIZED_OPENMP_PADDING
+        #ifdef VECTORIZED_OPENMP_ALIGNED
         unsigned int nPads = 0;
         #endif
 
@@ -2001,8 +1980,8 @@ namespace par {
 
             const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
 
-            #ifdef VECTORIZED_OPENMP_PADDING
-            //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+            #ifdef VECTORIZED_OPENMP_ALIGNED
+            // compute number of paddings appended to each column
             if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
                 nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
             }
@@ -2051,7 +2030,7 @@ namespace par {
                                     #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
                                         // elemental block matrix stored in column-major
                                         matr.setVal(m_epMat[eid][index][(c * num_dofs_per_block) + r]);
-                                    #elif VECTORIZED_OPENMP_PADDING
+                                    #elif VECTORIZED_OPENMP_ALIGNED
                                         // paddings are inserted at columns' ends
                                         matr.setVal(m_epMat[eid][index][c * (num_dofs_per_block + nPads) + r]);
                                     #else
@@ -2225,7 +2204,7 @@ namespace par {
         }
 
         // get number of pads added to ve (where ve = block_matrix * ue)
-        #ifdef OMP_SIMD_PADDING
+        #ifdef VECTORIZED_OPENMP_ALIGNED
             assert((ALIGNMENT % sizeof(DT)) == 0);
             if ((m_uiMaxDofsPerBlock % (ALIGNMENT/sizeof(DT))) != 0){
                 m_uiMaxNumPads = (ALIGNMENT/sizeof(DT)) - (m_uiMaxDofsPerBlock % (ALIGNMENT/sizeof(DT)));
@@ -2252,16 +2231,14 @@ namespace par {
             }
 
         #else
-            #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
-                // allocate and align ue and ve as normal
-                ve = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
-                ue = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
-            #elif VECTORIZED_OPENMP_PADDING
-                // allocate and align ve = MaxDofsPerBlock + MaxNumPads, ue as normal
+            #ifdef VECTORIZED_OPENMP_ALIGNED
+                // allocate and align ve = MaxDofsPerBlock + MaxNumPads
                 ve = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock + m_uiMaxNumPads);
-                ue = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
+                // allocate ue as normal
+                ue = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
+                //ue = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
             #else
-                // allocate ve and ue without alignment
+                // allocate ve and ue as normal
                 ue = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
                 ve = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
             #endif
@@ -2549,22 +2526,17 @@ namespace par {
         const unsigned int tId = omp_get_thread_num();
 
         // number of pads used in padding
-        #ifdef VECTORIZED_OPENMP_PADDING
+        #ifdef VECTORIZED_OPENMP_ALIGNED
         unsigned int nPads = 0;
         #endif
 
         // allocate private ve and ue (if not allocated yet)
         if (m_veBufs[tId] == nullptr){
-            #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
-                // allocate and align ue and ve as normal
-                m_veBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
-                m_ueBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
-
-            #elif VECTORIZED_OPENMP_PADDING
+            #ifdef VECTORIZED_OPENMP_ALIGNED
                 // allocate and align ve = MaxDofsPerBlock + MaxNumPads, ue as normal
                 m_veBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock + m_uiMaxNumPads);
-                m_ueBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
-
+                //m_ueBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
+                m_ueBufs[tId] = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
             #else
                 // allocate ve and ue without alignment
                 m_veBufs[tId] = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
@@ -2586,7 +2558,7 @@ namespace par {
             num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
 
             // compute needed pads added to the end of each column of block matrix
-            #ifdef VECTORIZED_OPENMP_PADDING
+            #ifdef VECTORIZED_OPENMP_ALIGNED
             //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
             if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
                 nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
@@ -2709,13 +2681,13 @@ namespace par {
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 const DT alpha = ueLocal[c];
                                 const DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
-                                #pragma omp simd aligned(x, veLocal : ALIGNMENT) safelen(512)
+                                #pragma omp simd safelen(512)
                                 for (LI r = 0; r < num_dofs_per_block; r++){
                                     veLocal[r] += alpha * x[r];
                                 }
                             }
 
-                        #elif VECTORIZED_OPENMP_PADDING
+                        #elif VECTORIZED_OPENMP_ALIGNED
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 const DT alpha = ueLocal[c];
                                 const DT* x = &m_epMat[eid][block_ID][c * (num_dofs_per_block + nPads)];
@@ -2726,9 +2698,9 @@ namespace par {
                             }
 
                         #else
-                            #pragma novector noparallel nounroll
+                            //#pragma novector noparallel nounroll
                             for (LI r = 0; r < num_dofs_per_block; r++){
-                                #pragma novector noparallel nounroll
+                                //#pragma novector noparallel nounroll
                                 for (LI c = 0; c < num_dofs_per_block; c++){
                                     veLocal[r] += m_epMat[eid][block_ID][(r * num_dofs_per_block) + c] * ueLocal[c];
                                 }
@@ -2739,7 +2711,6 @@ namespace par {
                         // accumulate element vector ve to structure vector v
                         for (LI r = 0; r < num_dofs_per_block; r++){
                             rowID = m_uipLocalMap[eid][block_row_offset + r];
-                            //printf("v[%d]= %f\n",r,v[r]);
                             #pragma omp atomic
                             v[rowID] += veLocal[r];
                         }
@@ -2811,7 +2782,7 @@ namespace par {
         ghost_receive_end(u);
 
         // number of pads used in padding
-        #ifdef VECTORIZED_OPENMP_PADDING
+        #ifdef VECTORIZED_OPENMP_ALIGNED
         unsigned int nPads = 0;
         #endif
 
@@ -2825,7 +2796,7 @@ namespace par {
             num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
 
             // compute number of paddings inserted to the end of each column of block matrix
-            #ifdef VECTORIZED_OPENMP_PADDING
+            #ifdef VECTORIZED_OPENMP_ALIGNED
             //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
             if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
                 nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
@@ -2953,12 +2924,12 @@ namespace par {
                                 const DT alpha = ue[c];
                                 const DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
                                 DT* y = ve;
-                                #pragma omp simd aligned(x, y : ALIGNMENT) safelen(512)
+                                #pragma omp simd safelen(512)
                                 for (LI r = 0; r < num_dofs_per_block; r++){
                                     y[r] += alpha * x[r];
                                 }
                             }
-                        #elif VECTORIZED_OPENMP_PADDING
+                        #elif VECTORIZED_OPENMP_ALIGNED
                             for (LI c = 0; c < num_dofs_per_block; c++){
                                 const DT alpha = ue[c];
                                 const DT* x = &m_epMat[eid][block_ID][c * (num_dofs_per_block + nPads)];
@@ -2969,9 +2940,9 @@ namespace par {
                                 }
                             }
                         #else
-                            #pragma novector noparallel nounroll
+                            //#pragma novector noparallel nounroll
                             for (LI r = 0; r < num_dofs_per_block; r++){
-                                #pragma novector noparallel nounroll
+                                //#pragma novector noparallel nounroll
                                 for (LI c = 0; c < num_dofs_per_block; c++){
                                     ve[r] += m_epMat[eid][block_ID][(r * num_dofs_per_block) + c] * ue[c];
                                 }
@@ -3419,7 +3390,7 @@ namespace par {
             PetscScalar temp;
             bool bdrFlag, rowFlag;
 
-            #ifdef VECTORIZED_OPENMP_PADDING
+            #ifdef VECTORIZED_OPENMP_ALIGNED
             unsigned int nPads = 0;
             #endif
 
@@ -3430,7 +3401,7 @@ namespace par {
                 LI block_col_offset = 0;
                 num_dofs_per_block = m_uiDofsPerElem[eid]/block_dims;
 
-                #ifdef VECTORIZED_OPENMP_PADDING
+                #ifdef VECTORIZED_OPENMP_ALIGNED
                 //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
                 if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
                     nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
@@ -3461,7 +3432,8 @@ namespace par {
                                                 // block m_epMat[eid][block_index] is stored in column-major
                                                 temp += m_epMat[eid][block_index][(c*num_dofs_per_block) + r] *
                                                         m_dtPresValMap[eid][block_j * num_dofs_per_block + c];
-                                            #elif VECTORIZED_OPENMP_PADDING
+                                            #elif VECTORIZED_OPENMP_ALIGNED
+                                                // block m_epMat[eid][block_index] is stored in column-major with nPads appended to columns
                                                 temp += m_epMat[eid][block_index][c*(num_dofs_per_block + nPads) + r] *
                                                         m_dtPresValMap[eid][block_j * num_dofs_per_block + c];
                                             #else

@@ -111,8 +111,8 @@ int main(int argc, char *argv[]){
     if (!rank) {std::cout << "\t\tVectorization using AVX_256\n";}
     #elif VECTORIZED_OPENMP
     if (!rank) {std::cout << "\t\tVectorization using OpenMP\n";}
-    #elif VECTORIZED_OPENMP_PADDING
-    if (!rank) {std::cout << "\t\tVectorization using OpenMP with paddings\n";}
+    #elif VECTORIZED_OPENMP_ALIGNED
+    if (!rank) {std::cout << "\t\tVectorization using OpenMP with aligned memory\n";}
     #else
     if (!rank) {std::cout << "\t\tNo vectorization\n";}
     #endif
