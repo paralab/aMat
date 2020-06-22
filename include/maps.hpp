@@ -34,6 +34,11 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     class Maps {
 
+        public:
+        typedef DT DTType;
+        typedef GI GIType;
+        typedef LI LIType;
+
         protected:
         MPI_Comm m_comm;                        // communicator
         unsigned int m_uiRank;                  // my rank id
@@ -99,52 +104,122 @@ namespace par {
         /**@brief destructor */
         ~Maps( );
 
-        MPI_Comm get_comm() const { return m_comm; }
+        MPI_Comm get_comm() const { 
+            return m_comm; 
+        }
         
         /**@brief return variables without creating copies of variables, and not modifying */
-        const LI& get_NumDofs() const { return m_uiNumDofs; }
-        const LI& get_NumDofsTotal() const { return m_uiNumDofsTotal; }
-        const GI& get_GlobalDofStart() const { return m_ulGlobalDofStart; }
-        const GI& get_GlobalDofEnd() const { return m_ulGlobalDofEnd; }
-        const GI& get_NumDofsGlobal() const { return m_ulNumDofsGlobal; }
-        const LI& get_NumElems() const { return m_uiNumElems; }
+        const LI& get_NumDofs() const { 
+            return m_uiNumDofs; 
+        }
+        const LI& get_NumDofsTotal() const { 
+            return m_uiNumDofsTotal; 
+        }
+        const GI& get_GlobalDofStart() const { 
+            return m_ulGlobalDofStart; 
+        }
+        const GI& get_GlobalDofEnd() const { 
+            return m_ulGlobalDofEnd; 
+            }
+        const GI& get_NumDofsGlobal() const {
+            return m_ulNumDofsGlobal; 
+        }
+        const LI& get_NumElems() const { 
+            return m_uiNumElems; 
+        }
 
         GI** get_Map() const { return m_ulpMap; }
-        const LI* get_DofsPerElem() const { return m_uiDofsPerElem; }
-        unsigned int** get_BdrMap() const { return m_uipBdrMap; }
-        DT** get_PresValMap() const { return m_dtPresValMap; }
+        const LI* get_DofsPerElem() const { 
+            return m_uiDofsPerElem; 
+        }
+        unsigned int** get_BdrMap() const { 
+            return m_uipBdrMap; 
+        }
+        DT** get_PresValMap() const { 
+            return m_dtPresValMap; 
+        }
         
-        const std::vector<GI>& get_ownedConstrainedDofs() const { return ownedConstrainedDofs; }
-        const std::vector<DT>& get_ownedPrescribedValues() const { return ownedPrescribedValues; }
-        const std::vector<GI>& get_ownedFreeDofs() const { return ownedFreeDofs; }
+        const std::vector<GI>& get_ownedConstrainedDofs() const { 
+            return ownedConstrainedDofs; 
+        }
+        const std::vector<DT>& get_ownedPrescribedValues() const { 
+            return ownedPrescribedValues; 
+        }
+        const std::vector<GI>& get_ownedFreeDofs() const { 
+            return ownedFreeDofs; 
+        }
 
-        const LI& get_n_owned_constraints() const { return n_owned_constraints; }
+        const LI& get_n_owned_constraints() const { 
+            return n_owned_constraints; 
+        }
 
-        LI** get_LocalMap() const { return m_uipLocalMap; }
-        GI* get_Local2Global() const { return m_ulpLocal2Global; }
+        LI** get_LocalMap() const { 
+            return m_uipLocalMap; 
+        }
+        GI* get_Local2Global() const { 
+            return m_ulpLocal2Global; 
+        }
 
-        const std::vector<LI>& get_LocalDofCounts() const { return m_uivLocalDofCounts; }
-        const std::vector<LI>& get_LocalElementCounts() const { return m_uivLocalElementCounts; }
-        const std::vector<GI>& get_LocalDofScan() const { return m_ulvLocalDofScan; }
-        const std::vector<GI>& get_LocalElementScan() const { return m_ulvLocalElementScan; }
+        const std::vector<LI>& get_LocalDofCounts() const { 
+            return m_uivLocalDofCounts; 
+        }
+        const std::vector<LI>& get_LocalElementCounts() const { 
+            return m_uivLocalElementCounts; 
+        }
+        const std::vector<GI>& get_LocalDofScan() const { 
+            return m_ulvLocalDofScan; 
+        }
+        const std::vector<GI>& get_LocalElementScan() const { 
+            return m_ulvLocalElementScan; 
+        }
 
-        const LI& get_NumPreGhostDofs() const { return m_uiNumPreGhostDofs; }
-        const LI& get_NumPostGhostDofs() const { return m_uiNumPostGhostDofs; }
+        const LI& get_NumPreGhostDofs() const { 
+            return m_uiNumPreGhostDofs; 
+        }
+        const LI& get_NumPostGhostDofs() const { 
+            return m_uiNumPostGhostDofs; 
+        }
 
-        const std::vector<LI>& get_SendDofCounts() const { return m_uivSendDofCounts; }
-        const std::vector<LI>& get_SendDofOffset() const { return m_uivSendDofOffset; }
-        const std::vector<LI>& get_SendDofIds() const { return m_uivSendDofIds; }
-        const std::vector<unsigned int>& get_SendRankIds() const { return m_uivSendRankIds; }
-        const std::vector<LI>& get_RecvDofCounts() const { return m_uivRecvDofCounts; }
-        const std::vector<LI>& get_RecvDofOffset() const { return m_uivRecvDofOffset; }
-        const std::vector<unsigned int>& get_RecvRankIds() const { return m_uivRecvRankIds; }
+        const std::vector<LI>& get_SendDofCounts() const { 
+            return m_uivSendDofCounts; 
+        }
+        const std::vector<LI>& get_SendDofOffset() const { 
+            return m_uivSendDofOffset; 
+        }
+        const std::vector<LI>& get_SendDofIds() const { 
+            return m_uivSendDofIds; 
+        }
+        const std::vector<unsigned int>& get_SendRankIds() const { 
+            return m_uivSendRankIds; 
+        }
+        const std::vector<LI>& get_RecvDofCounts() const { 
+            return m_uivRecvDofCounts; 
+        }
+        const std::vector<LI>& get_RecvDofOffset() const { 
+            return m_uivRecvDofOffset; 
+        }
+        const std::vector<unsigned int>& get_RecvRankIds() const { 
+            return m_uivRecvRankIds; 
+        }
 
-        const LI& get_DofPreGhostBegin() const { return m_uiDofPreGhostBegin; }
-        const LI& get_DofPreGhostEnd() const { return m_uiDofPreGhostEnd; }
-        const LI& get_DofLocalBegin() const { return m_uiDofLocalBegin; }
-        const LI& get_DofLocalEnd() const { return m_uiDofLocalEnd; }
-        const LI& get_DofPostGhostBegin() const { return m_uiDofPostGhostBegin; }
-        const LI& get_DofPostGhostEnd() const { return m_uiDofPostGhostEnd; }
+        const LI& get_DofPreGhostBegin() const { 
+            return m_uiDofPreGhostBegin; 
+        }
+        const LI& get_DofPreGhostEnd() const { 
+            return m_uiDofPreGhostEnd; 
+        }
+        const LI& get_DofLocalBegin() const { 
+            return m_uiDofLocalBegin; 
+        }
+        const LI& get_DofLocalEnd() const { 
+            return m_uiDofLocalEnd; 
+        }
+        const LI& get_DofPostGhostBegin() const { 
+            return m_uiDofPostGhostBegin; 
+        }
+        const LI& get_DofPostGhostEnd() const { 
+            return m_uiDofPostGhostEnd; 
+        }
 
 
         /**@brief set mapping from element local node to global node */

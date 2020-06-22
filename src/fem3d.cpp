@@ -42,6 +42,7 @@
 #include "aMatBased.hpp"
 #include "constraintRecord.hpp"
 #include "solve.hpp"
+#include "aVec.hpp"
 
 using Eigen::MatrixXd;
 using Eigen::Matrix;
@@ -454,7 +455,7 @@ int main( int argc, char *argv[] ) {
         stMat->set_element_matrix(eid, kee[0], 0, 0, 1);
         
         // assemble element load vector to global F
-        stMat->petsc_set_element_vec(rhs, eid, fee[0], 0, ADD_VALUES); // 0 is block_i which is only one block for this case
+        par::set_element_vec(meshMaps, rhs, eid, fee[0], 0u, ADD_VALUES);
     }
     delete [] ke;
     delete [] xe;
@@ -518,7 +519,7 @@ int main( int argc, char *argv[] ) {
             }
         }
         // set exact solution to Pestc vector
-        stMat->petsc_set_element_vec(sol_exact, e, e_exact, 0, INSERT_VALUES);
+        par::set_element_vec(meshMaps, sol_exact, e, e_exact, 0u, INSERT_VALUES);
     }
 
     // Pestc begins and completes assembling the exact solution

@@ -37,7 +37,7 @@
 #include "asyncExchangeCtx.hpp"
 #include "enums.hpp"
 #include "maps.hpp"
-#include "Vector.hpp"
+#include "aVec.hpp"
 #include "matRecord.hpp"
 
 #include "profiler.hpp"
@@ -70,7 +70,10 @@ namespace par {
 
         public:
         typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
-        typedef Eigen::Matrix<DT, Eigen::Dynamic, 1> EigenVec;
+
+        typedef DT DTType;
+        typedef GI GIType;
+        typedef LI LIType;
 
         protected:
         MPI_Comm m_comm;                        // communicator
@@ -88,10 +91,8 @@ namespace par {
         MATRIX_TYPE m_matType;                  // matrix type (aMatFree or aMatBased)
 
         public:
-        /**@brief constructor to initialize variables of aMat */
         aMat( Maps<DT, GI, LI> &mesh_maps, BC_METH bcType = BC_METH::BC_IMATRIX );
 
-        /**@brief destructor of aMat */
         ~aMat();
 
         /**@brief get communicator */
@@ -99,16 +100,16 @@ namespace par {
             return m_comm; 
         }
 
-        MATRIX_TYPE get_matrix_type() { return m_matType; }
+        /**@brief return method (matrix free / matrix based) used for analysis */
+        MATRIX_TYPE get_matrix_type() { 
+            return m_matType; 
+        }
 
         /**@brief aMatBased returns Petsc assembled matrix, aMatFree returns Petsc matrix shell */
         virtual Mat& get_matrix() = 0;
         
         /**@brief assemble element matrix to global matrix */
         virtual Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) = 0;
-
-        /**@brief assembly load vector to global vector: same for both matrix-free and matrix-based */
-        Error petsc_set_element_vec( Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode = ADD_VALUES );
 
         /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs and matrix */
         virtual Error apply_bc( Vec rhs ) = 0;
@@ -174,29 +175,6 @@ namespace par {
     aMat<DT, GI, LI>::~aMat() {
         
     } // destructor
-
-
-    // Note: for force vector, there is no block_j (as in stiffness matrix)
-    template <typename DT, typename GI, typename LI>
-    Error aMat<DT, GI, LI>::petsc_set_element_vec(Vec vec, LI eid, EigenVec e_vec, LI block_i, InsertMode mode){
-
-        GI** const m_ulpMap = m_maps.get_Map();
-
-        LI num_dofs_per_block = e_vec.size();
-        assert(e_vec.size() == e_vec.rows()); // since EigenVec is defined as matrix with 1 column
-
-        PetscScalar value;
-        PetscInt rowId;
-
-        for (LI r = 0; r < num_dofs_per_block; ++r) {
-            // this ONLY WORKS with assumption that all blocks have the same number of dofs (that is true for R-XFEM ?)
-            rowId = m_ulpMap[eid][block_i * num_dofs_per_block + r];
-            value = e_vec(r);
-            VecSetValue(vec, rowId, value, mode);
-        }
-
-        return Error::SUCCESS;
-    } // petsc_set_element_vec
 
 } // end of namespace par
 

@@ -26,7 +26,6 @@ namespace par {
 
         public:
         using typename aMat<DT, GI, LI>::EigenMat;
-        using typename aMat<DT, GI, LI>::EigenVec;
 
         using aMat<DT, GI, LI>::m_comm;             // communicator
         using aMat<DT, GI, LI>::m_uiRank;           // my rank id
@@ -36,7 +35,7 @@ namespace par {
         using aMat<DT, GI, LI>::KfcUcVec;           // KfcUc = Kfc * Uc, used to apply bc for rhs
         using aMat<DT, GI, LI>::m_dtTraceK;         // penalty number
         using aMat<DT, GI, LI>::m_pMat;             // Petsc matrix
-        using aMat<DT, GI, LI>::m_matType;
+        using aMat<DT, GI, LI>::m_matType;          // matrix type (aMatFree or aMatBased)
         
         #ifdef AMAT_PROFILER
         using aMat<DT, GI, LI>::timing_aMat;
@@ -239,14 +238,13 @@ namespace par {
     // context for aMat
     template <typename DT, typename GI, typename LI>
     struct aMatCTX {
-        par::aMatFree<DT,GI,LI> * aMatPtr;
+        par::aMatFree<DT,GI,LI>* aMatPtr;
     };
 
 
     // matrix shell to use aMat::MatMult_mf
     template<typename DT,typename GI, typename LI>
-    PetscErrorCode aMat_matvec( Mat A, Vec u, Vec v )
-    {
+    PetscErrorCode aMat_matvec( Mat A, Vec u, Vec v ) {
         aMatCTX<DT,GI, LI> * pCtx;
         MatShellGetContext( A, &pCtx );
 
@@ -260,8 +258,7 @@ namespace par {
 
     // matrix shell to use aMat::MatGetDiagonal_mf
     template<typename DT,typename GI, typename LI>
-    PetscErrorCode aMat_matgetdiagonal( Mat A, Vec d )
-    {
+    PetscErrorCode aMat_matgetdiagonal( Mat A, Vec d ) {
         aMatCTX<DT,GI,LI> * pCtx;
         MatShellGetContext(A, &pCtx);
 
@@ -275,8 +272,7 @@ namespace par {
 
     // matrix shell to use aMat::MatGetDiagonalBlock_mf
     template<typename DT,typename GI, typename LI>
-    PetscErrorCode aMat_matgetdiagonalblock( Mat A, Mat* a )
-    {
+    PetscErrorCode aMat_matgetdiagonalblock( Mat A, Mat* a ) {
         aMatCTX<DT,GI,LI> * pCtx;
         MatShellGetContext(A, &pCtx);
 
@@ -286,7 +282,6 @@ namespace par {
         delete f;
         return 0;
     }
-
 
     //==============================================================================================================
 
@@ -380,7 +375,7 @@ namespace par {
 
         const LI m_uiNumDofs = m_maps.get_NumDofs();
 
-        // get context to aMatFree
+        // get context to aMatFree (need to allocate in heap so that it is usable in solve which is now outside of aMat)
         aMatCTX<DT,GI,LI>* ctx = new aMatCTX<DT,GI,LI>();
 
         // point back to aMatFree
@@ -399,7 +394,7 @@ namespace par {
         MatShellSetOperation( m_pMat, MATOP_GET_DIAGONAL_BLOCK, (void(*)(void))aMat_matgetdiagonalblock<DT,GI,LI> );
         
         return m_pMat;
-    }// get_matrix_shell
+    }// get_matrix
 
 
     // this function was at the end of set_map() which moved to Maps class
@@ -466,7 +461,8 @@ namespace par {
     Error aMatFree<DT, GI, LI>:: update_matrix(){
         
         const LI m_uiNumElems = m_maps.get_NumElems();
-        const LI* const m_uiDofsPerElem = m_maps.get_DofsPerElem();
+        const LI n_owned_constraints = m_maps.get_n_owned_constraints();
+        const LI m_uiNumDofsTotal = m_maps.get_NumDofsTotal();
 
         // Note: currently we delete all old element matrices and need to add new element matrices again
         // Todo: only add newly formed blocks?

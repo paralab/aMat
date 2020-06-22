@@ -45,6 +45,7 @@
 #include "aMatBased.hpp"
 #include "constraintRecord.hpp"
 #include "solve.hpp"
+#include "aVec.hpp"
 
 using Eigen::Matrix;
 
@@ -383,7 +384,7 @@ int main(int argc, char *argv[]){
         // assemble ke
         stMat->set_element_matrix(eid, ke, 0, 0, 1);
         // assemble fe
-        stMat->petsc_set_element_vec(rhs, eid, fe, 0, ADD_VALUES);
+        par::set_element_vec(meshMaps, rhs, eid, fe, 0u, ADD_VALUES);
     }
     delete [] xe;
 

@@ -39,7 +39,7 @@
 #include "aMatBased.hpp"
 #include "constraintRecord.hpp"
 #include "solve.hpp"
-#include "Vector.hpp"
+#include "aVec.hpp"
 
 #include "ke_matrix.hpp"
 #include "fe_vector.hpp"
@@ -754,12 +754,12 @@ int main( int argc, char *argv[] ) {
         // compute element force vector due to body force
         fe_hex20_iso(fee, xe, beN, intData.Pts_n_Wts, NGT);
 
-        printf("size of fee= %d x %d\n",fee.rows(),fee.cols());
         // assemble element load vector due to body force
         if (matType == 0) petsc_time.start();
         else aMat_time.start();
-        //stMat->petsc_set_element_vec(rhs, eid, fee, 0, ADD_VALUES);
-        //par::set_element_vec(meshMaps, rhs, eid, fee, 0);
+        
+        par::set_element_vec(meshMaps, rhs, eid, fee, 0u, ADD_VALUES);
+        
         if (matType == 0) petsc_time.stop();
         else aMat_time.stop();
 
@@ -767,8 +767,9 @@ int main( int argc, char *argv[] ) {
         if (elem_trac[eid].size() != 0){
             if (matType == 0) petsc_time.start();
             else aMat_time.start();
-            //stMat->petsc_set_element_vec(rhs, eid, elem_trac[eid], 0, ADD_VALUES);
-            par::set_element_vec(meshMaps, rhs, eid, elem_trac[eid], 0, ADD_VALUES);
+            
+            par::set_element_vec(meshMaps, rhs, eid, elem_trac[eid], 0u, ADD_VALUES);
+            
             if (matType == 0) petsc_time.stop();
             else aMat_time.stop();
         }
@@ -903,8 +904,8 @@ int main( int argc, char *argv[] ) {
                 e_exact[(nid * NDOF_PER_NODE) + did] = disp[did];
             }
         }
-        stMat->petsc_set_element_vec(sol_exact, eid, e_exact, 0, INSERT_VALUES);
-        //par::set_element_vec(meshMaps, sol_exact, eid, e_exact, 0, INSERT_VALUES);
+        
+        par::set_element_vec(meshMaps, sol_exact, eid, e_exact, 0u, INSERT_VALUES);
     }
 
     VecAssemblyBegin(sol_exact);

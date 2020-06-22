@@ -28,7 +28,7 @@ set(INCLUDE_FILES
         include/maps.hpp
         include/aMatFree.hpp
         include/aMatBased.hpp
-        include/Vector.hpp
+        include/aVec.hpp
         include/solve.hpp
         include/profiler.hpp
         include/integration.hpp

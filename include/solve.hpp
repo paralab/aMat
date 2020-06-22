@@ -32,12 +32,15 @@ namespace par {
 
         MPI_Comm m_comm = matrix.get_comm();
 
+        // get matrix (or matrix shell) depending type of method used
         Mat m_pMat = matrix.get_matrix();
 
         // abstract Krylov object, linear solver context
         KSP ksp;
+
         // abstract preconditioner object, pre conditioner context
         PC  pc;
+
         // default KSP context
         KSPCreate( m_comm, &ksp );
 
@@ -63,8 +66,13 @@ namespace par {
         // clean up
         KSPDestroy( &ksp );
 
+        // for the case of aMatFree, delete the context we gave to matrix shell in get_matrix()
         if (matrix.get_matrix_type() == MATRIX_TYPE::MATRIX_FREE){
-            void* ctx = nullptr;
+            using DT = typename MatrixType::DTType;
+            using GI = typename MatrixType::GIType;
+            using LI = typename MatrixType::LIType;
+
+            aMatCTX<DT,GI,LI> * ctx = nullptr;
             MatShellGetContext(m_pMat, &ctx);
             delete ctx;
             ctx = nullptr;
@@ -72,5 +80,6 @@ namespace par {
 
         return Error::SUCCESS;
     } // solve
+    
 } // namespace par
 #endif// APTIVEMATRIX_SOLVE_H

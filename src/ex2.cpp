@@ -47,6 +47,7 @@
 #include "constraintRecord.hpp"
 #include "integration.hpp"
 #include "solve.hpp"
+#include "aVec.hpp"
 
 using Eigen::Matrix;
 
@@ -534,7 +535,7 @@ int main(int argc, char *argv[]){
 
         // assemble fe
         if (elem_trac[eid].size() != 0){
-            stMat->petsc_set_element_vec(rhs, eid, elem_trac[eid], 0, ADD_VALUES);
+            par::set_element_vec(meshMaps, rhs, eid, elem_trac[eid], 0u, ADD_VALUES);
         }
     }
 
@@ -605,7 +606,7 @@ int main(int argc, char *argv[]){
                 e_exact[(nid * NDOF_PER_NODE) + did] = disp[did];
             }
         }
-        stMat->petsc_set_element_vec(sol_exact, eid, e_exact, 0, INSERT_VALUES);
+        par::set_element_vec(meshMaps, sol_exact, eid, e_exact, 0u, INSERT_VALUES);
     }
     VecAssemblyBegin(sol_exact);
     VecAssemblyEnd(sol_exact);

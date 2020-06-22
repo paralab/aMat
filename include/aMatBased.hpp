@@ -26,7 +26,6 @@ namespace par {
         public:
 
         using typename aMat<DT, GI, LI>::EigenMat;
-        using typename aMat<DT, GI, LI>::EigenVec;
 
         using aMat<DT, GI, LI>::m_comm;         // communicator
         using aMat<DT, GI, LI>::m_uiRank;       // my rank id
@@ -143,8 +142,7 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     Error aMatBased<DT,GI,LI>::update_matrix(){
 
-        const LI m_uiNumElems = m_maps.get_NumElems();
-        const LI* const m_uiDofsPerElem = m_maps.get_DofsPerElem();
+        const LI m_uiNumDofs = m_maps.get_NumDofs();
 
         // allocate new (larger) matrix of size m_uiNumDofs
         if( m_pMat != nullptr ){

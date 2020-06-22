@@ -1,5 +1,5 @@
 /**
- * @file vector.hpp
+ * @file aVec.hpp
  * @author Hari Sundar      hsundar@gmail.com
  * @author Han Tran         hantran@cs.utah.edu
  *
@@ -68,12 +68,13 @@ namespace par {
         return Error::SUCCESS;
     } // dump_vec
 
-    //typedef Eigen::Matrix<double, Eigen::Dynamic, 1> EigenVec;
 
-    template <typename MapType, typename GI, typename LI, typename EV>
-    Error set_element_vec( const MapType& maps, Vec vec, LI eid, const EV& e_vec, LI block_i, InsertMode mode = ADD_VALUES ){
+    template <typename MapType, typename LI, typename EigenVec>
+    static Error set_element_vec( const MapType& maps, Vec vec, LI eid, const EigenVec& e_vec, LI block_i, InsertMode mode = ADD_VALUES ){
 
-        /* GI** const m_ulpMap = maps.get_Map();
+        using GI = typename MapType::GIType;
+        
+        GI** const m_ulpMap = maps.get_Map();
 
         LI num_dofs_per_block = e_vec.size();
         assert(e_vec.size() == e_vec.rows()); // since EigenVec is defined as matrix with 1 column
@@ -86,7 +87,7 @@ namespace par {
             rowId = m_ulpMap[eid][block_i * num_dofs_per_block + r];
             value = e_vec(r);
             VecSetValue(vec, rowId, value, mode);
-        } */
+        }
         return Error::SUCCESS;
     }
 
