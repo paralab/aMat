@@ -23,14 +23,22 @@ set(INCLUDE_FILES
         include/ke_matrix.hpp
         include/fe_vector.hpp
         include/aMat.hpp
+        include/asyncExchangeCtx.hpp
+        include/enums.hpp
+        include/maps.hpp
+        include/aMatFree.hpp
+        include/aMatBased.hpp
+        include/Vector.hpp
+        include/solve.hpp
         include/profiler.hpp
         include/integration.hpp
-        include/shapeFunc.hpp)
+        include/shapeFunc.hpp
+        include/constraintRecord.hpp
+        include/matRecord.hpp)
 
 set(SOURCE_FILES
         src/ke_matrix.cpp
-        src/fe_vector.cpp
-        src/profiler.cpp)
+        src/fe_vector.cpp)
 
 # cmake options, which will be visible at ccmake ../
 option(BUILD_WITH_PETSC "Build code with the petsc" ON)

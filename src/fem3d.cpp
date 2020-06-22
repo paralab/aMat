@@ -33,8 +33,15 @@
 
 #include "ke_matrix.hpp"
 #include "fe_vector.hpp"
-#include "aMat.hpp"
 #include "integration.hpp"
+
+#include "maps.hpp"
+#include "enums.hpp"
+#include "aMat.hpp"
+#include "aMatFree.hpp"
+#include "aMatBased.hpp"
+#include "constraintRecord.hpp"
+#include "solve.hpp"
 
 using Eigen::MatrixXd;
 using Eigen::Matrix;
@@ -218,9 +225,9 @@ int main( int argc, char *argv[] ) {
     nnode = (nnode_x) * (nnode_y) * (nnode_z);
 
     // map from local nodes to global nodes
-    unsigned int* nnode_per_elem = new unsigned int[nelem];
+    unsigned int* ndofs_per_element = new unsigned int[nelem];
     for (unsigned e = 0; e < nelem; e ++){
-        nnode_per_elem[e] = NNODE_PER_ELEM;
+        ndofs_per_element[e] = NNODE_PER_ELEM;
     }
 
     unsigned long int** globalMap;
@@ -244,8 +251,8 @@ int main( int argc, char *argv[] ) {
         }
     }
 
-    // build localMap from globalMap
-    unsigned int numPreGhostNodes, numPostGhostNodes, numLocalNodes;
+    // build localDofMap from globalMap
+    unsigned int numPreGhostNodes, numPostGhostNodes, numLocalDofs;
     unsigned long gNodeId;
     std::vector<unsigned int> preGhostGIds, postGhostGIds;
 
@@ -258,8 +265,8 @@ int main( int argc, char *argv[] ) {
     for (unsigned int i = 1; i < size; i++){
         nnodeOffset[i] = nnodeOffset[i-1] + nnodeCount[i-1];
     }
-    unsigned int nnode_total;
-    nnode_total = nnodeOffset[size-1] + nnodeCount[size-1];
+    unsigned int ndofs_total;
+    ndofs_total = nnodeOffset[size-1] + nnodeCount[size-1];
 
     preGhostGIds.clear();
     postGhostGIds.clear();
@@ -283,12 +290,12 @@ int main( int argc, char *argv[] ) {
 
     numPreGhostNodes = preGhostGIds.size();
     numPostGhostNodes = postGhostGIds.size();
-    numLocalNodes = numPreGhostNodes + nnode + numPostGhostNodes;
+    numLocalDofs = numPreGhostNodes + nnode + numPostGhostNodes;
 
-    unsigned int** localMap;
-    localMap = new unsigned int* [nelem];
+    unsigned int** localDofMap;
+    localDofMap = new unsigned int* [nelem];
     for (unsigned int e = 0; e < nelem; e++){
-        localMap[e] = new unsigned int[8];
+        localDofMap[e] = new unsigned int[8];
     }
 
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -297,25 +304,25 @@ int main( int argc, char *argv[] ) {
             if (gNodeId >= nnodeOffset[rank] &&
                     gNodeId < (nnodeOffset[rank] + nnode)) {
                 // nid is owned by me
-                localMap[eid][i] = gNodeId - nnodeOffset[rank] + numPreGhostNodes;
+                localDofMap[eid][i] = gNodeId - nnodeOffset[rank] + numPreGhostNodes;
             } else if (gNodeId < nnodeOffset[rank]){
                 // nid is owned by someone before me
                 const unsigned int lookUp = std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), gNodeId) - preGhostGIds.begin();
-                localMap[eid][i] = lookUp;
+                localDofMap[eid][i] = lookUp;
             } else if (gNodeId >= (nnodeOffset[rank] + nnode)){
                 // nid is owned by someone after me
                 const unsigned int lookUp = std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), gNodeId) - postGhostGIds.begin();
-                localMap[eid][i] =  numPreGhostNodes + nnode + lookUp;
+                localDofMap[eid][i] =  numPreGhostNodes + nnode + lookUp;
             }
         }
     }
 
-    // build local2GlobalMap map (to adapt the interface of bsamxx)
-    unsigned long * local2GlobalMap = new unsigned long[numLocalNodes];
+    // build local2GlobalDofMap map (to adapt the interface of bsamxx)
+    unsigned long * local2GlobalDofMap = new unsigned long[numLocalDofs];
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < 8; nid++){
             gNodeId = globalMap[eid][nid];
-            local2GlobalMap[localMap[eid][nid]] = gNodeId;
+            local2GlobalDofMap[localDofMap[eid][nid]] = gNodeId;
         }
     }
 
@@ -323,11 +330,11 @@ int main( int argc, char *argv[] ) {
     unsigned int** bound_nodes = new unsigned int* [nelem];
     double** bound_values = new double* [nelem];
     for (unsigned int e = 0; e < nelem; e++) {
-        bound_nodes[e] = new unsigned int[nnode_per_elem[e]];
-        bound_values[e] = new double [nnode_per_elem[e]];
+        bound_nodes[e] = new unsigned int[ndofs_per_element[e]];
+        bound_values[e] = new double [ndofs_per_element[e]];
     }
     for (unsigned int eid = 0; eid < nelem; eid++) {
-        for (unsigned int n = 0; n < nnode_per_elem[eid]; n++) {
+        for (unsigned int n = 0; n < ndofs_per_element[eid]; n++) {
             nid = globalMap[eid][n];
 
             // get node coordinates
@@ -349,10 +356,10 @@ int main( int argc, char *argv[] ) {
     }
 
     // create lists of constrained dofs
-    std::vector< par::ConstrainedRecord<double, unsigned long int> > list_of_constraints;
-    par::ConstrainedRecord<double, unsigned long int> cdof;
+    std::vector< par::ConstraintRecord<double, unsigned long int> > list_of_constraints;
+    par::ConstraintRecord<double, unsigned long int> cdof;
     for (unsigned int eid = 0; eid < nelem; eid++) {
-        for (unsigned int nid = 0; nid < nnode_per_elem[eid]; nid++) {
+        for (unsigned int nid = 0; nid < ndofs_per_element[eid]; nid++) {
             for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
                 if (bound_nodes[eid][(nid * NDOF_PER_NODE) + did] == 1) {
                     // save the global id of constrained dof
@@ -378,38 +385,40 @@ int main( int argc, char *argv[] ) {
         prescribedValues_ptr[i] = list_of_constraints[i].get_preVal();
     }
 
-    unsigned long start_global_node, end_global_node;
-    start_global_node = nnodeOffset[rank];
-    end_global_node = start_global_node + (nnode - 1);
+    unsigned long start_global_dof, end_global_dof;
+    start_global_dof = nnodeOffset[rank];
+    end_global_dof = start_global_dof + (nnode - 1);
 
+    // declare Maps object  =================================
+    par::Maps<double, unsigned long, unsigned int> meshMaps(comm);
 
+    meshMaps.set_map(nelem, localDofMap, ndofs_per_element, numLocalDofs, local2GlobalDofMap, start_global_dof,
+                  end_global_dof, ndofs_total);
 
-    // declare aMat object =================================
-    par::aMat<double, unsigned long, unsigned int> * stMat;
-    if (matType == 0){
-        stMat = new par::aMatBased<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
-    } else {
-        stMat = new par::aMatFree<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
+    if (matType == 1){
+        meshMaps.buildScatterMap();
     }
 
-    // set communicator
-    stMat->set_comm(comm);
+    meshMaps.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
 
-    // set globalMap
-    stMat->set_map(nelem, localMap, nnode_per_elem, numLocalNodes, local2GlobalMap, start_global_node,
-                  end_global_node, nnode_total);
+    // declare aMat object =================================
+    typedef par::aMatBased<double, unsigned long, unsigned int>* aMatBased_ptr;
+    typedef par::aMatFree<double, unsigned long, unsigned int>* aMatFree_ptr;
 
-    
-    // set boundary maps
-    stMat->set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
-
+    par::aMat<double, unsigned long, unsigned int> * stMat;
+    if (matType == 0){
+        stMat = new par::aMatBased<double, unsigned long, unsigned int>(meshMaps,(par::BC_METH)bcMethod);
+    } else {
+        stMat = new par::aMatFree<double, unsigned long, unsigned int>(meshMaps,(par::BC_METH)bcMethod);
+    }
 
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact;
-    stMat->petsc_create_vec(rhs);
-    stMat->petsc_create_vec(out);
-    stMat->petsc_create_vec(sol_exact);
+    par::create_vec(meshMaps, rhs);
+    par::create_vec(meshMaps, out);
+    par::create_vec(meshMaps, sol_exact);
 
+    
     // Gauss points and weights
     const unsigned int NGT = 2;
     integration<double> intData(NGT);
@@ -477,7 +486,13 @@ int main( int argc, char *argv[] ) {
     
 
     // solve
-    stMat->petsc_solve((const Vec) rhs, out);
+    par::solve(*stMat, (const Vec)rhs, out);
+    /* if (matType == 0){
+        par::solve(*dynamic_cast<aMatBased_ptr>(stMat), (const Vec)rhs, out);
+    } else {
+        par::solve(*dynamic_cast<aMatFree_ptr>(stMat), (const Vec)rhs, out);
+    } */
+
     VecAssemblyBegin(out);
     VecAssemblyEnd(out);
 
@@ -537,17 +552,17 @@ int main( int argc, char *argv[] ) {
     delete [] bound_values;
 
     for (unsigned int eid = 0; eid < nelem; eid++){
-        delete [] localMap[eid];
+        delete [] localDofMap[eid];
     }
-    delete [] localMap;
+    delete [] localDofMap;
 
     delete [] nnodeCount;
     delete [] nnodeOffset;
 
     //delete [] etype;
     //delete [] kee;
-    delete [] local2GlobalMap;
-    delete [] nnode_per_elem;
+    delete [] local2GlobalDofMap;
+    delete [] ndofs_per_element;
 
     delete [] constrainedDofs_ptr;
     delete [] prescribedValues_ptr;

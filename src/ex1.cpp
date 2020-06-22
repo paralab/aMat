@@ -37,12 +37,16 @@
 
 #include "ke_matrix.hpp"
 #include "fe_vector.hpp"
+#include "maps.hpp"
+#include "enums.hpp"
 #include "aMat.hpp"
+#include "aMatFree.hpp"
+#include "aMatBased.hpp"
+#include "constraintRecord.hpp"
 #include "integration.hpp"
+#include "solve.hpp"
 
-using Eigen::MatrixXd;
 using Eigen::Matrix;
-using Eigen::VectorXd;
 
 // number of cracks allowed in 1 element
 #define AMAT_MAX_CRACK_LEVEL 0
@@ -426,8 +430,8 @@ int main( int argc, char *argv[] ) {
     }
 
     // create lists of constrained dofs
-    std::vector< par::ConstrainedRecord<double, unsigned long int> > list_of_constraints;
-    par::ConstrainedRecord<double, unsigned long int> cdof;
+    std::vector< par::ConstraintRecord<double, unsigned long int> > list_of_constraints;
+    par::ConstraintRecord<double, unsigned long int> cdof;
     for (unsigned int eid = 0; eid < nelem; eid++) {
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
             for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
@@ -533,29 +537,35 @@ int main( int argc, char *argv[] ) {
         }
     }
     
-    /// declare aMat object =================================
-    par::aMat<double, unsigned long, unsigned int> * stMat;
-    if (matType == 0){
-        stMat = new par::aMatBased<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
-    } else {
-        stMat = new par::aMatFree<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
-    }
+    // declare Maps object  =================================
+    par::Maps<double, unsigned long, unsigned int> meshMaps(comm);
 
-    // set communicator
-    stMat->set_comm(comm);
-
-    // set global dof map
-    stMat->set_map(nelem, localDofMap, ndofs_per_element, numLocalDofs, local2GlobalDofMap, start_global_dof,
+    meshMaps.set_map(nelem, localDofMap, ndofs_per_element, numLocalDofs, local2GlobalDofMap, start_global_dof,
                   end_global_dof, ndofs_total);
 
-    // set boundary map
-    stMat->set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
+    if (matType == 1){
+        meshMaps.buildScatterMap();
+    }
+    
+    meshMaps.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
+
+    /// declare aMat object =================================
+    typedef par::aMatBased<double, unsigned long, unsigned int>* aMatBased_ptr;
+    typedef par::aMatFree<double, unsigned long, unsigned int>* aMatFree_ptr;
+
+    par::aMat<double, unsigned long, unsigned int> * stMat;
+    if (matType == 0){
+        stMat = new par::aMatBased<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+    } else {
+        stMat = new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+    }
+
 
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact;
-    stMat->petsc_create_vec(rhs);
-    stMat->petsc_create_vec(out);
-    stMat->petsc_create_vec(sol_exact);
+    par::create_vec(meshMaps, rhs);
+    par::create_vec(meshMaps, out);
+    par::create_vec(meshMaps, sol_exact);
 
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
     for (unsigned int eid = 0; eid < nelem; eid++){
@@ -623,7 +633,12 @@ int main( int argc, char *argv[] ) {
     //stMat->dump_vec(rhs,fname);
 
     // solve
-    stMat->petsc_solve((const Vec) rhs, out);
+    par::solve(*stMat, (const Vec)rhs, out);
+    /* if (matType == 0){
+        par::solve(*dynamic_cast<aMatBased_ptr>(stMat), (const Vec)rhs, out);
+    } else {
+        par::solve(*dynamic_cast<aMatFree_ptr>(stMat), (const Vec)rhs, out);
+    } */
     VecAssemblyBegin(out);
     VecAssemblyEnd(out);
     //stMat->dump_vec(out);

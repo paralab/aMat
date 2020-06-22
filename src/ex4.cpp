@@ -31,16 +31,24 @@
 #endif
 
 #include <Eigen/Dense>
+
+#include "maps.hpp"
+#include "enums.hpp"
+#include "aMat.hpp"
+#include "aMatFree.hpp"
+#include "aMatBased.hpp"
+#include "constraintRecord.hpp"
+#include "solve.hpp"
+#include "Vector.hpp"
+
 #include "ke_matrix.hpp"
 #include "fe_vector.hpp"
-#include "aMat.hpp"
 #include "integration.hpp"
+
 
 #include "profiler.hpp"
 
-using Eigen::MatrixXd;
-using Eigen::Matrix;
-using Eigen::VectorXd;
+//using Eigen::Matrix;
 
 // number of cracks allowed in 1 element
 #define AMAT_MAX_CRACK_LEVEL 0
@@ -167,12 +175,13 @@ int main( int argc, char *argv[] ) {
     MPI_Comm_size(comm, &size);
 
     // element matrix (contains multiple matrix blocks)
-    std::vector< Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM > > kee;
+    std::vector< Eigen::Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM > > kee;
     kee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT * AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
 
     // element force vector
-    std::vector<Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1>> fee;
-    fee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
+    //std::vector<Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1>> fee;
+    //fee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
+    Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1> fee;
 
     // nodal coordinates of element
     double* xe = new double[NDIM * NNODE_PER_ELEM];
@@ -505,8 +514,8 @@ int main( int argc, char *argv[] ) {
     }
     
     // create lists of constrained dofs
-    std::vector< par::ConstrainedRecord<double, unsigned long int> > list_of_constraints;
-    par::ConstrainedRecord<double, unsigned long int> cdof;
+    std::vector< par::ConstraintRecord<double, unsigned long int> > list_of_constraints;
+    par::ConstraintRecord<double, unsigned long int> cdof;
     for (unsigned int eid = 0; eid < nelem; eid++) {
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
             for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
@@ -539,8 +548,8 @@ int main( int argc, char *argv[] ) {
 
 
     // elemental traction vector
-    Matrix<double, Eigen::Dynamic, 1> * elem_trac;
-    elem_trac = new Matrix<double, Eigen::Dynamic, 1> [nelem];
+    Eigen::Matrix<double, Eigen::Dynamic, 1> * elem_trac;
+    elem_trac = new Eigen::Matrix<double, Eigen::Dynamic, 1> [nelem];
 
     // nodal traction of tractioned face
     double nodalTraction [24] = {0.0};
@@ -549,7 +558,7 @@ int main( int argc, char *argv[] ) {
     double xeSt [24];
     
     // force vector due to traction
-    Matrix<double, 24, 1> feT;
+    Eigen::Matrix<double, 24, 1> feT;
 
     // Gauss points and weights
     const unsigned int NGT = 4;
@@ -669,30 +678,36 @@ int main( int argc, char *argv[] ) {
 
     total_time.start();
 
-    /// declare aMat object =================================
-    par::aMat<double, unsigned long, unsigned int> * stMat;
-    if (matType == 0){
-        stMat = new par::aMatBased<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
-    } else {
-        stMat = new par::aMatFree<double, unsigned long, unsigned int>((par::BC_METH)bcMethod);
-    }
+    // declare Maps object  =================================
+    par::Maps<double, unsigned long, unsigned int> meshMaps(comm);
 
-    // set communicator
-    stMat->set_comm(comm);
-
-    // set global dof map
-    stMat->set_map(nelem, localDofMap, ndofs_per_element, numLocalDofs, local2GlobalDofMap, start_global_dof,
+    meshMaps.set_map(nelem, localDofMap, ndofs_per_element, numLocalDofs, local2GlobalDofMap, start_global_dof,
                   end_global_dof, ndofs_total);
 
-    // set boundary map
-    stMat->set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
+    if (matType == 1){
+        meshMaps.buildScatterMap();
+    }
+
+    meshMaps.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
+    
+    /// declare aMat object =================================
+    typedef par::aMatBased<double, unsigned long, unsigned int>* aMatBased_ptr;
+    typedef par::aMatFree<double, unsigned long, unsigned int>* aMatFree_ptr;
+
+    par::aMat<double, unsigned long, unsigned int> * stMat;
+    if (matType == 0){
+        stMat = new par::aMatBased<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+    } else {
+        stMat = new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+    }
+    
 
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact, error;
-    stMat->petsc_create_vec(rhs);
-    stMat->petsc_create_vec(out);
-    stMat->petsc_create_vec(sol_exact);
-    stMat->petsc_create_vec(error);
+    par::create_vec(meshMaps, rhs);
+    par::create_vec(meshMaps, out);
+    par::create_vec(meshMaps, sol_exact);
+    par::create_vec(meshMaps, error);
 
     // compute element stiffness matrix and force vector, then assemble
     // nodal value of body force
@@ -730,17 +745,21 @@ int main( int argc, char *argv[] ) {
         // assemble element stiffness matrix to global K
         if (matType == 0) petsc_time.start();
         else aMat_time.start();
+
         stMat->set_element_matrix(eid, kee[0], 0, 0, 1);
+        
         if (matType == 0) petsc_time.stop();
         else aMat_time.stop();
         
         // compute element force vector due to body force
-        fe_hex20_iso(fee[0], xe, beN, intData.Pts_n_Wts, NGT);
+        fe_hex20_iso(fee, xe, beN, intData.Pts_n_Wts, NGT);
 
+        printf("size of fee= %d x %d\n",fee.rows(),fee.cols());
         // assemble element load vector due to body force
         if (matType == 0) petsc_time.start();
         else aMat_time.start();
-        stMat->petsc_set_element_vec(rhs, eid, fee[0], 0, ADD_VALUES);
+        //stMat->petsc_set_element_vec(rhs, eid, fee, 0, ADD_VALUES);
+        //par::set_element_vec(meshMaps, rhs, eid, fee, 0);
         if (matType == 0) petsc_time.stop();
         else aMat_time.stop();
 
@@ -748,13 +767,15 @@ int main( int argc, char *argv[] ) {
         if (elem_trac[eid].size() != 0){
             if (matType == 0) petsc_time.start();
             else aMat_time.start();
-            stMat->petsc_set_element_vec(rhs, eid, elem_trac[eid], 0, ADD_VALUES);
+            //stMat->petsc_set_element_vec(rhs, eid, elem_trac[eid], 0, ADD_VALUES);
+            par::set_element_vec(meshMaps, rhs, eid, elem_trac[eid], 0, ADD_VALUES);
             if (matType == 0) petsc_time.stop();
             else aMat_time.stop();
         }
     }
     delete [] xe;
 
+    
     // Pestc begins and completes assembling the global stiffness matrix
     if (matType == 0){
         petsc_time.start();
@@ -765,7 +786,7 @@ int main( int argc, char *argv[] ) {
 
     // char fname[256];
     // sprintf(fname,"matrix_%d.dat",matType);
-    // stMat->petsc_dump_mat(fname);
+    // stMat->dump_mat(fname);
 
     // Pestc begins and completes assembling the global load vector
     // These are needed because we used ADD_VALUES for rhs when assembling
@@ -784,7 +805,7 @@ int main( int argc, char *argv[] ) {
     if (matType != 0) aMat_time.stop();
     else petsc_time.stop();
 
-    // this is needed because the matrix is applied bc in apply_bc(rhs)
+    // assemble matrix after matrix is modified by bc
     if (matType == 0){
         petsc_time.start();
         stMat->petsc_init_mat(MAT_FINAL_ASSEMBLY);
@@ -795,7 +816,15 @@ int main( int argc, char *argv[] ) {
     // solve
     if (matType != 0) aMat_time.start();
     else petsc_time.start();
-    stMat->petsc_solve((const Vec) rhs, out);
+
+    par::solve(*stMat, (const Vec)rhs, out);
+
+    /* if (matType == 0){
+        par::solve(*dynamic_cast<aMatBased_ptr>(stMat), (const Vec)rhs, out);
+    } else {
+        par::solve(*dynamic_cast<aMatFree_ptr>(stMat), (const Vec)rhs, out);
+    } */
+
     if (matType != 0) aMat_time.stop();
     else petsc_time.stop();
 
@@ -852,7 +881,7 @@ int main( int argc, char *argv[] ) {
     }
 
     // exact solution
-    Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, 1 > e_exact;
+    Eigen::Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, 1 > e_exact;
     double disp [3];
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
@@ -875,6 +904,7 @@ int main( int argc, char *argv[] ) {
             }
         }
         stMat->petsc_set_element_vec(sol_exact, eid, e_exact, 0, INSERT_VALUES);
+        //par::set_element_vec(meshMaps, sol_exact, eid, e_exact, 0, INSERT_VALUES);
     }
 
     VecAssemblyBegin(sol_exact);
@@ -951,7 +981,7 @@ int main( int argc, char *argv[] ) {
             myfile << values[0] << " " << values[1] << " " << values[2] << std::endl;
         }
         myfile.close();
-    } */
+    }*/
     
     for (unsigned int eid = 0; eid < nelem; eid++) {
         delete [] globalMap[eid];
