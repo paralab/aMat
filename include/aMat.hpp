@@ -108,8 +108,12 @@ namespace par {
         /**@brief aMatBased returns Petsc assembled matrix, aMatFree returns Petsc matrix shell */
         virtual Mat& get_matrix() = 0;
         
-        /**@brief assemble element matrix to global matrix */
+        /**@brief assemble single block of element matrix to global matrix */
         virtual Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) = 0;
+
+        /**@brief assemble element matrix, all blocks at once */
+        virtual Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
+                                          LI num_non_zero_block_i, LI num_non_zero_block_j, const EigenMat* non_zero_block_mats) = 0;
 
         /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs and matrix */
         virtual Error apply_bc( Vec rhs ) = 0;

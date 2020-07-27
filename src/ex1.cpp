@@ -129,8 +129,13 @@ int main( int argc, char *argv[] ) {
     MPI_Comm_size(comm, &size);
 
     // element matrix (contains multiple matrix blocks)
-    std::vector< Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM > > kee;
-    kee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT * AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
+    //std::vector< Matrix< double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM > > kee;
+    //kee.resize(AMAT_MAX_BLOCKSDIM_PER_ELEMENT * AMAT_MAX_BLOCKSDIM_PER_ELEMENT);
+    Matrix<double,Eigen::Dynamic, Eigen::Dynamic> * kee;
+    //Matrix<double,  NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM> * kee;
+    //kee = new Matrix<double,  NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM> [4];
+    kee = new Matrix<double, Eigen::Dynamic, Eigen::Dynamic> [4];
+    
 
     // nodal coordinates of element
     double* xe = new double[NDIM * NNODE_PER_ELEM];
@@ -568,6 +573,9 @@ int main( int argc, char *argv[] ) {
     par::create_vec(meshMaps, out);
     par::create_vec(meshMaps, sol_exact);
 
+    // index of nonzero blocks
+    unsigned int nz_i[1], nz_j[1];
+
     // compute element stiffness matrix and assemble global stiffness matrix and load vector
     for (unsigned int eid = 0; eid < nelem; eid++){
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++){
@@ -590,7 +598,10 @@ int main( int argc, char *argv[] ) {
         }
 
         // assemble element stiffness matrix to global K
-        stMat->set_element_matrix(eid, kee[0], 0, 0, 1);
+        //stMat->set_element_matrix(eid, kee[0], 0, 0, 1);
+        nz_i[0] = 0;
+        nz_j[0] = 0;
+        stMat->set_element_matrix(eid, nz_i, nz_j, 1u, 1u, kee);
         
         // assemble element load vector to global F
         if (elem_trac[eid].size() != 0){
@@ -776,6 +787,7 @@ int main( int argc, char *argv[] ) {
     delete [] prescribedValues_ptr;
 
     delete [] elem_trac;
+    delete [] kee;
 
     VecDestroy(&out);
     VecDestroy(&sol_exact);

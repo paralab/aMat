@@ -62,6 +62,8 @@ void ke_quad4_iso(Eigen::Matrix<double,8,8> &ke, double* xe, const double E, con
  * @param[in] NGT number of Gauss points in each direction
  * @param[out] ke(24,24) element stiffness matrix
  * */
+void ke_hex8_iso(Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic> &ke, double* xe, double E, double nu,
+                const double* xw, const unsigned int NGT);
 void ke_hex8_iso(Eigen::Matrix<double,24,24> &ke, double* xe, double E, double nu,
                 const double* xw, const unsigned int NGT);
 
