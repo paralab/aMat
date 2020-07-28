@@ -95,7 +95,7 @@ namespace par {
 
         /**@brief, assemble element matrix with all blocks at once, overidden version of aMat */
         Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                  LI num_non_zero_block_i, LI num_non_zero_block_j, const EigenMat* non_zero_block_mats);
+                                  const EigenMat* non_zero_block_mats, LI num_non_zero_blocks);
 
         /**@brief overidden version of aMat::apply_bc */
         Error apply_bc( Vec rhs ){
@@ -575,25 +575,18 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                              LI num_non_zero_block_i, LI num_non_zero_block_j, const EigenMat* non_zero_block_mats) {
-
-        LI blocks_dim;
-        if (num_non_zero_block_i < num_non_zero_block_j){
-            blocks_dim = num_non_zero_block_j;
-        } else {
-            blocks_dim = num_non_zero_block_i;
-        }
+                                                const EigenMat* non_zero_block_mats, LI num_non_zero_blocks) {
         
         LI block_id = 0;
 
-        for (LI i = 0; i < num_non_zero_block_i; i++){
-            const LI block_i = ind_non_zero_block_i[i];
-            for (LI j = 0; j < num_non_zero_block_j; j++){
-                const LI block_j = ind_non_zero_block_j[j];
-                copy_element_matrix(eid, non_zero_block_mats[block_id], block_i, block_j, blocks_dim);
-                block_id++;
-            }
+        for (LI b = 0; b < num_non_zero_blocks; b++){
+            const LI block_i = ind_non_zero_block_i[b];
+            const LI block_j = ind_non_zero_block_j[b];
+            block_id = (block_i * num_non_zero_blocks) + block_j;
+            copy_element_matrix(eid, non_zero_block_mats[block_id], block_i, block_j, num_non_zero_blocks);
         }
+        
+        return Error::SUCCESS;
     }
 
 

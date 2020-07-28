@@ -113,7 +113,7 @@ namespace par {
 
         /**@brief assemble element matrix, all blocks at once */
         virtual Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                          LI num_non_zero_block_i, LI num_non_zero_block_j, const EigenMat* non_zero_block_mats) = 0;
+                                          const EigenMat* non_zero_block_mats, LI num_non_zero_blocks) = 0;
 
         /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs and matrix */
         virtual Error apply_bc( Vec rhs ) = 0;

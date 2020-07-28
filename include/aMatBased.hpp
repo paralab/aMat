@@ -67,7 +67,7 @@ namespace par {
 
         /**@brief, assemble element matrix with all blocks at once, overidden version of aMat */
         Error set_element_matrix( LI eid, LI* index_non_zero_block_i, LI* index_non_zero_block_j, 
-                                          LI n_non_zero_block_i, LI n_non_zero_block_j, const EigenMat* non_zero_block_mats);
+                                  const EigenMat* non_zero_block_mats, LI num_non_zero_blocks);
 
         /**@brief overidden version of aMat::apply_bc */
         Error apply_bc( Vec rhs ){
@@ -170,17 +170,18 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatBased<DT,GI,LI>::set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                                LI num_non_zero_block_i, LI num_non_zero_block_j, const EigenMat* non_zero_block_mats){
+                                                   const EigenMat* non_zero_block_mats, LI num_non_zero_blocks){
         
         LI block_id = 0;
-        for (LI i = 0; i < num_non_zero_block_i; i++){
-            const LI block_i = ind_non_zero_block_i[i];
-            for (LI j = 0; j < num_non_zero_block_j; j++){
-                const LI block_j = ind_non_zero_block_j[j];
-                petsc_set_element_matrix(eid, non_zero_block_mats[block_id], block_i, block_j, ADD_VALUES);
-                block_id++;
-            }
+
+        for (LI b = 0; b < num_non_zero_blocks; b++){
+            const LI block_i = ind_non_zero_block_i[b];
+            const LI block_j = ind_non_zero_block_j[b];
+            block_id = (block_i * num_non_zero_blocks) + block_j;
+            petsc_set_element_matrix(eid, non_zero_block_mats[block_id], block_i, block_j, ADD_VALUES);
         }
+
+        return Error::SUCCESS;
     }
 
     // use with Eigen, matrix-based, set every row of the matrix (faster than set every term of the matrix)

@@ -601,7 +601,7 @@ int main( int argc, char *argv[] ) {
         //stMat->set_element_matrix(eid, kee[0], 0, 0, 1);
         nz_i[0] = 0;
         nz_j[0] = 0;
-        stMat->set_element_matrix(eid, nz_i, nz_j, 1u, 1u, kee);
+        stMat->set_element_matrix(eid, nz_i, nz_j, kee, 1u);
         
         // assemble element load vector to global F
         if (elem_trac[eid].size() != 0){
