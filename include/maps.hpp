@@ -97,6 +97,9 @@ namespace par {
         LI m_uiDofPostGhostBegin;               // local dof-ID starting of post-ghost nodes
         LI m_uiDofPostGhostEnd;                 // local dof-ID ending of post-ghost nodes
 
+        std::vector<LI> m_uivIndependentElem;   // Id of independent elements, i.e. elements do not have ghost dofs
+        std::vector<LI> m_uivDependentElem;     // Id of dependent elements
+
         public:
         /**@brief constructor */
         Maps( MPI_Comm comm );
@@ -220,6 +223,12 @@ namespace par {
         const LI& get_DofPostGhostEnd() const { 
             return m_uiDofPostGhostEnd; 
         }
+        const std::vector<LI>& get_independentElem() const {
+            return m_uivIndependentElem;
+        }
+        const std::vector<LI>& get_dependentElem() const {
+            return m_uivDependentElem;
+        }
 
 
         /**@brief set mapping from element local node to global node */
@@ -267,6 +276,10 @@ namespace par {
 
         /**@brief return the rank who owns gId */
         unsigned int globalId_2_rank(GI gId) const;
+
+        /**@brief identify independent/dependent elements */
+        Error identifyIndependentElements();
+
     }; //class Maps
 
 
@@ -383,6 +396,9 @@ namespace par {
         // build scatter map for communication before and after matvec
         // 05.21.20: also build m_uipLocalMap
         buildScatterMap();
+
+        // identify independent vs dependent elements so that overlap could be applied
+        identifyIndependentElements();
 
         return Error::SUCCESS;
 
@@ -823,6 +839,35 @@ namespace par {
         return rank;
 
     } // globalId_2_rank
+
+
+    template <typename DT, typename GI, typename LI>
+    Error Maps<DT, GI, LI>::identifyIndependentElements(){
+        GI global_dof_id;
+        LI did;
+        for (LI eid = 0; eid < m_uiNumElems; eid++){
+            for (did = 0; did < m_uiDofsPerElem[eid]; did++){
+                // global dof id
+                global_dof_id = m_ulpMap[eid][did];
+                // eid has at least 1 ghost dof --> dependent
+                if ((global_dof_id < m_ulvLocalDofScan[m_uiRank]) || (global_dof_id >= (m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs))){
+                    m_uivDependentElem.push_back(eid);
+                    break;
+                }
+            }
+            // eid does not have ghost dof --> independent
+            if (did == m_uiDofsPerElem[eid]){
+                m_uivIndependentElem.push_back(eid);
+            }
+        }
+        assert((m_uivIndependentElem.size() + m_uivDependentElem.size()) == m_uiNumElems);
+        /* for (LI eid = 0; eid < m_uivDependentElem.size(); eid++){
+            printf("[r%d], dependentE[%d]= %d\n", m_uiRank, eid, m_uivDependentElem[eid]);
+        }
+        for (LI eid = 0; eid < m_uivIndependentElem.size(); eid++){
+            printf("[r%d], independentE[%d]= %d\n", m_uiRank, eid, m_uivIndependentElem[eid]);
+        } */
+    }
 
 } //end of namespace par
 #endif// APTIVEMATRIX_MAPS_H

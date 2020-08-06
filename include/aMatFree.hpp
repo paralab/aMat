@@ -1282,6 +1282,8 @@ namespace par {
         const LI* const m_uiDofsPerElem = m_maps.get_DofsPerElem();
         LI** const m_uipLocalMap = m_maps.get_LocalMap();
 
+        const std::vector<LI>& m_uivIndependentElem = m_maps.get_independentElem();
+        const std::vector<LI>& m_uivDependentElem = m_maps.get_dependentElem();
 
         // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumDofsTotal)
         for (LI i = 0; i < m_uiDofPostGhostEnd; i++){
@@ -1290,9 +1292,9 @@ namespace par {
 
         // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
         ghost_receive_begin(u);
-        ghost_receive_end(u);
 
-        // multiply [ve] = [ke][ue] for all elements
+        // ========================== multiply [ve] = [ke][ue] for all elements ============================
+        // while waiting for communication, go ahead for independent elements
         #pragma omp parallel
         {
         LI rowID, colID;
@@ -1324,7 +1326,10 @@ namespace par {
         DT* veLocal = m_veBufs[tId];
 
         #pragma omp for
-        for (LI eid = 0; eid < m_uiNumElems; eid++){
+        for (LI i = 0; i < m_uivIndependentElem.size(); i++){
+            // independent element id
+            LI eid = m_uivIndependentElem[i];
+
             // get number of blocks of element eid
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
             LI block_row_offset = 0;
@@ -1490,14 +1495,235 @@ namespace par {
                             #pragma omp atomic
                             v[rowID] += veLocal[r];
                         }
-                    }
+                    } // if block_ID is not nullptr
+
                     // move to next block in j direction (u changes)
                     block_col_offset += num_dofs_per_block;
-                }
+
+                } // loop over blocks j
+
                 // move to next block in i direction (v changes)
                 block_row_offset += num_dofs_per_block;
-            }
+
+            } // loop over blocks i
+        } // loop over elements
+        } //pragma omp parallel
+
+        // finishing communication
+        ghost_receive_end(u);
+
+        // ready to go for dependent elements
+        #pragma omp parallel
+        {
+        LI rowID, colID;
+        LI blocks_dim, num_dofs_per_block;
+
+        // get thread id
+        const unsigned int tId = omp_get_thread_num();
+
+        // number of pads used in padding
+        #ifdef VECTORIZED_OPENMP_ALIGNED
+        unsigned int nPads = 0;
+        #endif
+
+        // allocate private ve and ue (if not allocated yet)
+        if (m_veBufs[tId] == nullptr){
+            #ifdef VECTORIZED_OPENMP_ALIGNED
+                // allocate and align ve = MaxDofsPerBlock + MaxNumPads, ue as normal
+                m_veBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock + m_uiMaxNumPads);
+                //m_ueBufs[tId] = create_aligned_array(ALIGNMENT, m_uiMaxDofsPerBlock);
+                m_ueBufs[tId] = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
+            #else
+                // allocate ve and ue without alignment
+                m_veBufs[tId] = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
+                m_ueBufs[tId] = (DT*)malloc(m_uiMaxDofsPerBlock * sizeof(DT));
+            #endif
+
         }
+        DT* ueLocal = m_ueBufs[tId];
+        DT* veLocal = m_veBufs[tId];
+
+        #pragma omp for
+        for (LI i = 0; i < m_uivDependentElem.size(); i++){
+            // dependent element id
+            LI eid = m_uivDependentElem[i];
+
+            // get number of blocks of element eid
+            blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            LI block_row_offset = 0;
+            LI block_col_offset = 0;
+            
+            // number of dofs per block must be the same for all blocks
+            num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
+
+            // compute needed pads added to the end of each column of block matrix
+            #ifdef VECTORIZED_OPENMP_ALIGNED
+            //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+            if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+            }
+            #endif
+
+            for (LI block_i = 0; block_i < blocks_dim; block_i++){
+
+                for (LI block_j = 0; block_j < blocks_dim; block_j++){
+
+                    LI block_ID = block_i * blocks_dim + block_j;
+                    
+                    if (m_epMat[eid][block_ID] != nullptr){
+                        // extract block-element vector ue from structure vector u, and initialize ve
+                        for (LI c = 0; c < num_dofs_per_block; c++) {
+                            colID = m_uipLocalMap[eid][block_col_offset + c];
+                            ueLocal[c] = u[colID];
+                            veLocal[c] = 0.0;
+                        }
+
+                        // ve = elemental matrix * ue
+                        #ifdef VECTORIZED_AVX512
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
+                                unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
+                                DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                const DT alpha = ueLocal[c];
+                                DT* y = veLocal;
+                                // broadcast alpha to form alpha vector
+                                __m512d alphaVec = _mm512_set1_pd(alpha);
+                                // vector operation y += alpha * x;
+                                for (LI j = 0; j < n_intervals; j++){
+                                    // load components of x to xVec
+                                    __m512d xVec = _mm512_loadu_pd(&x[SIMD_LENGTH * j]);
+                                    // load components of y to yVec
+                                    __m512d yVec = _mm512_loadu_pd(&y[SIMD_LENGTH * j]);
+                                    // vector multiplication tVec = alphaVec * xVec
+                                    __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
+                                    // accumulate tVec to yVec
+                                    yVec = _mm512_add_pd(tVec, yVec);
+                                    // store yVec to y
+                                    _mm512_storeu_pd(&y[SIMD_LENGTH * j], yVec);
+                                }
+                                // scalar operation for the remainder
+                                if (remain != 0){
+                                    double* xVec_remain = new double[SIMD_LENGTH];
+                                    double* yVec_remain = new double[SIMD_LENGTH];
+                                    for (LI j = 0; j < remain; j++){
+                                        xVec_remain[j] = x[j + n_intervals * SIMD_LENGTH];
+                                        yVec_remain[j] = y[j + n_intervals * SIMD_LENGTH];
+                                    }
+                                    for (unsigned int j = remain; j < SIMD_LENGTH; j++){
+                                        xVec_remain[j] = 0.0;
+                                        yVec_remain[j] = 0.0;
+                                    }
+                                    __m512d xVec = _mm512_loadu_pd(&xVec_remain[0]);
+                                    __m512d yVec = _mm512_loadu_pd(&yVec_remain[0]);
+                                    __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
+                                    yVec = _mm512_add_pd(tVec, yVec);
+                                    _mm512_storeu_pd(&yVec_remain[0], yVec);
+                                    for (unsigned int j = 0; j < remain; j++){
+                                        y[j + n_intervals * SIMD_LENGTH] = yVec_remain[j];
+                                    }
+                                    delete [] xVec_remain;
+                                    delete [] yVec_remain;
+                                }
+                            }
+                            
+                        #elif VECTORIZED_AVX256
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
+                                unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
+                                DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                const DT alpha = ueLocal[c];
+                                DT* y = veLocal;
+                                // broadcast alpha to form alpha vector
+                                __m256d alphaVec = _mm256_set1_pd(alpha);
+                                // vector operation y += alpha * x;
+                                for (LI i = 0; i < n_intervals; i++){
+                                    // load components of x to xVec
+                                    __m256d xVec = _mm256_load_pd(&x[SIMD_LENGTH * i]);
+                                    
+                                    // load components of y to yVec
+                                    __m256d yVec = _mm256_load_pd(&y[SIMD_LENGTH * i]);
+                                    // vector multiplication tVec = alphaVec * xVec
+                                    __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
+                                    // accumulate tVec to yVec
+                                    yVec = _mm256_add_pd(tVec, yVec);
+                                    // store yVec to y
+                                    _mm256_storeu_pd(&y[SIMD_LENGTH * i], yVec);
+                                }
+                                
+                                // scalar operation for the remainder
+                                if (remain != 0){
+                                    
+                                    double* xVec_remain = new double[SIMD_LENGTH];
+                                    double* yVec_remain = new double[SIMD_LENGTH];
+                                    for (unsigned int i = 0; i < remain; i++){
+                                        xVec_remain[i] = x[i + n_intervals * SIMD_LENGTH];
+                                        yVec_remain[i] = y[i + n_intervals * SIMD_LENGTH];
+                                    }
+                                    for (unsigned int i = remain; i < SIMD_LENGTH; i++){
+                                        xVec_remain[i] = 0.0;
+                                        yVec_remain[i] = 0.0;
+                                    }
+                                    __m256d xVec = _mm256_load_pd(&xVec_remain[0]);
+                                    __m256d yVec = _mm256_load_pd(&yVec_remain[0]);
+                                    __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
+                                    yVec = _mm256_add_pd(tVec, yVec);
+                                    _mm256_storeu_pd(&yVec_remain[0], yVec);
+                                    for (unsigned int i = 0; i < remain; i++){
+                                        y[i + n_intervals * SIMD_LENGTH] = yVec_remain[i];
+                                    }
+                                    delete [] xVec_remain;
+                                    delete [] yVec_remain;
+                                }
+                            }
+
+                        #elif VECTORIZED_OPENMP
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                const DT alpha = ueLocal[c];
+                                const DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                #pragma omp simd safelen(512)
+                                for (LI r = 0; r < num_dofs_per_block; r++){
+                                    veLocal[r] += alpha * x[r];
+                                }
+                            }
+
+                        #elif VECTORIZED_OPENMP_ALIGNED
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                const DT alpha = ueLocal[c];
+                                const DT* x = &m_epMat[eid][block_ID][c * (num_dofs_per_block + nPads)];
+                                #pragma omp simd aligned(x, veLocal : ALIGNMENT) safelen(512)
+                                for (LI r = 0; r < (num_dofs_per_block + nPads); r++){
+                                    veLocal[r] += alpha * x[r];
+                                }
+                            }
+
+                        #else
+                            //#pragma novector noparallel nounroll
+                            for (LI r = 0; r < num_dofs_per_block; r++){
+                                //#pragma novector noparallel nounroll
+                                for (LI c = 0; c < num_dofs_per_block; c++){
+                                    veLocal[r] += m_epMat[eid][block_ID][(r * num_dofs_per_block) + c] * ueLocal[c];
+                                }
+                            }
+
+                        #endif
+
+                        // accumulate element vector ve to structure vector v
+                        for (LI r = 0; r < num_dofs_per_block; r++){
+                            rowID = m_uipLocalMap[eid][block_row_offset + r];
+                            #pragma omp atomic
+                            v[rowID] += veLocal[r];
+                        }
+                    } // if block_ID is not nullptr
+
+                    // move to next block in j direction (u changes)
+                    block_col_offset += num_dofs_per_block;
+                } // loop over blocks j
+
+                // move to next block in i direction (v changes)
+                block_row_offset += num_dofs_per_block;
+
+            } // loop over blocks i
+        } // loop over elements
         } //pragma omp parallel
 
         // send data from ghost nodes back to owned nodes after computing v
@@ -1517,6 +1743,9 @@ namespace par {
         const LI* const m_uiDofsPerElem = m_maps.get_DofsPerElem();
         LI** const m_uipLocalMap = m_maps.get_LocalMap();
 
+        const std::vector<LI>& m_uivIndependentElem = m_maps.get_independentElem();
+        const std::vector<LI>& m_uivDependentElem = m_maps.get_dependentElem();
+
         LI blocks_dim, num_dofs_per_block;
 
         // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumDofsTotal)
@@ -1525,18 +1754,20 @@ namespace par {
         }
 
         LI rowID, colID;
-
-        // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
-        ghost_receive_begin(u);
-        ghost_receive_end(u);
-
         // number of pads used in padding
         #ifdef VECTORIZED_OPENMP_ALIGNED
         unsigned int nPads = 0;
         #endif
 
+        // send data from owned nodes to ghost nodes (of other processors) to get ready for computing v = Ku
+        ghost_receive_begin(u);
+
+        // while waiting for communication, go ahead for independent elements
         // multiply [ve] = [ke][ue] for all elements
-        for (LI eid = 0; eid < m_uiNumElems; eid++){
+        for (LI i = 0; i < m_uivIndependentElem.size(); i++){
+            // independent element id
+            LI eid = m_uivIndependentElem[i];
+
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
             LI block_row_offset = 0;
             LI block_col_offset = 0;
@@ -1712,14 +1943,213 @@ namespace par {
                         #ifdef AMAT_PROFILER
                             timing_aMat[static_cast<int>(PROFILER::MATVEC_ACC)].stop();
                         #endif
-                    }
+                    } // if block_ID is not null_ptr
+
                     // move to next block in j direction (u changes)
                     block_col_offset += num_dofs_per_block;
-                }
+                } // loop over blocks j
+
                 // move to next block in i direction (v changes)
                 block_row_offset += num_dofs_per_block;
+
+            } // loop over blocks i
+        } // loop over elements
+
+        // finishing communication
+        ghost_receive_end(u);
+        
+        // ready to go for dependent elements
+        // multiply [ve] = [ke][ue] for all elements
+        for (LI i = 0; i < m_uivDependentElem.size(); i++){
+            // dependent element id
+            LI eid = m_uivDependentElem[i];
+            
+            blocks_dim = (LI)sqrt(m_epMat[eid].size());
+            LI block_row_offset = 0;
+            LI block_col_offset = 0;
+
+            // number of dofs per block must be the same for all blocks
+            num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
+
+            // compute number of paddings inserted to the end of each column of block matrix
+            #ifdef VECTORIZED_OPENMP_ALIGNED
+            //nPads = get_column_paddings(ALIGNMENT, num_dofs_per_block);
+            if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
             }
-        }
+            #endif
+
+            for (LI block_i = 0; block_i < blocks_dim; block_i++){
+
+                for (LI block_j = 0; block_j < blocks_dim; block_j++){
+
+                    LI block_ID = block_i * blocks_dim + block_j;
+
+                    if (m_epMat[eid][block_ID] != nullptr){
+                        #ifdef AMAT_PROFILER
+                            timing_aMat[static_cast<int>(PROFILER::MATVEC_MUL)].start();
+                        #endif
+                        // extract block-element vector ue from structure vector u, and initialize ve
+                        for (LI c = 0; c < num_dofs_per_block; c++) {
+                            colID = m_uipLocalMap[eid][block_col_offset + c];
+                            ue[c] = u[colID];
+                            ve[c] = 0.0;
+                        }
+
+                        // ve = elemental matrix * ue
+                        #ifdef VECTORIZED_AVX512
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
+                                unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
+                                DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                const DT alpha = ue[c];
+                                DT* y = ve;
+                                // broadcast alpha to form alpha vector
+                                __m512d alphaVec = _mm512_set1_pd(alpha);
+                                // vector operation y += alpha * x;
+                                for (LI j = 0; j < n_intervals; j++){
+                                    // load components of x to xVec
+                                    __m512d xVec = _mm512_loadu_pd(&x[SIMD_LENGTH * j]);
+                                    // load components of y to yVec
+                                    __m512d yVec = _mm512_loadu_pd(&y[SIMD_LENGTH * j]);
+                                    // vector multiplication tVec = alphaVec * xVec
+                                    __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
+                                    // accumulate tVec to yVec
+                                    yVec = _mm512_add_pd(tVec, yVec);
+                                    // store yVec to y
+                                    _mm512_storeu_pd(&y[SIMD_LENGTH * j], yVec);
+                                }
+                                // scalar operation for the remainder
+                                if (remain != 0){
+                                    double* xVec_remain = new double[SIMD_LENGTH];
+                                    double* yVec_remain = new double[SIMD_LENGTH];
+                                    for (LI j = 0; j < remain; j++){
+                                        xVec_remain[j] = x[j + n_intervals * SIMD_LENGTH];
+                                        yVec_remain[j] = y[j + n_intervals * SIMD_LENGTH];
+                                    }
+                                    for (unsigned int j = remain; j < SIMD_LENGTH; j++){
+                                        xVec_remain[j] = 0.0;
+                                        yVec_remain[j] = 0.0;
+                                    }
+                                    __m512d xVec = _mm512_loadu_pd(&xVec_remain[0]);
+                                    __m512d yVec = _mm512_loadu_pd(&yVec_remain[0]);
+                                    __m512d tVec = _mm512_mul_pd(xVec, alphaVec);
+                                    yVec = _mm512_add_pd(tVec, yVec);
+                                    _mm512_storeu_pd(&yVec_remain[0], yVec);
+                                    for (unsigned int j = 0; j < remain; j++){
+                                        y[j + n_intervals * SIMD_LENGTH] = yVec_remain[j];
+                                    }
+                                    delete [] xVec_remain;
+                                    delete [] yVec_remain;
+                                }
+                            }
+
+                        #elif VECTORIZED_AVX256
+
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+
+                                unsigned int remain = num_dofs_per_block % SIMD_LENGTH;
+                                unsigned int n_intervals = num_dofs_per_block / SIMD_LENGTH;
+                                DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                const DT alpha = ue[c];
+                                DT* y = ve;
+                                // broadcast alpha to form alpha vector
+                                __m256d alphaVec = _mm256_set1_pd(alpha);
+                                // vector operation y += alpha * x;
+                                for (LI i = 0; i < n_intervals; i++){
+                                    // load components of x to xVec
+                                    __m256d xVec = _mm256_load_pd(&x[SIMD_LENGTH * i]);
+
+                                    // load components of y to yVec
+                                    __m256d yVec = _mm256_load_pd(&y[SIMD_LENGTH * i]);
+                                    // vector multiplication tVec = alphaVec * xVec
+                                    __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
+                                    // accumulate tVec to yVec
+                                    yVec = _mm256_add_pd(tVec, yVec);
+                                    // store yVec to y
+                                    _mm256_storeu_pd(&y[SIMD_LENGTH * i], yVec);
+                                }
+
+                                // scalar operation for the remainder
+                                if (remain != 0){
+
+                                    double* xVec_remain = new double[SIMD_LENGTH];
+                                    double* yVec_remain = new double[SIMD_LENGTH];
+                                    for (unsigned int i = 0; i < remain; i++){
+                                        xVec_remain[i] = x[i + n_intervals * SIMD_LENGTH];
+                                        yVec_remain[i] = y[i + n_intervals * SIMD_LENGTH];
+                                    }
+                                    for (unsigned int i = remain; i < SIMD_LENGTH; i++){
+                                        xVec_remain[i] = 0.0;
+                                        yVec_remain[i] = 0.0;
+                                    }
+                                    __m256d xVec = _mm256_load_pd(&xVec_remain[0]);
+                                    __m256d yVec = _mm256_load_pd(&yVec_remain[0]);
+                                    __m256d tVec = _mm256_mul_pd(xVec, alphaVec);
+                                    yVec = _mm256_add_pd(tVec, yVec);
+                                    _mm256_storeu_pd(&yVec_remain[0], yVec);
+                                    for (unsigned int i = 0; i < remain; i++){
+                                        y[i + n_intervals * SIMD_LENGTH] = yVec_remain[i];
+                                    }
+                                    delete [] xVec_remain;
+                                    delete [] yVec_remain;
+                                }
+                            }
+                        #elif VECTORIZED_OPENMP
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                const DT alpha = ue[c];
+                                const DT* x = &m_epMat[eid][block_ID][c * num_dofs_per_block];
+                                DT* y = ve;
+                                #pragma omp simd safelen(512)
+                                for (LI r = 0; r < num_dofs_per_block; r++){
+                                    y[r] += alpha * x[r];
+                                }
+                            }
+                        #elif VECTORIZED_OPENMP_ALIGNED
+                            for (LI c = 0; c < num_dofs_per_block; c++){
+                                const DT alpha = ue[c];
+                                const DT* x = &m_epMat[eid][block_ID][c * (num_dofs_per_block + nPads)];
+                                DT* y = ve;
+                                #pragma omp simd aligned(x, y : ALIGNMENT) safelen(512)
+                                for (LI r = 0; r < (num_dofs_per_block + nPads); r++){
+                                    y[r] += alpha * x[r];
+                                }
+                            }
+                        #else
+                            //#pragma novector noparallel nounroll
+                            for (LI r = 0; r < num_dofs_per_block; r++){
+                                //#pragma novector noparallel nounroll
+                                for (LI c = 0; c < num_dofs_per_block; c++){
+                                    ve[r] += m_epMat[eid][block_ID][(r * num_dofs_per_block) + c] * ue[c];
+                                }
+                            }
+                        #endif
+                        #ifdef AMAT_PROFILER
+                            timing_aMat[static_cast<int>(PROFILER::MATVEC_MUL)].stop();
+                        #endif
+
+                        #ifdef AMAT_PROFILER
+                            timing_aMat[static_cast<int>(PROFILER::MATVEC_ACC)].start();
+                        #endif
+                        // accumulate element vector ve to structure vector v
+                        for (LI r = 0; r < num_dofs_per_block; r++){
+                            rowID = m_uipLocalMap[eid][block_row_offset + r];
+                            v[rowID] += ve[r];
+                        }
+                        #ifdef AMAT_PROFILER
+                            timing_aMat[static_cast<int>(PROFILER::MATVEC_ACC)].stop();
+                        #endif
+                    } // if block_ID is not null_ptr
+
+                    // move to next block in j direction (u changes)
+                    block_col_offset += num_dofs_per_block;
+                } // loop over blocks j
+
+                // move to next block in i direction (v changes)
+                block_row_offset += num_dofs_per_block;
+
+            } // loop over blocks i
+        } // loop over elements
 
         // send data from ghost nodes back to owned nodes after computing v
         ghost_send_begin(v);
