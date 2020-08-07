@@ -93,7 +93,7 @@ namespace par {
 
 
     /**@brief free memory allocated for PETSc vector*/
-    Error delete_vec( Vec &vec ) {
+    static Error delete_vec( Vec &vec ) {
         VecDestroy( &vec );
         return Error::SUCCESS;
     } // delete_vec

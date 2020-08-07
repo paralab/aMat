@@ -867,6 +867,7 @@ namespace par {
         for (LI eid = 0; eid < m_uivIndependentElem.size(); eid++){
             printf("[r%d], independentE[%d]= %d\n", m_uiRank, eid, m_uivIndependentElem[eid]);
         } */
+        return Error::SUCCESS;
     }
 
 } //end of namespace par
