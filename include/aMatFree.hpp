@@ -88,6 +88,18 @@ namespace par {
         Error allocate_matrix();
 
         /**@brief update matrix, overidden version of aMat */
+        // TODO - Right now, this deletes element matrices.  For a more optimized approach, this should
+        // just add space for any new ones (copy existing data over). Then set_element_matrix will be called
+        // for any matrices that should be replaced.  This means you might have to track either:
+        // 1) the number of blocks in the maps class and keep track of the elements for which the number
+        //    of blocks changed between calls, or
+        // 2) the number of blocks within the aMat class and check if there is a mismatch with the
+        //    number of blocks as indicated in the maps class to determine if there was a change.
+        // For debugging, it will be useful to keep a flag for each element for which the blocks have changed
+        // that indicates if a new element matrix has been provided.  This should be true for all of them
+        // and an error can be thrown if it is not the case.
+        // Note that set_element_matrix(...) may be called for element matrices for which the # of blocks
+        // were unchanged.  This might be due to nonlinearities within the element.  Make sure that this is allowed.
         Error update_matrix();
 
         /**@brief assemble single block of element matrix, overidden version of aMatFree */
@@ -95,13 +107,15 @@ namespace par {
 
         /**@brief, assemble element matrix with all blocks at once, overidden version of aMat */
         Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                  const EigenMat* non_zero_block_mats, LI num_non_zero_blocks);
+                                  const EigenMat** non_zero_block_mats, LI num_non_zero_blocks);
+        // TODO - A second overload of set_element_matrix(...) was needed to take row major matrices.  However,
+        // I did not updated aMatBased.hpp with the same change.
+        /**@brief, assemble element matrix (row-major) with all blocks at once, overidden version of aMat */
+        Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
+                                  const EigenMatRowMajor** non_zero_block_mats, LI num_non_zero_blocks);
 
         /**@brief overidden version of aMat::apply_bc */
-        Error apply_bc( Vec rhs ){
-            apply_bc_rhs(rhs);
-            return Error::SUCCESS;
-        }
+        Error apply_bc(Vec rhs);
 
         /**@brief not applicable */
         Error petsc_init_mat( MatAssemblyType mode ) const {
@@ -171,7 +185,8 @@ namespace par {
         Error ghost_to_local(DT* local, const DT* gVec) const;
 
         /**@brief matrix-free version of set_element_matrix: copy element matrix and store in m_pMat */
-        Error copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim );
+        template <typename MatrixType>
+        Error copy_element_matrix(LI eid, const MatrixType& e_mat, LI block_i, LI block_j, LI blocks_dim);
 
         /**@brief get diagonal terms of structure matrix by accumulating diagonal of element matrices */
         Error mat_get_diagonal(DT* diag, bool isGhosted = false);
@@ -426,7 +441,9 @@ namespace par {
 
         // allocate m_epMat as an array with size equals number of owned elements
         // we do not know how many blocks and size of blocks for each element at this time
-        m_epMat = new std::vector<DT*> [m_uiNumElems];
+        if (m_uiNumElems > 0) {
+            m_epMat = new std::vector<DT*>[m_uiNumElems];
+        }
 
         // compute the largest number of dofs per block, to be used for allocation of ue and ve...
         // ASSUME that initially every element has only one block, AND the size of block is unchanged during crack growth
@@ -446,11 +463,6 @@ namespace par {
 
         // allocate memory for ue and ve used in elemental matrix-vector multiplication
         allocate_ue_ve();
-
-        // allocate memory for Uc used in MatMult_mf when applying bc
-        if (n_owned_constraints > 0){
-            m_dpUc = new DT [n_owned_constraints];
-        }
 
         // allocate memory for vvg and uug used in MatMult_mf
         m_dpVvg = new DT [m_uiNumDofsTotal];
@@ -480,12 +492,6 @@ namespace par {
                 m_epMat[eid].clear();
             }
             // we do not delete [] m_epMat because the number of elements do not change when map is updated
-        }
-
-        // re-allocate memory for Uc used in MatMult_mf when applying bc
-        if (m_dpUc != nullptr) delete [] m_dpUc;
-        if (n_owned_constraints > 0){
-            m_dpUc = new DT [n_owned_constraints];
         }
 
         // re-allocate memory for vvg and uug used in MatMult_mf
@@ -575,23 +581,52 @@ namespace par {
 
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT,GI,LI>::set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                                const EigenMat* non_zero_block_mats, LI num_non_zero_blocks) {
+                                                  const EigenMat** non_zero_block_mats, LI num_non_zero_blocks) {
         
-        LI block_id = 0;
-
         for (LI b = 0; b < num_non_zero_blocks; b++){
             const LI block_i = ind_non_zero_block_i[b];
             const LI block_j = ind_non_zero_block_j[b];
-            block_id = (block_i * num_non_zero_blocks) + block_j;
-            copy_element_matrix(eid, non_zero_block_mats[block_id], block_i, block_j, num_non_zero_blocks);
+            copy_element_matrix(eid, *non_zero_block_mats[b], block_i, block_j, num_non_zero_blocks);
+        }
+        
+        return Error::SUCCESS;
+    }
+
+    template <typename DT, typename GI, typename LI>
+    Error aMatFree<DT,GI,LI>::set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
+                                                  const EigenMatRowMajor** non_zero_block_mats, LI num_non_zero_blocks) {
+        
+        for (LI b = 0; b < num_non_zero_blocks; b++){
+            const LI block_i = ind_non_zero_block_i[b];
+            const LI block_j = ind_non_zero_block_j[b];
+            copy_element_matrix(eid, *non_zero_block_mats[b], block_i, block_j, num_non_zero_blocks);
         }
         
         return Error::SUCCESS;
     }
 
 
+    template <typename DT, typename GI, typename LI>
+    inline Error aMatFree<DT, GI, LI>::apply_bc(Vec rhs)
+    {
+        // Allocate m_dpUc, which will temporarily stores terms related to constrained DoFs
+        // (boundary conditions) during MatMult_mf.
+        if (m_dpUc != nullptr) {
+            delete[] m_dpUc;
+        }
+        auto n_owned_constraints = m_maps.get_n_owned_constraints();
+        if (n_owned_constraints > 0) {
+            m_dpUc = new DT[n_owned_constraints];
+        }
+
+        apply_bc_rhs(rhs);
+        return Error::SUCCESS;
+    }
+
+
     template <typename DT,typename GI, typename LI>
-    Error aMatFree<DT,GI,LI>::copy_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) {
+    template <typename MatrixType>
+    Error aMatFree<DT,GI,LI>::copy_element_matrix( LI eid, const MatrixType& e_mat, LI block_i, LI block_j, LI blocks_dim ) {
         
         // resize the vector of blocks for element eid
         m_epMat[eid].resize(blocks_dim * blocks_dim, nullptr);
@@ -765,9 +800,6 @@ namespace par {
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
             assert (blocks_dim * blocks_dim == m_epMat[eid].size());
 
-            LI block_row_offset = 0;
-            LI block_col_offset = 0;
-
             const LI num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
 
             #ifdef VECTORIZED_OPENMP_ALIGNED
@@ -779,9 +811,12 @@ namespace par {
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
+                LI block_row_offset = block_i * num_dofs_per_block;
+
                 for (LI block_j = 0; block_j < blocks_dim; block_j++){
 
                     LI index = block_i * blocks_dim + block_j;
+                    LI block_col_offset = block_j * num_dofs_per_block;
 
                     if (m_epMat[eid][index] != nullptr){
 
@@ -844,11 +879,7 @@ namespace par {
                         }
                     } // if block is not null
 
-                    block_col_offset += num_dofs_per_block;
-
                 } // for block_j
-
-                block_row_offset += num_dofs_per_block;
 
             } // for block_i
 
@@ -1332,8 +1363,6 @@ namespace par {
 
             // get number of blocks of element eid
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
-            LI block_row_offset = 0;
-            LI block_col_offset = 0;
             
             // number of dofs per block must be the same for all blocks
             num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
@@ -1348,9 +1377,12 @@ namespace par {
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
+                LI block_row_offset = block_i * num_dofs_per_block;
+
                 for (LI block_j = 0; block_j < blocks_dim; block_j++){
 
                     LI block_ID = block_i * blocks_dim + block_j;
+                    LI block_col_offset = block_j * num_dofs_per_block;
                     
                     if (m_epMat[eid][block_ID] != nullptr){
                         // extract block-element vector ue from structure vector u, and initialize ve
@@ -1497,13 +1529,7 @@ namespace par {
                         }
                     } // if block_ID is not nullptr
 
-                    // move to next block in j direction (u changes)
-                    block_col_offset += num_dofs_per_block;
-
                 } // loop over blocks j
-
-                // move to next block in i direction (v changes)
-                block_row_offset += num_dofs_per_block;
 
             } // loop over blocks i
         } // loop over elements
@@ -1550,8 +1576,6 @@ namespace par {
 
             // get number of blocks of element eid
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
-            LI block_row_offset = 0;
-            LI block_col_offset = 0;
             
             // number of dofs per block must be the same for all blocks
             num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
@@ -1566,9 +1590,12 @@ namespace par {
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
+                LI block_row_offset = block_i * num_dofs_per_block;
+
                 for (LI block_j = 0; block_j < blocks_dim; block_j++){
 
                     LI block_ID = block_i * blocks_dim + block_j;
+                    LI block_col_offset = block_j * num_dofs_per_block;
                     
                     if (m_epMat[eid][block_ID] != nullptr){
                         // extract block-element vector ue from structure vector u, and initialize ve
@@ -1715,12 +1742,7 @@ namespace par {
                         }
                     } // if block_ID is not nullptr
 
-                    // move to next block in j direction (u changes)
-                    block_col_offset += num_dofs_per_block;
                 } // loop over blocks j
-
-                // move to next block in i direction (v changes)
-                block_row_offset += num_dofs_per_block;
 
             } // loop over blocks i
         } // loop over elements
@@ -1769,8 +1791,6 @@ namespace par {
             LI eid = m_uivIndependentElem[i];
 
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
-            LI block_row_offset = 0;
-            LI block_col_offset = 0;
 
             // number of dofs per block must be the same for all blocks
             num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
@@ -1785,8 +1805,14 @@ namespace par {
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
+                LI block_row_offset = block_i * num_dofs_per_block;
+
                 for (LI block_j = 0; block_j < blocks_dim; block_j++){
 
+                    // TODO - Previously, block_col_offset was being calculated incorrectly.
+                    // I fixed the calculation of the column offsets everywhere within this file.
+                    // However, I have not updated the aMatBased.hpp with the required fixes.
+                    LI block_col_offset = block_j * num_dofs_per_block;
                     LI block_ID = block_i * blocks_dim + block_j;
 
                     if (m_epMat[eid][block_ID] != nullptr){
@@ -1945,13 +1971,7 @@ namespace par {
                         #endif
                     } // if block_ID is not null_ptr
 
-                    // move to next block in j direction (u changes)
-                    block_col_offset += num_dofs_per_block;
                 } // loop over blocks j
-
-                // move to next block in i direction (v changes)
-                block_row_offset += num_dofs_per_block;
-
             } // loop over blocks i
         } // loop over elements
 
@@ -1965,8 +1985,6 @@ namespace par {
             LI eid = m_uivDependentElem[i];
             
             blocks_dim = (LI)sqrt(m_epMat[eid].size());
-            LI block_row_offset = 0;
-            LI block_col_offset = 0;
 
             // number of dofs per block must be the same for all blocks
             num_dofs_per_block = m_uiDofsPerElem[eid]/blocks_dim;
@@ -1981,9 +1999,12 @@ namespace par {
 
             for (LI block_i = 0; block_i < blocks_dim; block_i++){
 
+                LI block_row_offset = block_i * num_dofs_per_block;
+
                 for (LI block_j = 0; block_j < blocks_dim; block_j++){
 
                     LI block_ID = block_i * blocks_dim + block_j;
+                    LI block_col_offset = block_j * num_dofs_per_block;
 
                     if (m_epMat[eid][block_ID] != nullptr){
                         #ifdef AMAT_PROFILER
@@ -2141,12 +2162,7 @@ namespace par {
                         #endif
                     } // if block_ID is not null_ptr
 
-                    // move to next block in j direction (u changes)
-                    block_col_offset += num_dofs_per_block;
                 } // loop over blocks j
-
-                // move to next block in i direction (v changes)
-                block_row_offset += num_dofs_per_block;
 
             } // loop over blocks i
         } // loop over elements
@@ -2185,7 +2201,6 @@ namespace par {
 
         // apply BC: save value of U_c, then make U_c = 0
         const LI numConstraints = ownedConstrainedDofs.size();
-        // m_dpUc was allocated in allocate_matrix (numConstraints is unchanged)
         DT* Uc = m_dpUc;
         for (LI nid = 0; nid < numConstraints; nid++){
             local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
@@ -2442,8 +2457,6 @@ namespace par {
             for (LI eid = 0; eid < m_uiNumElems; eid++){
                 block_dims = (LI)sqrt(m_epMat[eid].size());
                 assert((block_dims*block_dims) == m_epMat[eid].size());
-                LI block_row_offset = 0;
-                LI block_col_offset = 0;
                 num_dofs_per_block = m_uiDofsPerElem[eid]/block_dims;
 
                 #ifdef VECTORIZED_OPENMP_ALIGNED
@@ -2458,8 +2471,10 @@ namespace par {
                 row_Indices_KfcUc_elem.clear();
 
                 for (LI block_i = 0; block_i < block_dims; block_i++){
+                    LI block_row_offset = block_i * num_dofs_per_block;
                     for (LI block_j = 0; block_j < block_dims; block_j++){
                         block_index = block_i * block_dims + block_j;
+                        LI block_col_offset = block_j * num_dofs_per_block;
                         // continue if block_index is not nullptr
                         if (m_epMat[eid][block_index] != nullptr){
                             for (LI r = 0; r < num_dofs_per_block; r++){

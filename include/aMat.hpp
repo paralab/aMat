@@ -70,6 +70,7 @@ namespace par {
 
         public:
         typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
+        typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> EigenMatRowMajor;
 
         typedef DT DTType;
         typedef GI GIType;
@@ -113,7 +114,10 @@ namespace par {
 
         /**@brief assemble element matrix, all blocks at once */
         virtual Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                          const EigenMat* non_zero_block_mats, LI num_non_zero_blocks) = 0;
+                                          const EigenMat** non_zero_block_mats, LI num_non_zero_blocks) = 0;
+        /**@brief, assemble element matrix (row-major) with all blocks at once, overidden version of aMat */
+        virtual Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j,
+                                          const EigenMatRowMajor** non_zero_block_mats, LI num_non_zero_blocks) = 0;
 
         /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs and matrix */
         virtual Error apply_bc( Vec rhs ) = 0;

@@ -301,7 +301,7 @@ namespace par {
         m_uipBdrMap        = nullptr;       // element-to-constraint_flag map (1 is constrained dof, 0 is free dof)
         m_dtPresValMap     = nullptr;       // element-to-prescibed_value map
         m_uipLocalMap      = nullptr;       // element-to-local map
-
+        n_owned_constraints = 0;
     } // constructor
 
     template <typename DT, typename GI, typename LI>
@@ -842,7 +842,11 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    Error Maps<DT, GI, LI>::identifyIndependentElements(){
+    Error Maps<DT, GI, LI>::identifyIndependentElements()
+    {
+        m_uivDependentElem.clear();
+        m_uivIndependentElem.clear();
+
         GI global_dof_id;
         LI did;
         for (LI eid = 0; eid < m_uiNumElems; eid++){
