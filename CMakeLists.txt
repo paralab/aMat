@@ -20,25 +20,26 @@ if(MPI_LINK_FLAGS)
 endif()
 
 set(INCLUDE_FILES
-        include/ke_matrix.hpp
-        include/fe_vector.hpp
         include/aMat.hpp
+        include/aMatBased.hpp
+        include/aMatFree.hpp
         include/asyncExchangeCtx.hpp
+        include/aVec.hpp
+        include/constraintRecord.hpp
         include/enums.hpp
         include/maps.hpp
-        include/aMatFree.hpp
-        include/aMatBased.hpp
-        include/aVec.hpp
-        include/solve.hpp
+        include/matRecord.hpp
         include/profiler.hpp
-        include/integration.hpp
-        include/shapeFunc.hpp
-        include/constraintRecord.hpp
-        include/matRecord.hpp)
+        examples/include/fe_vector.hpp
+        examples/include/integration.hpp
+        examples/include/ke_matrix.hpp
+        examples/include/me_matrix.hpp
+        examples/include/shapeFunc.hpp
+        examples/include/solve.hpp)
 
 set(SOURCE_FILES
-        src/ke_matrix.cpp
-        src/fe_vector.cpp)
+        examples/src/ke_matrix.cpp
+        examples/src/fe_vector.cpp)
 
 # cmake options, which will be visible at ccmake ../
 option(BUILD_WITH_PETSC "Build code with the petsc" ON)
@@ -93,44 +94,51 @@ endif(HYBRID_PARALLEL)
 
 set(EIGEN_HEADER_DIR .)
 
-add_executable(fem3d src/fem3d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+add_executable(fem3d examples/src/fem3d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(fem3d PUBLIC include)
+target_include_directories(fem3d PUBLIC examples/include)
 target_include_directories(fem3d PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(fem3d PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(fem3d ${MPI_LIBRARIES} m)
 
-add_executable(fem1d src/fem1d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+add_executable(fem1d examples/src/fem1d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(fem1d PUBLIC include)
+target_include_directories(fem1d PUBLIC examples/include)
 target_include_directories(fem1d PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(fem1d PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(fem1d ${MPI_LIBRARIES} m)
 
-add_executable(fem2d src/fem2d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+add_executable(fem2d examples/src/fem2d.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(fem2d PUBLIC include)
+target_include_directories(fem2d PUBLIC examples/include)
 target_include_directories(fem2d PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(fem2d PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(fem2d ${MPI_LIBRARIES} m)
 
-add_executable(ex1 src/ex1.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+add_executable(ex1 examples/src/ex1.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(ex1 PUBLIC include)
+target_include_directories(ex1 PUBLIC examples/include)
 target_include_directories(ex1 PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(ex1 PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(ex1 ${MPI_LIBRARIES} m)
 
-add_executable(ex2 src/ex2.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+add_executable(ex2 examples/src/ex2.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(ex2 PUBLIC include)
+target_include_directories(ex2 PUBLIC examples/include)
 target_include_directories(ex2 PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(ex2 PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(ex2 ${MPI_LIBRARIES} m)
 
-add_executable(ex3 src/ex3.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+add_executable(ex3 examples/src/ex3.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(ex3 PUBLIC include)
+target_include_directories(ex3 PUBLIC examples/include)
 target_include_directories(ex3 PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(ex3 PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(ex3 ${MPI_LIBRARIES} m)
 
-add_executable(ex4 src/ex4.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+add_executable(ex4 examples/src/ex4.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
 target_include_directories(ex4 PUBLIC include)
+target_include_directories(ex4 PUBLIC examples/include)
 target_include_directories(ex4 PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(ex4 PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(ex4 ${MPI_LIBRARIES} m)
