@@ -543,8 +543,8 @@ namespace par {
         postGhostGIds.erase(std::unique(postGhostGIds.begin(), postGhostGIds.end()), postGhostGIds.end());
 
         // number of pre and post ghost dofs
-        m_uiNumPreGhostDofs = preGhostGIds.size();
-        m_uiNumPostGhostDofs = postGhostGIds.size();
+        m_uiNumPreGhostDofs = static_cast<LI>(preGhostGIds.size());
+        m_uiNumPostGhostDofs = static_cast<LI>(postGhostGIds.size());
 
         // range of local ID of pre-ghost dofs = [0, m_uiDofPreGhostEnd)
         m_uiDofPreGhostBegin = 0;
@@ -738,13 +738,13 @@ namespace par {
                     local_dof_id = global_dof_id - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
 
                 } else if (global_dof_id < m_ulvLocalDofScan[m_uiRank]){
-                    // global_dof_id is owned by someone before me
-                    const LI lookUp = std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), global_dof_id) - preGhostGIds.begin();
+                    // global_dof_id is owned by someone before me (note: can be safely cast to LI due to size of preGhostGIds)
+                    const LI lookUp = static_cast<LI>(std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), global_dof_id) - preGhostGIds.begin());
                     local_dof_id = lookUp;
 
                 } else if (global_dof_id >= (m_ulvLocalDofScan[m_uiRank] + m_uivLocalDofCounts[m_uiRank])){
-                    // global_dof_id is owned by someone after me
-                    const LI lookUp = std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), global_dof_id) - postGhostGIds.begin();
+                    // global_dof_id is owned by someone after me (note: can be safely cast to LI due to size of preGhostGIds)
+                    const LI lookUp = static_cast<LI>(std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), global_dof_id) - postGhostGIds.begin());
                     local_dof_id = (m_uiNumPreGhostDofs + m_uiNumDofs) + lookUp;
                 } else {
                     std::cout << " m_uiRank: " << m_uiRank << "scatter map error : " << __func__ << std::endl;
@@ -769,11 +769,8 @@ namespace par {
     Error Maps<DT,GI,LI>::set_bdr_map(GI* constrainedDofs, DT* prescribedValues, LI numConstraints){
 
         // extract constrained dofs owned by me
-        LI local_Id;
-        GI global_Id;
-
         for (LI i = 0; i < numConstraints; i++){
-            global_Id = constrainedDofs[i];
+            auto global_Id = constrainedDofs[i];
             if ((global_Id >= m_ulvLocalDofScan[m_uiRank]) && (global_Id < m_ulvLocalDofScan[m_uiRank] + m_uiNumDofs)) {
                 ownedConstrainedDofs.push_back(global_Id);
                 ownedPrescribedValues.push_back(prescribedValues[i]);
@@ -790,7 +787,7 @@ namespace par {
 
         for (LI eid = 0; eid < m_uiNumElems; eid++){
             for (LI nid = 0; nid < m_uiDofsPerElem[eid]; nid++){
-                global_Id = m_ulpMap[eid][nid];
+                auto global_Id = m_ulpMap[eid][nid];
                 LI index;
                 for (index = 0; index < numConstraints; index++) {
                     if (global_Id == constrainedDofs[index]) {
@@ -816,7 +813,7 @@ namespace par {
         }
 
         // number of owned constraints
-        n_owned_constraints = ownedConstrainedDofs.size();
+        n_owned_constraints = static_cast<LI>(ownedConstrainedDofs.size());
 
         return Error::SUCCESS;
     } // set_bdr_map

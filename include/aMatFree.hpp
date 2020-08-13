@@ -22,20 +22,22 @@ namespace par {
     // class aMatFree derived from base class aMat
     // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
     template <typename DT, typename GI, typename LI>
-    class aMatFree : public aMat<DT,GI,LI> {
+    class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI> {
 
         public:
-        using typename aMat<DT, GI, LI>::EigenMat;
 
-        using aMat<DT, GI, LI>::m_comm;             // communicator
-        using aMat<DT, GI, LI>::m_uiRank;           // my rank id
-        using aMat<DT, GI, LI>::m_uiSize;           // total number of ranks
-        using aMat<DT, GI, LI>::m_BcMeth;           // method of applying Dirichlet BC
-        using aMat<DT, GI, LI>::m_maps;             // reference to mesh_maps passed in constructor
-        using aMat<DT, GI, LI>::KfcUcVec;           // KfcUc = Kfc * Uc, used to apply bc for rhs
-        using aMat<DT, GI, LI>::m_dtTraceK;         // penalty number
-        using aMat<DT, GI, LI>::m_pMat;             // Petsc matrix
-        using aMat<DT, GI, LI>::m_matType;          // matrix type (aMatFree or aMatBased)
+        using ParentType = aMat<aMatFree<DT, GI, LI>, DT, GI, LI>;
+
+        using typename ParentType::EigenMat;
+        using ParentType::m_comm;             // communicator
+        using ParentType::m_uiRank;           // my rank id
+        using ParentType::m_uiSize;           // total number of ranks
+        using ParentType::m_BcMeth;           // method of applying Dirichlet BC
+        using ParentType::m_maps;             // reference to mesh_maps passed in constructor
+        using ParentType::KfcUcVec;           // KfcUc = Kfc * Uc, used to apply bc for rhs
+        using ParentType::m_dtTraceK;         // penalty number
+        using ParentType::m_pMat;             // Petsc matrix
+        using ParentType::m_matType;          // matrix type (aMatFree or aMatBased)
         
         #ifdef AMAT_PROFILER
         using aMat<DT, GI, LI>::timing_aMat;
@@ -88,43 +90,36 @@ namespace par {
         Error allocate_matrix();
 
         /**@brief update matrix, overidden version of aMat */
-        // TODO - Right now, this deletes element matrices.  For a more optimized approach, this should
-        // just add space for any new ones (copy existing data over). Then set_element_matrix will be called
-        // for any matrices that should be replaced.  This means you might have to track either:
-        // 1) the number of blocks in the maps class and keep track of the elements for which the number
-        //    of blocks changed between calls, or
-        // 2) the number of blocks within the aMat class and check if there is a mismatch with the
-        //    number of blocks as indicated in the maps class to determine if there was a change.
-        // For debugging, it will be useful to keep a flag for each element for which the blocks have changed
-        // that indicates if a new element matrix has been provided.  This should be true for all of them
-        // and an error can be thrown if it is not the case.
-        // Note that set_element_matrix(...) may be called for element matrices for which the # of blocks
-        // were unchanged.  This might be due to nonlinearities within the element.  Make sure that this is allowed.
         Error update_matrix();
 
         /**@brief assemble single block of element matrix, overidden version of aMatFree */
-        Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim );
+        template<typename MatrixType>
+        Error set_element_matrix(LI eid, const MatrixType& e_mat, LI block_i, LI block_j, LI blocks_dim);
 
         /**@brief, assemble element matrix with all blocks at once, overidden version of aMat */
+        template <typename MatrixType>
         Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                  const EigenMat** non_zero_block_mats, LI num_non_zero_blocks);
-        // TODO - A second overload of set_element_matrix(...) was needed to take row major matrices.  However,
-        // I did not updated aMatBased.hpp with the same change.
-        /**@brief, assemble element matrix (row-major) with all blocks at once, overidden version of aMat */
-        Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                  const EigenMatRowMajor** non_zero_block_mats, LI num_non_zero_blocks);
+                                  const MatrixType** non_zero_block_mats, LI num_non_zero_blocks);
 
         /**@brief overidden version of aMat::apply_bc */
         Error apply_bc(Vec rhs);
 
+        Error finalize() const {
+            finalize_begin();
+            finalize_end();
+        }
+
         /**@brief not applicable */
-        Error petsc_init_mat( MatAssemblyType mode ) const {
+        Error finalize_begin() const {
             //printf("petsc_init_mat is not applied for matrix-free\n");
             return Error::SUCCESS;
         }
 
         /**@brief not applicable */
-        Error petsc_finalize_mat( MatAssemblyType mode ) const {
+        Error finalize_end() const {
+
+            // TODO calculates trace
+
             //printf("petsc_finalize_mat is not applied for matrix-free\n");
             return Error::SUCCESS;
         }
@@ -305,7 +300,9 @@ namespace par {
     //==============================================================================================================
 
     template <typename DT, typename GI, typename LI>
-    aMatFree<DT,GI,LI>::aMatFree(Maps<DT,GI,LI> &mesh_maps, BC_METH bcType) : aMat<DT, GI, LI>(mesh_maps, bcType) {
+    aMatFree<DT, GI, LI>::aMatFree(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType)
+        : ParentType(mesh_maps, bcType)
+    {
         m_epMat    = nullptr;   // element matrices (Eigen matrix), used in matrix-free
         m_iCommTag = 0;         // tag for sends & receives used in matvec and mat_get_diagonal_block_seq
         m_matType = MATRIX_TYPE::MATRIX_FREE;
@@ -476,23 +473,7 @@ namespace par {
     template <typename DT, typename GI, typename LI>
     Error aMatFree<DT, GI, LI>:: update_matrix(){
         
-        const LI m_uiNumElems = m_maps.get_NumElems();
-        const LI n_owned_constraints = m_maps.get_n_owned_constraints();
         const LI m_uiNumDofsTotal = m_maps.get_NumDofsTotal();
-
-        // Note: currently we delete all old element matrices and need to add new element matrices again
-        // Todo: only add newly formed blocks?
-        if( m_epMat != nullptr) {
-            for (LI eid = 0; eid < m_uiNumElems; eid++){
-                for (LI bid = 0; bid < m_epMat[eid].size(); bid++){
-                    if (m_epMat[eid][bid] != nullptr){
-                        free(m_epMat[eid][bid]);
-                    }
-                }
-                m_epMat[eid].clear();
-            }
-            // we do not delete [] m_epMat because the number of elements do not change when map is updated
-        }
 
         // re-allocate memory for vvg and uug used in MatMult_mf
         if (m_dpVvg != nullptr) delete [] m_dpVvg;
@@ -574,14 +555,18 @@ namespace par {
 
 
     template <typename DT, typename GI, typename LI>
-    Error aMatFree<DT,GI,LI>::set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ){
+    template <typename MatrixType>
+    Error aMatFree<DT, GI, LI>::set_element_matrix(LI eid, const MatrixType& e_mat, LI block_i, LI block_j, LI blocks_dim)
+    {
         aMatFree<DT,GI,LI>::copy_element_matrix(eid, e_mat, block_i, block_j, blocks_dim);
         return Error::SUCCESS;
     } // set_element_matrix
 
     template <typename DT, typename GI, typename LI>
+    template <typename MatrixType>
     Error aMatFree<DT,GI,LI>::set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                                  const EigenMat** non_zero_block_mats, LI num_non_zero_blocks) {
+                                                  const MatrixType** non_zero_block_mats, LI num_non_zero_blocks)
+    {
         
         for (LI b = 0; b < num_non_zero_blocks; b++){
             const LI block_i = ind_non_zero_block_i[b];
@@ -591,20 +576,6 @@ namespace par {
         
         return Error::SUCCESS;
     }
-
-    template <typename DT, typename GI, typename LI>
-    Error aMatFree<DT,GI,LI>::set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                                  const EigenMatRowMajor** non_zero_block_mats, LI num_non_zero_blocks) {
-        
-        for (LI b = 0; b < num_non_zero_blocks; b++){
-            const LI block_i = ind_non_zero_block_i[b];
-            const LI block_j = ind_non_zero_block_j[b];
-            copy_element_matrix(eid, *non_zero_block_mats[b], block_i, block_j, num_non_zero_blocks);
-        }
-        
-        return Error::SUCCESS;
-    }
-
 
     template <typename DT, typename GI, typename LI>
     inline Error aMatFree<DT, GI, LI>::apply_bc(Vec rhs)
@@ -628,32 +599,48 @@ namespace par {
     template <typename MatrixType>
     Error aMatFree<DT,GI,LI>::copy_element_matrix( LI eid, const MatrixType& e_mat, LI block_i, LI block_j, LI blocks_dim ) {
         
+        // TODO - add assertion num_dofs_per_element in maps matches num_dofs_per_block * blocks_dim
+
         // resize the vector of blocks for element eid
-        m_epMat[eid].resize(blocks_dim * blocks_dim, nullptr);
+        if (m_epMat[eid].size() != blocks_dim * blocks_dim)
+        {
+            for (auto& block : m_epMat[eid])
+            {
+                delete_algined_array(block);
+            }
+            m_epMat[eid].resize(blocks_dim * blocks_dim);
+            for (auto& block : m_epMat[eid])
+            {
+                block = nullptr;
+            }
+        }
         
         // 1D-index of (block_i, block_j)
         LI index = (block_i * blocks_dim) + block_j;
 
-        // allocate memory to store e_mat (e_mat is one of blocks of the elemental matrix of element eid)
-        LI num_dofs_per_block = e_mat.rows();
+        auto num_dofs_per_block = e_mat.rows();
         assert (num_dofs_per_block == e_mat.cols());
-        
-        // allocate memory for elemental matrices
-        #ifdef VECTORIZED_OPENMP_ALIGNED
-            // compute number of paddings appended to each column of elemental block matrix so that each column is aligned with ALIGNMENT
-            assert((ALIGNMENT % sizeof(DT)) == 0);
-            unsigned int nPads = 0;
-            if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
-                nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
-            }
 
-            // allocate block matrix with added paddings and aligned with ALIGNMENT
-            m_epMat[eid][index] = create_aligned_array(ALIGNMENT, ((num_dofs_per_block + nPads) * num_dofs_per_block));
-        #else
-            // allocate block matrix as normal
-            m_epMat[eid][index] = (DT*)malloc((num_dofs_per_block * num_dofs_per_block) * sizeof(DT));
-        #endif
-        
+        // allocate memory to store e_mat (e_mat is one of blocks of the elemental matrix of element eid)
+        if (m_epMat[eid][index] == nullptr)
+        {
+            // allocate memory for elemental matrices
+            #ifdef VECTORIZED_OPENMP_ALIGNED
+                // compute number of paddings appended to each column of elemental block matrix so that each column is aligned with ALIGNMENT
+                assert((ALIGNMENT % sizeof(DT)) == 0);
+                unsigned int nPads = 0;
+                if ((num_dofs_per_block % (ALIGNMENT/sizeof(DT))) != 0){
+                    nPads = (ALIGNMENT/sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT/sizeof(DT)));
+                }
+
+                // allocate block matrix with added paddings and aligned with ALIGNMENT
+                m_epMat[eid][index] = create_aligned_array(ALIGNMENT, ((num_dofs_per_block + nPads) * num_dofs_per_block));
+            #else
+                // allocate block matrix as normal
+                m_epMat[eid][index] = (DT*)malloc((num_dofs_per_block * num_dofs_per_block) * sizeof(DT));
+            #endif
+        }
+
         // store block matrix in column-major for all methods of vectorization, row-major for non vectorization
         #if defined(VECTORIZED_AVX512) || defined(VECTORIZED_AVX256) || defined(VECTORIZED_OPENMP)
             for (LI col = 0; col < num_dofs_per_block; col++){
@@ -677,6 +664,7 @@ namespace par {
         #endif
         
         // compute the trace of matrix for penalty method
+        // TODO move to finalize_end()
         if (m_BcMeth == BC_METH::BC_PENALTY){
             for (LI row = 0; row < num_dofs_per_block; row++) m_dtTraceK += e_mat(row,row);
         }
@@ -1125,8 +1113,8 @@ namespace par {
         // wait for all sends and receives finish
         MPI_Status sts;
         // total number of sends and receives have issued
-        int num_req = ctx.getRequestList().size();
-        for (unsigned int i =0; i < num_req; i++) {
+        auto num_req = ctx.getRequestList().size();
+        for (std::size_t i =0; i < num_req; i++) {
             MPI_Wait(ctx.getRequestList()[i], &sts);
         }
 
@@ -1229,10 +1217,10 @@ namespace par {
             }
         }
         AsyncExchangeCtx ctx = m_vAsyncCtx[ctx_index];
-        int num_req = ctx.getRequestList().size();
+        auto num_req = ctx.getRequestList().size();
 
         MPI_Status sts;
-        for (unsigned int i = 0; i < num_req; i++){
+        for (std::size_t i = 0; i < num_req; i++){
             MPI_Wait(ctx.getRequestList()[i],&sts);
         }
 
@@ -2200,7 +2188,7 @@ namespace par {
         local_to_ghost(uug, uu);
 
         // apply BC: save value of U_c, then make U_c = 0
-        const LI numConstraints = ownedConstrainedDofs.size();
+        const auto numConstraints = ownedConstrainedDofs.size();
         DT* Uc = m_dpUc;
         for (LI nid = 0; nid < numConstraints; nid++){
             local_Id = ownedConstrainedDofs[nid] - m_ulvLocalDofScan[m_uiRank] + m_uiNumPreGhostDofs;
@@ -2298,7 +2286,7 @@ namespace par {
             }
 
             // set values for rowID
-            MatSetValues((*a), 1, &rowID, colIndices.size(), colIndices.data(), values.data(), INSERT_VALUES);
+            MatSetValues((*a), 1, &rowID, static_cast<PetscInt>(colIndices.size()), colIndices.data(), values.data(), INSERT_VALUES);
 
             // move to next rowID
             ind++;
@@ -2350,8 +2338,8 @@ namespace par {
         const LI m_uiNumElems = m_maps.get_NumElems();
         const LI* const m_uiDofsPerElem = m_maps.get_DofsPerElem();
         LI** const m_uipLocalMap = m_maps.get_LocalMap();
-        const LI m_uiDofLocalBegin = m_maps.get_DofLocalBegin();
-        const LI m_uiDofLocalEnd = m_maps.get_DofLocalEnd();
+        auto m_uiDofLocalBegin = static_cast<PetscInt>(m_maps.get_DofLocalBegin());
+        auto m_uiDofLocalEnd = static_cast<PetscInt>(m_maps.get_DofLocalEnd());
         unsigned int** const m_uipBdrMap = m_maps.get_BdrMap();
         const LI m_uiNumPreGhostDofs = m_maps.get_NumPreGhostDofs();
 
@@ -2512,7 +2500,7 @@ namespace par {
                                 }
                             }
                             if (bdrFlag){
-                                VecSetValues(KfcUcVec, row_Indices_KfcUc_elem.size(), row_Indices_KfcUc_elem.data(), KfcUc_elem.data(), ADD_VALUES);
+                                VecSetValues(KfcUcVec, static_cast<PetscInt>(row_Indices_KfcUc_elem.size()), row_Indices_KfcUc_elem.data(), KfcUc_elem.data(), ADD_VALUES);
                             }
                         } // m_epMat[eid][index] != nullptr
                     } // for block_j

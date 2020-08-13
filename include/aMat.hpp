@@ -65,7 +65,7 @@ namespace par {
 
     // Class aMat
     // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
-    template <typename DT, typename GI, typename LI>
+    template <typename Derived, typename DT, typename GI, typename LI>
     class aMat {
 
         public:
@@ -94,42 +94,64 @@ namespace par {
         public:
         aMat( Maps<DT, GI, LI> &mesh_maps, BC_METH bcType = BC_METH::BC_IMATRIX );
 
-        ~aMat();
+        ~aMat() {}
 
         /**@brief get communicator */
-        MPI_Comm get_comm() { 
+        inline MPI_Comm get_comm() { 
             return m_comm; 
         }
 
         /**@brief return method (matrix free / matrix based) used for analysis */
-        MATRIX_TYPE get_matrix_type() { 
+        inline MATRIX_TYPE get_matrix_type() { 
             return m_matType; 
         }
 
         /**@brief aMatBased returns Petsc assembled matrix, aMatFree returns Petsc matrix shell */
-        virtual Mat& get_matrix() = 0;
+        inline Mat& get_matrix() {
+            return static_cast<Derived*>(this)->get_matrix();
+        }
         
         /**@brief assemble single block of element matrix to global matrix */
-        virtual Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) = 0;
+        template<typename T>
+        inline Error set_element_matrix( LI eid, const T& e_mat, LI block_i, LI block_j, LI blocks_dim ) {
+            return static_cast<Derived*>(this)->set_element_matrix( eid, e_mat, block_i, block_j, blocks_dim );
+        }
 
         /**@brief assemble element matrix, all blocks at once */
-        virtual Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                          const EigenMat** non_zero_block_mats, LI num_non_zero_blocks) = 0;
-        /**@brief, assemble element matrix (row-major) with all blocks at once, overidden version of aMat */
-        virtual Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j,
-                                          const EigenMatRowMajor** non_zero_block_mats, LI num_non_zero_blocks) = 0;
+        template<typename T>
+        inline Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
+                                  const EigenMat** non_zero_block_mats, LI num_non_zero_blocks ) {
+            return static_cast<Derived*>(this)->set_element_matrix( eid,
+                                                                    ind_non_zero_block_i,
+                                                                    ind_non_zero_block_j,
+                                                                    non_zero_block_mats,
+                                                                    num_non_zero_blocks );
+        }
 
         /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs and matrix */
-        virtual Error apply_bc( Vec rhs ) = 0;
+        inline Error apply_bc( Vec rhs ) {
+            return static_cast<Derived*>(this)->apply_bc(rhs);
+        }
 
-        /**@brief begin assembling the matrix, we need this for aMatBased */
-        virtual Error petsc_init_mat( MatAssemblyType mode ) const = 0;
+        /**@brief calls finalize_begin() and finalize_end() */
+        inline Error finalize() const {
+            return static_cast<Derived*>(this)->finalize();
+        }
 
-        /**@brief complete assembling the matrix, we need this for aMatBased */
-        virtual Error petsc_finalize_mat( MatAssemblyType mode ) const = 0;
+        /**@brief begin assembling the matrix */
+        inline Error finalize_begin( MatAssemblyType mode ) const {
+            return static_cast<Derived*>(this)->finalize_begin();
+        }
+
+        /**@brief complete assembling the matrix */
+        inline Error finalize_end() const {
+            return static_cast<Derived*>(this)->finalize_end();
+        }
 
         /**@brief write global matrix to filename "fvec" */
-        virtual Error dump_mat( const char* filename = nullptr ) = 0;
+        inline Error dump_mat( const char* filename = nullptr ) {
+            return static_cast<Derived*>(this)->dump_mat(filename);
+        }
 
         #ifdef AMAT_PROFILER
         public:
@@ -168,8 +190,10 @@ namespace par {
 
     //==============================================================================================================
     // aMat constructor, also reference m_maps to mesh_maps
-    template <typename DT, typename GI, typename LI>
-    aMat<DT, GI, LI>::aMat( Maps<DT, GI, LI> &mesh_maps, BC_METH bcType ) : m_maps(mesh_maps) {
+    template <typename Derived, typename DT, typename GI, typename LI>
+    aMat<Derived, DT, GI, LI>::aMat(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType)
+        : m_maps(mesh_maps)
+    {
         m_comm     = mesh_maps.get_comm();
         MPI_Comm_rank(m_comm, (int*)&m_uiRank);
         MPI_Comm_size(m_comm, (int*)&m_uiSize);
@@ -177,12 +201,6 @@ namespace par {
         m_BcMeth   = bcType;              // method to apply bc
         m_dtTraceK = 0.0;                 // penalty number
     } // constructor
-
-
-    template <typename DT, typename GI, typename LI>
-    aMat<DT, GI, LI>::~aMat() {
-        
-    } // destructor
 
 } // end of namespace par
 
