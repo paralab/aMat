@@ -79,16 +79,15 @@ public:
     }
 
     /**@brief overidden version, begin assembling matrix */
-    par::Error petsc_init_mat(MatAssemblyType mode) const
+    par::Error finalize_begin() const
     {
-        MatAssemblyBegin(m_pMat, mode);
+        MatAssemblyBegin(m_pMat, MAT_FINAL_ASSEMBLY);
         return Error::SUCCESS;
     }
 
     /**@brief overidden version, complete assembling matrix */
-    Error finalize() const
+    Error finalize_end() const
     {
-        MatAssemblyBegin(m_pMat, MAT_FINAL_ASSEMBLY);
         MatAssemblyEnd(m_pMat, MAT_FINAL_ASSEMBLY);
         return Error::SUCCESS;
     }

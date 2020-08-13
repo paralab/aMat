@@ -1806,9 +1806,6 @@ Error aMatFree<DT, GI, LI>::matvec_ghosted_noOMP(DT* v, DT* u)
 
             for (LI block_j = 0; block_j < blocks_dim; block_j++) {
 
-                // TODO - Previously, block_col_offset was being calculated incorrectly.
-                // I fixed the calculation of the column offsets everywhere within this file.
-                // However, I have not updated the aMatBased.hpp with the required fixes.
                 LI block_col_offset = block_j * num_dofs_per_block;
                 LI block_ID = block_i * blocks_dim + block_j;
 
