@@ -3,36 +3,17 @@
  * @author Hari Sundar      hsundar@gmail.com
  * @author Han Duc Tran     hantran@cs.utah.edu
  *
- * @brief A sparse matrix class for adaptive finite elements. 
- * 
+ * @brief A sparse matrix class for adaptive finite elements.
+ *
  * @version 0.1
  * @date 2018-11-07
- * 
+ *
  * @copyright Copyright (c) 2018 School of Computing, University of Utah
- * 
+ *
  */
 
 #ifndef ADAPTIVEMATRIX_AMAT_H
 #define ADAPTIVEMATRIX_AMAT_H
-
-#include <Eigen/Dense>
-
-#include <mpi.h>
-#include <omp.h>
-
-#include <petsc.h>
-#include <petscksp.h>
-#include <petscmat.h>
-#include <petscvec.h>
-
-#include <algorithm>
-#include <fstream>
-#include <vector>
-
-#include <immintrin.h>
-#include <iostream>
-#include <stdio.h>
-#include <stdlib.h>
 
 #include "aVec.hpp"
 #include "asyncExchangeCtx.hpp"
@@ -41,13 +22,28 @@
 #include "matRecord.hpp"
 #include "profiler.hpp"
 
+#include <Eigen/Dense>
+#include <algorithm>
+#include <fstream>
+#include <immintrin.h>
+#include <iostream>
+#include <mpi.h>
+#include <omp.h>
+#include <petsc.h>
+#include <petscksp.h>
+#include <petscmat.h>
+#include <petscvec.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <vector>
+
 // alternatives for vectorization, alignment = cacheline = vector register
 #ifdef VECTORIZED_AVX512
 #define SIMD_LENGTH (512 / (sizeof(DT) * 8)) // length of vector register = 512 bytes
-#define ALIGNMENT 64
+#define ALIGNMENT   64
 #elif VECTORIZED_AVX256
 #define SIMD_LENGTH (256 / (sizeof(DT) * 8)) // length of vector register = 256 bytes
-#define ALIGNMENT 64
+#define ALIGNMENT   64
 #elif VECTORIZED_OPENMP_ALIGNED
 #define ALIGNMENT 64
 #endif
@@ -60,14 +56,17 @@
 // weight factor for penalty method in applying BC
 #define PENALTY_FACTOR 100
 
-namespace par {
+namespace par
+{
 
 // Class aMat
-// DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
-template <typename Derived, typename DT, typename GI, typename LI>
-class aMat {
+// DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local
+// index
+template<typename Derived, typename DT, typename GI, typename LI>
+class aMat
+{
 
-public:
+  public:
     typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
     typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> EigenMatRowMajor;
 
@@ -75,8 +74,8 @@ public:
     typedef GI GIType;
     typedef LI LIType;
 
-protected:
-    MPI_Comm m_comm; // communicator
+  protected:
+    MPI_Comm m_comm;       // communicator
     unsigned int m_uiRank; // my rank id
     unsigned int m_uiSize; // total number of ranks
 
@@ -85,15 +84,15 @@ protected:
     Maps<DT, GI, LI>& m_maps; // reference to mesh_maps passed in constructor
 
     BC_METH m_BcMeth; // method of applying Dirichlet BC
-    Vec KfcUcVec; // KfcUc = Kfc * Uc, used to apply bc for rhs
-    DT m_dtTraceK; // penalty number
+    Vec KfcUcVec;     // KfcUc = Kfc * Uc, used to apply bc for rhs
+    DT m_dtTraceK;    // penalty number
 
     MATRIX_TYPE m_matType; // matrix type (aMatFree or aMatBased)
 
-public:
+  public:
     aMat(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType = BC_METH::BC_IMATRIX);
 
-    ~aMat() { }
+    ~aMat() {}
 
     /**@brief get communicator */
     inline MPI_Comm get_comm()
@@ -114,32 +113,40 @@ public:
     }
 
     /**@brief assemble single block of element matrix to global matrix */
-    template <typename T>
+    template<typename T>
     inline Error set_element_matrix(LI eid, const T& e_mat, LI block_i, LI block_j, LI blocks_dim)
     {
-        return static_cast<Derived*>(this)->set_element_matrix(eid, e_mat, block_i, block_j, blocks_dim);
+        return static_cast<Derived*>(this)->set_element_matrix(eid,
+                                                               e_mat,
+                                                               block_i,
+                                                               block_j,
+                                                               blocks_dim);
     }
 
     /**@brief assemble element matrix, all blocks at once */
-    template <typename T>
-    inline Error set_element_matrix(LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j,
-        const EigenMat** non_zero_block_mats, LI num_non_zero_blocks)
+    template<typename T>
+    inline Error set_element_matrix(LI eid,
+                                    LI* ind_non_zero_block_i,
+                                    LI* ind_non_zero_block_j,
+                                    const T** non_zero_block_mats,
+                                    LI num_non_zero_blocks)
     {
         return static_cast<Derived*>(this)->set_element_matrix(eid,
-            ind_non_zero_block_i,
-            ind_non_zero_block_j,
-            non_zero_block_mats,
-            num_non_zero_blocks);
+                                                               ind_non_zero_block_i,
+                                                               ind_non_zero_block_j,
+                                                               non_zero_block_mats,
+                                                               num_non_zero_blocks);
     }
 
-    /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs and matrix */
+    /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs
+     * and matrix */
     inline Error apply_bc(Vec rhs)
     {
         return static_cast<Derived*>(this)->apply_bc(rhs);
     }
 
     /**@brief calls finalize_begin() and finalize_end() */
-    inline Error finalize() const
+    inline Error finalize()
     {
         return static_cast<Derived*>(this)->finalize();
     }
@@ -147,11 +154,11 @@ public:
     /**@brief begin assembling the matrix */
     inline Error finalize_begin(MatAssemblyType mode) const
     {
-        return static_cast<Derived*>(this)->finalize_begin();
+        return static_cast<const Derived*>(this)->finalize_begin();
     }
 
     /**@brief complete assembling the matrix */
-    inline Error finalize_end() const
+    inline Error finalize_end()
     {
         return static_cast<Derived*>(this)->finalize_end();
     }
@@ -163,15 +170,16 @@ public:
     }
 
 #ifdef AMAT_PROFILER
-public:
+  public:
     /**@brief list of profilers for timing different tasks */
     std::vector<profiler_t> timing_aMat = std::vector<profiler_t>(static_cast<int>(PROFILER::LAST));
 
     /**@brief reset variables for timing*/
     void reset_profile_counters()
     {
-        for (unsigned int i = 0; i < timing_aMat.size(); i++) {
-            //printf("i= %d\n",i);
+        for (unsigned int i = 0; i < timing_aMat.size(); i++)
+        {
+            // printf("i= %d\n",i);
             timing_aMat[i].clear();
             timing_aMat[i].start();
         }
@@ -190,7 +198,8 @@ public:
         MPI_Reduce(&t_rank, &t_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, m_comm);
 
         // display the time
-        if (m_uiRank == 0) {
+        if (m_uiRank == 0)
+        {
             s << "time of matvec: = " << t_max << "\n";
         }
     }
@@ -200,16 +209,16 @@ public:
 
 //==============================================================================================================
 // aMat constructor, also reference m_maps to mesh_maps
-template <typename Derived, typename DT, typename GI, typename LI>
+template<typename Derived, typename DT, typename GI, typename LI>
 aMat<Derived, DT, GI, LI>::aMat(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType)
-    : m_maps(mesh_maps)
+  : m_maps(mesh_maps)
 {
     m_comm = mesh_maps.get_comm();
     MPI_Comm_rank(m_comm, (int*)&m_uiRank);
     MPI_Comm_size(m_comm, (int*)&m_uiSize);
 
-    m_BcMeth = bcType; // method to apply bc
-    m_dtTraceK = 0.0; // penalty number
+    m_BcMeth   = bcType; // method to apply bc
+    m_dtTraceK = 0.0;    // penalty number
 } // constructor
 
 } // end of namespace par
