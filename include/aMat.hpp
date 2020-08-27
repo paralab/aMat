@@ -3,183 +3,224 @@
  * @author Hari Sundar      hsundar@gmail.com
  * @author Han Duc Tran     hantran@cs.utah.edu
  *
- * @brief A sparse matrix class for adaptive finite elements. 
- * 
+ * @brief A sparse matrix class for adaptive finite elements.
+ *
  * @version 0.1
  * @date 2018-11-07
- * 
+ *
  * @copyright Copyright (c) 2018 School of Computing, University of Utah
- * 
+ *
  */
 
 #ifndef ADAPTIVEMATRIX_AMAT_H
 #define ADAPTIVEMATRIX_AMAT_H
 
-#include <Eigen/Dense>
-
-#include <mpi.h>
-#include <omp.h>
-
-#include <petsc.h>
-#include <petscvec.h>
-#include <petscmat.h>
-#include <petscksp.h>
-
-#include <vector>
-#include <fstream>
-#include <algorithm>
-
-#include <stdio.h>
-#include <immintrin.h>
-#include <stdlib.h>
-#include <iostream>
-
+#include "aVec.hpp"
 #include "asyncExchangeCtx.hpp"
 #include "enums.hpp"
 #include "maps.hpp"
-#include "aVec.hpp"
 #include "matRecord.hpp"
-
 #include "profiler.hpp"
+
+#include <Eigen/Dense>
+#include <algorithm>
+#include <fstream>
+#include <immintrin.h>
+#include <iostream>
+#include <mpi.h>
+#include <omp.h>
+#include <petsc.h>
+#include <petscksp.h>
+#include <petscmat.h>
+#include <petscvec.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <vector>
 
 // alternatives for vectorization, alignment = cacheline = vector register
 #ifdef VECTORIZED_AVX512
-    #define SIMD_LENGTH (512/(sizeof(DT) * 8)) // length of vector register = 512 bytes
-    #define ALIGNMENT 64
+#define SIMD_LENGTH (512 / (sizeof(DT) * 8)) // length of vector register = 512 bytes
+#define ALIGNMENT   64
 #elif VECTORIZED_AVX256
-    #define SIMD_LENGTH (256/(sizeof(DT) * 8)) // length of vector register = 256 bytes
-    #define ALIGNMENT 64
+#define SIMD_LENGTH (256 / (sizeof(DT) * 8)) // length of vector register = 256 bytes
+#define ALIGNMENT   64
 #elif VECTORIZED_OPENMP_ALIGNED
-    #define ALIGNMENT 64
+#define ALIGNMENT 64
 #endif
 
 // number of nonzero terms in the matrix (used in matrix-base and block Jacobi preconditioning)
 // e.g. in a structure mesh, eight of 20-node quadratic elements sharing the node
 // --> 81 nodes (3 dofs/node) constitue one row of the stiffness matrix
-#define NNZ (81*3)
+#define NNZ (81 * 3)
 
 // weight factor for penalty method in applying BC
 #define PENALTY_FACTOR 100
 
-namespace par {
+namespace par
+{
 
-    // Class aMat
-    // DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local index
-    template <typename DT, typename GI, typename LI>
-    class aMat {
+// Class aMat
+// DT => type of data stored in matrix (eg: double). GI => size of global index. LI => size of local
+// index
+template<typename Derived, typename DT, typename GI, typename LI>
+class aMat
+{
 
-        public:
-        typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
+  public:
+    typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
+    typedef Eigen::Matrix<DT, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> EigenMatRowMajor;
 
-        typedef DT DTType;
-        typedef GI GIType;
-        typedef LI LIType;
+    typedef DT DTType;
+    typedef GI GIType;
+    typedef LI LIType;
 
-        protected:
-        MPI_Comm m_comm;                        // communicator
-        unsigned int m_uiRank;                  // my rank id
-        unsigned int m_uiSize;                  // total number of ranks
+  protected:
+    MPI_Comm m_comm;       // communicator
+    unsigned int m_uiRank; // my rank id
+    unsigned int m_uiSize; // total number of ranks
 
-        Mat m_pMat;                             // Petsc matrix
+    Mat m_pMat; // Petsc matrix
 
-        Maps<DT, GI, LI>& m_maps;               // reference to mesh_maps passed in constructor
+    Maps<DT, GI, LI>& m_maps; // reference to mesh_maps passed in constructor
 
-        BC_METH m_BcMeth;                       // method of applying Dirichlet BC
-        Vec KfcUcVec;                           // KfcUc = Kfc * Uc, used to apply bc for rhs
-        DT m_dtTraceK;                          // penalty number
+    BC_METH m_BcMeth; // method of applying Dirichlet BC
+    Vec KfcUcVec;     // KfcUc = Kfc * Uc, used to apply bc for rhs
+    DT m_dtTraceK;    // penalty number
 
-        MATRIX_TYPE m_matType;                  // matrix type (aMatFree or aMatBased)
+    MATRIX_TYPE m_matType; // matrix type (aMatFree or aMatBased)
 
-        public:
-        aMat( Maps<DT, GI, LI> &mesh_maps, BC_METH bcType = BC_METH::BC_IMATRIX );
+  public:
+    aMat(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType = BC_METH::BC_IMATRIX);
 
-        ~aMat();
+    ~aMat() {}
 
-        /**@brief get communicator */
-        MPI_Comm get_comm() { 
-            return m_comm; 
+    /**@brief get communicator */
+    inline MPI_Comm get_comm()
+    {
+        return m_comm;
+    }
+
+    /**@brief return method (matrix free / matrix based) used for analysis */
+    inline MATRIX_TYPE get_matrix_type()
+    {
+        return m_matType;
+    }
+
+    /**@brief aMatBased returns Petsc assembled matrix, aMatFree returns Petsc matrix shell */
+    inline Mat& get_matrix()
+    {
+        return static_cast<Derived*>(this)->get_matrix();
+    }
+
+    /**@brief assemble single block of element matrix to global matrix */
+    template<typename T>
+    inline Error set_element_matrix(LI eid, const T& e_mat, LI block_i, LI block_j, LI blocks_dim)
+    {
+        return static_cast<Derived*>(this)->set_element_matrix(eid,
+                                                               e_mat,
+                                                               block_i,
+                                                               block_j,
+                                                               blocks_dim);
+    }
+
+    /**@brief assemble element matrix, all blocks at once */
+    template<typename T>
+    inline Error set_element_matrix(LI eid,
+                                    LI* ind_non_zero_block_i,
+                                    LI* ind_non_zero_block_j,
+                                    const T** non_zero_block_mats,
+                                    LI num_non_zero_blocks)
+    {
+        return static_cast<Derived*>(this)->set_element_matrix(eid,
+                                                               ind_non_zero_block_i,
+                                                               ind_non_zero_block_j,
+                                                               non_zero_block_mats,
+                                                               num_non_zero_blocks);
+    }
+
+    /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs
+     * and matrix */
+    inline Error apply_bc(Vec rhs)
+    {
+        return static_cast<Derived*>(this)->apply_bc(rhs);
+    }
+
+    /**@brief calls finalize_begin() and finalize_end() */
+    inline Error finalize()
+    {
+        return static_cast<Derived*>(this)->finalize();
+    }
+
+    /**@brief begin assembling the matrix */
+    inline Error finalize_begin(MatAssemblyType mode) const
+    {
+        return static_cast<const Derived*>(this)->finalize_begin();
+    }
+
+    /**@brief complete assembling the matrix */
+    inline Error finalize_end()
+    {
+        return static_cast<Derived*>(this)->finalize_end();
+    }
+
+    /**@brief write global matrix to filename "fvec" */
+    inline Error dump_mat(const char* filename = nullptr)
+    {
+        return static_cast<Derived*>(this)->dump_mat(filename);
+    }
+
+#ifdef AMAT_PROFILER
+  public:
+    /**@brief list of profilers for timing different tasks */
+    std::vector<profiler_t> timing_aMat = std::vector<profiler_t>(static_cast<int>(PROFILER::LAST));
+
+    /**@brief reset variables for timing*/
+    void reset_profile_counters()
+    {
+        for (unsigned int i = 0; i < timing_aMat.size(); i++)
+        {
+            // printf("i= %d\n",i);
+            timing_aMat[i].clear();
+            timing_aMat[i].start();
         }
+    }
 
-        /**@brief return method (matrix free / matrix based) used for analysis */
-        MATRIX_TYPE get_matrix_type() { 
-            return m_matType; 
+    /**@brief print out timing */
+    void profile_dump(std::ostream& s)
+    {
+
+        long double t_rank, t_max;
+
+        // get the time of task
+        t_rank = timing_aMat[static_cast<int>(PROFILER::MATVEC)].seconds;
+
+        // get the max time among all ranks
+        MPI_Reduce(&t_rank, &t_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, m_comm);
+
+        // display the time
+        if (m_uiRank == 0)
+        {
+            s << "time of matvec: = " << t_max << "\n";
         }
+    }
+#endif
 
-        /**@brief aMatBased returns Petsc assembled matrix, aMatFree returns Petsc matrix shell */
-        virtual Mat& get_matrix() = 0;
-        
-        /**@brief assemble single block of element matrix to global matrix */
-        virtual Error set_element_matrix( LI eid, EigenMat e_mat, LI block_i, LI block_j, LI blocks_dim ) = 0;
+}; // class aMat
 
-        /**@brief assemble element matrix, all blocks at once */
-        virtual Error set_element_matrix( LI eid, LI* ind_non_zero_block_i, LI* ind_non_zero_block_j, 
-                                          const EigenMat* non_zero_block_mats, LI num_non_zero_blocks) = 0;
+//==============================================================================================================
+// aMat constructor, also reference m_maps to mesh_maps
+template<typename Derived, typename DT, typename GI, typename LI>
+aMat<Derived, DT, GI, LI>::aMat(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType)
+  : m_maps(mesh_maps)
+{
+    m_comm = mesh_maps.get_comm();
+    MPI_Comm_rank(m_comm, (int*)&m_uiRank);
+    MPI_Comm_size(m_comm, (int*)&m_uiSize);
 
-        /**@brief apply Dirichlet bc: matrix-free --> apply bc on rhs, matrix-based --> apply bc on rhs and matrix */
-        virtual Error apply_bc( Vec rhs ) = 0;
-
-        /**@brief begin assembling the matrix, we need this for aMatBased */
-        virtual Error petsc_init_mat( MatAssemblyType mode ) const = 0;
-
-        /**@brief complete assembling the matrix, we need this for aMatBased */
-        virtual Error petsc_finalize_mat( MatAssemblyType mode ) const = 0;
-
-        /**@brief write global matrix to filename "fvec" */
-        virtual Error dump_mat( const char* filename = nullptr ) = 0;
-
-        #ifdef AMAT_PROFILER
-        public:
-        /**@brief list of profilers for timing different tasks */
-        std::vector<profiler_t> timing_aMat = std::vector<profiler_t>(static_cast<int>(PROFILER::LAST));
-
-        /**@brief reset variables for timing*/
-        void reset_profile_counters(){
-            for( unsigned int i = 0; i < timing_aMat.size(); i++){
-                //printf("i= %d\n",i);
-                timing_aMat[i].clear();
-                timing_aMat[i].start();
-            }
-        }
-
-        /**@brief print out timing */
-        void profile_dump(std::ostream& s){
-
-            long double t_rank, t_max;
-
-            // get the time of task
-            t_rank = timing_aMat[static_cast<int>(PROFILER::MATVEC)].seconds;
-
-            // get the max time among all ranks
-            MPI_Reduce(&t_rank, &t_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, m_comm);
-
-            // display the time
-            if (m_uiRank == 0){
-                s << "time of matvec: = " << t_max << "\n";
-            }
-        }
-        #endif
-
-    }; // class aMat
-
-
-    //==============================================================================================================
-    // aMat constructor, also reference m_maps to mesh_maps
-    template <typename DT, typename GI, typename LI>
-    aMat<DT, GI, LI>::aMat( Maps<DT, GI, LI> &mesh_maps, BC_METH bcType ) : m_maps(mesh_maps) {
-        m_comm     = mesh_maps.get_comm();
-        MPI_Comm_rank(m_comm, (int*)&m_uiRank);
-        MPI_Comm_size(m_comm, (int*)&m_uiSize);
-
-        m_BcMeth   = bcType;              // method to apply bc
-        m_dtTraceK = 0.0;                 // penalty number
-    } // constructor
-
-
-    template <typename DT, typename GI, typename LI>
-    aMat<DT, GI, LI>::~aMat() {
-        
-    } // destructor
+    m_BcMeth   = bcType; // method to apply bc
+    m_dtTraceK = 0.0;    // penalty number
+} // constructor
 
 } // end of namespace par
 
-#endif// APTIVEMATRIX_AMAT_H
+#endif // APTIVEMATRIX_AMAT_H

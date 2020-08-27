@@ -20,39 +20,45 @@
 #include <vector>
 
 namespace par {
-    // Class ConstraintRecord
-    //      DT => type of data stored in matrix (eg: double)
-    template <typename DT, typename GI>
-    class ConstraintRecord {
-        private:
-        GI dofId; // global dof Id that is constrained (i.e. Dirichlet BC)
-        DT preVal;// prescribed valua for the constrained dof
+// Class ConstraintRecord
+//      DT => type of data stored in matrix (eg: double)
+template <typename DT, typename GI>
+class ConstraintRecord {
+private:
+    GI dofId; // global dof Id that is constrained (i.e. Dirichlet BC)
+    DT preVal; // prescribed valua for the constrained dof
 
-        public:
-        ConstraintRecord() {
-            dofId = 0;
-            preVal = 0.0;
-        }
+public:
+    ConstraintRecord()
+    {
+        dofId = 0;
+        preVal = 0.0;
+    }
 
-        GI get_dofId() const { return dofId; }
-        DT get_preVal() const {return preVal; }
+    GI get_dofId() const { return dofId; }
+    DT get_preVal() const { return preVal; }
 
-        void set_dofId(GI id) { dofId = id; }
-        void set_preVal(DT value) { preVal = value; }
+    void set_dofId(GI id) { dofId = id; }
+    void set_preVal(DT value) { preVal = value; }
 
-        bool operator == (ConstraintRecord const &other) const {
-            return (dofId == other.get_dofId());
-        }
-        bool operator < (ConstraintRecord const &other) const {
-            if (dofId < other.get_dofId()) return true;
-            else return false;
-        }
-        bool operator <= (ConstraintRecord const &other) const {
-            return (((*this) < other) || ((*this) == other));
-        }
+    bool operator==(ConstraintRecord const& other) const
+    {
+        return (dofId == other.get_dofId());
+    }
+    bool operator<(ConstraintRecord const& other) const
+    {
+        if (dofId < other.get_dofId())
+            return true;
+        else
+            return false;
+    }
+    bool operator<=(ConstraintRecord const& other) const
+    {
+        return (((*this) < other) || ((*this) == other));
+    }
 
-        ~ConstraintRecord() {}
-    };// class ConstrainedDof
-    
+    ~ConstraintRecord() { }
+}; // class ConstrainedDof
+
 } // namespace par
-#endif// APTIVEMATRIX_CONSTRAINT_H
+#endif // APTIVEMATRIX_CONSTRAINT_H
