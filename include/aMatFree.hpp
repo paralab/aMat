@@ -728,6 +728,8 @@ Error aMatFree<DT, GI, LI>::copy_element_matrix(LI eid,
                                                 LI block_j,
                                                 LI blocks_dim)
 {
+    unsigned int nPads = 0;
+    
     // resize the vector of blocks for element eid
     if (m_epMat[eid].size() != blocks_dim * blocks_dim)
     {
@@ -751,8 +753,7 @@ Error aMatFree<DT, GI, LI>::copy_element_matrix(LI eid,
     const LI* const m_uiDofsPerElem = m_maps.get_DofsPerElem();
     assert((num_dofs_per_block * blocks_dim) == m_uiDofsPerElem[eid]);
 
-    // allocate memory to store e_mat (e_mat is one of blocks of the elemental matrix of element
-    // eid)
+    // allocate memory to store e_mat (e_mat is one of blocks of the elemental matrix of element eid)
     if (m_epMat[eid][index] == nullptr)
     {
 // allocate memory for elemental matrices
@@ -760,7 +761,7 @@ Error aMatFree<DT, GI, LI>::copy_element_matrix(LI eid,
         // compute number of paddings appended to each column of elemental block matrix so that each
         // column is aligned with ALIGNMENT
         assert((ALIGNMENT % sizeof(DT)) == 0);
-        unsigned int nPads = 0;
+        //unsigned int nPads = 0;
         if ((num_dofs_per_block % (ALIGNMENT / sizeof(DT))) != 0)
         {
             nPads = (ALIGNMENT / sizeof(DT)) - (num_dofs_per_block % (ALIGNMENT / sizeof(DT)));

@@ -135,7 +135,7 @@ int main(int argc, char* argv[])
     fee.resize(MAX_BLOCKS_PER_ELEMENT);
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x, y, z direction
-    const double Lx = 2.0, Ly = 2.0, Lz = 2.0;
+    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
 
     // element sizes
     hx = Lx / double(Nex); // element size in x direction
@@ -150,6 +150,20 @@ int main(int argc, char* argv[])
     MPI_Status Stat;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
+
+    // timing variables
+    profiler_t aMat_time;
+    profiler_t petsc_time;
+    profiler_t petsc_assemble_time;
+    if (matType != 0)
+    {
+        aMat_time.clear();
+    }
+    else
+    {
+        petsc_time.clear();
+        petsc_assemble_time.clear();
+    }
 
     if (!rank)
     {
@@ -306,6 +320,8 @@ int main(int argc, char* argv[])
     }
     unsigned int ndofs_total;
     ndofs_total = nnodeOffset[size - 1] + nnodeCount[size - 1];
+    if (rank == 0)
+        printf("Total dofs = %d\n", ndofs_total);
 
     preGhostGIds.clear();
     postGhostGIds.clear();
@@ -546,10 +562,16 @@ int main(int argc, char* argv[])
         fe_hex8_eig(fee[0], xe, be, intData.Pts_n_Wts, NGT);
 
         // assemble element stiffness matrix to global K
+        if (matType == 0){
+            petsc_assemble_time.start();
+        }
         if (matType == 0)
             stMatBased->set_element_matrix(eid, kee[0], 0, 0, 1);
         else
             stMatFree->set_element_matrix(eid, kee[0], 0, 0, 1);
+        if (matType == 0){
+            petsc_assemble_time.stop();
+        }
 
         // assemble element load vector to global F
         par::set_element_vec(meshMaps, rhs, eid, fee[0], 0u, ADD_VALUES);
@@ -559,10 +581,13 @@ int main(int argc, char* argv[])
     delete[] be;
 
     // Pestc begins and completes assembling the global stiffness matrix
-    if (matType == 0)
+    if (matType == 0){
+        petsc_assemble_time.start();
         stMatBased->finalize();
-    else
+        petsc_assemble_time.stop();
+    } else {
         stMatFree->finalize(); // compute trace of matrix when using penalty method
+    }
 
     // These are needed because we used ADD_VALUES for rhs when assembling
     // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
@@ -577,15 +602,24 @@ int main(int argc, char* argv[])
         stMatFree->apply_bc(rhs);
     VecAssemblyBegin(rhs);
     VecAssemblyEnd(rhs);
-
+    
     // apply bc to the matrix
     if (matType == 0)
     {
-        // stMat.apply_bc_mat();
+        //petsc_assemble_time.start();
         stMatBased->finalize();
+        //petsc_assemble_time.stop();
     }
 
     // solve
+    if (matType != 0)
+    {
+        aMat_time.start();
+    }
+    else
+    {
+        petsc_time.start();
+    }
     if (matType == 0)
         par::solve(*stMatBased, (const Vec)rhs, out);
     else
@@ -596,8 +630,47 @@ int main(int argc, char* argv[])
         par::solve(*dynamic_cast<aMatFree_ptr>(stMat), (const Vec)rhs, out);
     } */
 
-    VecAssemblyBegin(out);
-    VecAssemblyEnd(out);
+    //VecAssemblyBegin(out);
+    //VecAssemblyEnd(out);
+    if (matType != 0)
+    {
+        aMat_time.stop();
+    }
+    else
+    {
+        petsc_time.stop();
+    }
+
+    // display timing
+    if (matType != 0){
+        if (size > 1){
+            long double aMat_maxTime;
+            MPI_Reduce(&aMat_time.seconds, &aMat_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0){
+                std::cout << "aMat time = " << aMat_maxTime << "\n";
+            }
+        } else {
+            if (rank == 0){
+                std::cout << "aMat time = " << aMat_time.seconds << "\n";
+            }
+        }
+    } else {
+        if (size > 1) {
+            long double petsc_maxTime;
+            long double petsc_assemble_maxTime;
+            MPI_Reduce(&petsc_time.seconds, &petsc_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            MPI_Reduce(&petsc_assemble_time.seconds, &petsc_assemble_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0) {
+                std::cout << "PETSC time = " << petsc_maxTime << "\n";
+                std::cout << "PETSC assembly time = " << petsc_assemble_maxTime << "\n";
+            }
+        } else {
+            if (rank == 0) {
+                std::cout << "PETSC time = " << petsc_time.seconds << "\n";
+                std::cout << "PETSC assemble time = " << petsc_assemble_time.seconds << "\n";
+            }
+        }
+    }
 
     // compute exact solution for comparison
     Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1> e_exact;

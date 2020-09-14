@@ -188,7 +188,7 @@ int main(int argc, char* argv[])
     const unsigned int bcMethod = atoi(argv[5]); // method of applying BC
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 100.0;
+    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
 
     // element sizes
     hx = Lx / double(Nex); // element size in x direction

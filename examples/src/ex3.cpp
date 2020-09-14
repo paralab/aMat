@@ -120,7 +120,7 @@ int main(int argc, char* argv[])
     const unsigned int bcMethod = atoi(argv[5]); // method of applying BC
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 100.0;
+    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
 
     // element sizes
     hx = Lx / double(Nex); // element size in x direction
@@ -157,6 +157,7 @@ int main(int argc, char* argv[])
     // timing variables
     profiler_t aMat_time;
     profiler_t petsc_time;
+    profiler_t petsc_assemble_time;
     profiler_t total_time;
     if (matType != 0)
     {
@@ -165,6 +166,7 @@ int main(int argc, char* argv[])
     else
     {
         petsc_time.clear();
+        petsc_assemble_time.clear();
     }
     total_time.clear();
 
@@ -802,17 +804,19 @@ int main(int argc, char* argv[])
         }
 
         // assemble element stiffness matrix to global K
-        if (matType == 0)
+        if (matType == 0){
             petsc_time.start();
-        else
+            petsc_assemble_time.start();
+        } else
             aMat_time.start();
         if (matType == 0)
             stMatBased->set_element_matrix(eid, *kee[0], 0, 0, 1);
         else
             stMatFree->set_element_matrix(eid, *kee[0], 0, 0, 1);
-        if (matType == 0)
+        if (matType == 0){
+            petsc_assemble_time.stop();
             petsc_time.stop();
-        else
+        } else
             aMat_time.stop();
 
         // compute element force vector due to body force
@@ -977,10 +981,13 @@ int main(int argc, char* argv[])
         if (size > 1)
         {
             long double petsc_maxTime;
+            long double petsc_assemble_maxTime;
             MPI_Reduce(&petsc_time.seconds, &petsc_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            MPI_Reduce(&petsc_assemble_time.seconds, &petsc_assemble_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
             if (rank == 0)
             {
                 std::cout << "PETSC time = " << petsc_maxTime << "\n";
+                std::cout << "PETSC assemble time = " << petsc_assemble_maxTime << "\n";
             }
         }
         else
@@ -988,10 +995,11 @@ int main(int argc, char* argv[])
             if (rank == 0)
             {
                 std::cout << "PETSC time = " << petsc_time.seconds << "\n";
+                std::cout << "PETSC assemble time = " << petsc_assemble_time.seconds << "\n";
             }
         }
     }
-    if (size > 1)
+    /* if (size > 1)
     {
         long double total_time_max;
         MPI_Reduce(&total_time.seconds, &total_time_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
@@ -1006,7 +1014,7 @@ int main(int argc, char* argv[])
         {
             std::cout << "total time = " << total_time.seconds << "\n";
         }
-    }
+    } */
 
     // sprintf(fname,"outVec_%d.dat",size);
     // stMat.dump_vec(out,fname);
