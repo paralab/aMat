@@ -566,6 +566,14 @@ Error aMatFree<DT, GI, LI>::allocate_matrix()
     m_dpVvg = new DT[m_uiNumDofsTotal];
     m_dpUug = new DT[m_uiNumDofsTotal];
 
+    if (m_dpUc != nullptr)
+    {
+        delete[] m_dpUc;
+        m_dpUc = nullptr;
+    }
+
+    m_dpUc = new DT[m_uiNumDofsTotal];
+
     return Error::SUCCESS;
 } // allocate_matrix
 
@@ -2756,30 +2764,31 @@ Error aMatFree<DT, GI, LI>::apply_bc_blkdiag(Mat* blkdiagMat)
                         }
                     }
                 }
-                else
-                {
-                    for (LI c = 0; c < num_dofs_per_elem; c++)
-                    {
-                        loc_colId = m_uipLocalMap[eid][c];
-                        // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
-                        if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd))
-                        {
-                            if (m_uipBdrMap[eid][c] == 1)
-                            {
-                                // 05/01/2020: only for identity-matrix method, not for penalty
-                                // method
-                                if (m_BcMeth == BC_METH::BC_IMATRIX)
-                                {
-                                    MatSetValue(*blkdiagMat,
-                                                (loc_rowId - m_uiNumPreGhostDofs),
-                                                (loc_colId - m_uiNumPreGhostDofs),
-                                                0.0,
-                                                INSERT_VALUES);
-                                }
-                            }
-                        }
-                    }
-                }
+                // 10/11/2020: BC with NS IOWA.
+                // else
+                // {
+                //     for (LI c = 0; c < num_dofs_per_elem; c++)
+                //     {
+                //         loc_colId = m_uipLocalMap[eid][c];
+                //         // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+                //         if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd))
+                //         {
+                //             if (m_uipBdrMap[eid][c] == 1)
+                //             {
+                //                 // 05/01/2020: only for identity-matrix method, not for penalty
+                //                 // method
+                //                 if (m_BcMeth == BC_METH::BC_IMATRIX)
+                //                 {
+                //                     MatSetValue(*blkdiagMat,
+                //                                 (loc_rowId - m_uiNumPreGhostDofs),
+                //                                 (loc_colId - m_uiNumPreGhostDofs),
+                //                                 0.0,
+                //                                 INSERT_VALUES);
+                //                 }
+                //             }
+                //         }
+                //     }
+                // }
             }
         }
     }
