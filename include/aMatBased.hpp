@@ -146,7 +146,7 @@ aMatBased<DT, GI, LI>::aMatBased(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType)
 template<typename DT, typename GI, typename LI>
 aMatBased<DT, GI, LI>::~aMatBased()
 {
-    // MatDestroy(&m_pMat);
+    MatDestroy(&m_pMat);
 } // destructor
 
 template<typename DT, typename GI, typename LI>

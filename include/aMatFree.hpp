@@ -64,6 +64,16 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI>
     DT* m_dpVvg; // used in MatMult_mf
     DT* m_dpUug;
 
+    std::function<PetscErrorCode(Mat, Vec, Vec)>*  m_fptr_mat_mult=nullptr;
+    
+    std::function<PetscErrorCode(Mat, Vec)>* m_fptr_diag=nullptr;
+
+    std::function<PetscErrorCode(Mat, Mat*)>* m_fptr_bdiag=nullptr;
+
+    Mat* m_pMatBJ=nullptr; // block jacobi preconditioner. 
+
+
+
 #ifdef HYBRID_PARALLEL
     unsigned int m_uiNumThreads; // max number of omp threads
     DT** m_veBufs;               // elemental vectors used in matvec
@@ -180,42 +190,64 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI>
     /**@brief pointer function points to MatMult_mt */
     std::function<PetscErrorCode(Mat, Vec, Vec)>* get_MatMult_func()
     {
+        
+        //std::cout<<"calling matvec func"<<std::endl;
+        if(m_fptr_mat_mult!=nullptr)
+        {
+            // no need to reallocate the function ptr to the same function. 
+            // delete m_fptr_mat_mult;
+            // m_fptr_mat_mult=nullptr;
+            return m_fptr_mat_mult;
+        }
 
-        std::function<PetscErrorCode(Mat, Vec, Vec)>* f =
+        m_fptr_mat_mult =
           new std::function<PetscErrorCode(Mat, Vec, Vec)>();
 
-        (*f) = [this](Mat A, Vec u, Vec v) {
+        (*m_fptr_mat_mult) = [this](Mat A, Vec u, Vec v) {
             this->MatMult_mf(A, u, v);
             return 0;
         };
-        return f;
+        return m_fptr_mat_mult;
     }
 
     /**@brief pointer function points to MatGetDiagonal_mf */
     std::function<PetscErrorCode(Mat, Vec)>* get_MatGetDiagonal_func()
     {
+        //std::cout<<"get diag"<<std::endl;
+        if(m_fptr_diag!=nullptr)
+        {
+            // delete m_fptr_diag;
+            // m_fptr_diag=nullptr;
+            return m_fptr_diag;
+        }
 
-        std::function<PetscErrorCode(Mat, Vec)>* f = new std::function<PetscErrorCode(Mat, Vec)>();
+        m_fptr_diag = new std::function<PetscErrorCode(Mat, Vec)>();
 
-        (*f) = [this](Mat A, Vec d) {
+        (*m_fptr_diag) = [this](Mat A, Vec d) {
             this->MatGetDiagonal_mf(A, d);
             return 0;
         };
-        return f;
+        return m_fptr_diag;
     }
 
     /**@brief pointer function points to MatGetDiagonalBlock_mf */
     std::function<PetscErrorCode(Mat, Mat*)>* get_MatGetDiagonalBlock_func()
     {
+        //std::cout<<"get blk diag"<<std::endl;
+        if(m_fptr_bdiag!=nullptr)
+        {
+            // delete m_fptr_bdiag;
+            // m_fptr_bdiag=nullptr;
+            return m_fptr_bdiag;
+        }
 
-        std::function<PetscErrorCode(Mat, Mat*)>* f =
-          new std::function<PetscErrorCode(Mat, Mat*)>();
+        m_fptr_bdiag = new std::function<PetscErrorCode(Mat, Mat*)>();
 
-        (*f) = [this](Mat A, Mat* a) {
+        (*m_fptr_bdiag) = [this](Mat A, Mat* a) {
             this->MatGetDiagonalBlock_mf(A, a);
             return 0;
         };
-        return f;
+        return m_fptr_bdiag;
     }
 
   protected:
@@ -330,7 +362,6 @@ PetscErrorCode aMat_matvec(Mat A, Vec u, Vec v)
     par::aMatFree<DT, GI, LI>* pLap                 = pCtx->aMatPtr;
     std::function<PetscErrorCode(Mat, Vec, Vec)>* f = pLap->get_MatMult_func();
     (*f)(A, u, v);
-    delete f;
     return 0;
 }
 
@@ -344,7 +375,6 @@ PetscErrorCode aMat_matgetdiagonal(Mat A, Vec d)
     par::aMatFree<DT, GI, LI>* pLap            = pCtx->aMatPtr;
     std::function<PetscErrorCode(Mat, Vec)>* f = pLap->get_MatGetDiagonal_func();
     (*f)(A, d);
-    delete f;
     return 0;
 }
 
@@ -358,7 +388,6 @@ PetscErrorCode aMat_matgetdiagonalblock(Mat A, Mat* a)
     par::aMatFree<DT, GI, LI>* pLap             = pCtx->aMatPtr;
     std::function<PetscErrorCode(Mat, Mat*)>* f = pLap->get_MatGetDiagonalBlock_func();
     (*f)(A, a);
-    delete f;
     return 0;
 }
 
@@ -450,9 +479,10 @@ aMatFree<DT, GI, LI>::~aMatFree()
 #endif
 
     // free memory allocated for Uc
-    if (m_dpUug != nullptr)
+    if (m_dpUc != nullptr)
     {
         delete[] m_dpUc;
+        m_dpUc=nullptr;
     }
 
     // free memory allocated for vvg and uug
@@ -460,6 +490,33 @@ aMatFree<DT, GI, LI>::~aMatFree()
         delete[] m_dpVvg;
     if (m_dpUug != nullptr)
         delete[] m_dpUug;
+
+    if(m_fptr_mat_mult!=nullptr)
+    {
+        delete m_fptr_mat_mult;
+        m_fptr_mat_mult=nullptr;
+    }
+
+    if(m_fptr_diag!=nullptr)
+    {
+        delete m_fptr_diag;
+        m_fptr_diag=nullptr;
+    }
+
+    if(m_fptr_bdiag!=nullptr)
+    {
+        delete m_fptr_bdiag;
+        m_fptr_bdiag=nullptr;
+    }   
+
+    if(m_pMatBJ!=nullptr)
+    {
+        MatDestroy(m_pMatBJ);
+        m_pMatBJ=nullptr;
+    }
+    
+
+
 
 } // destructor
 
@@ -2606,6 +2663,14 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf(Mat A, Mat* a)
                     NNZ,
                     PETSC_NULL,
                     a); // todo: 27 only good for dofs_per_node = 1
+
+    // just to be safe if petsc calling MatGetDiagonalBlock_mf multiple times. 
+    if(m_pMatBJ!=nullptr)
+    {
+        MatDestroy(m_pMatBJ);
+        m_pMatBJ=nullptr;
+    }
+    m_pMatBJ=a;
 
     // set values ...
     std::vector<PetscScalar> values;
