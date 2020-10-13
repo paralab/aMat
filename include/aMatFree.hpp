@@ -514,6 +514,8 @@ aMatFree<DT, GI, LI>::~aMatFree()
         MatDestroy(m_pMatBJ);
         m_pMatBJ=nullptr;
     }
+
+    MatDestroy(m_pMat);
     
 
 
@@ -2657,21 +2659,20 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf(Mat A, Mat* a)
     std::vector<MatRecord<DT, LI>> ddg;
     mat_get_diagonal_block(ddg);
 
-    MatCreateSeqAIJ(PETSC_COMM_SELF,
+    if(m_pMatBJ==nullptr)
+    {
+        m_pMatBJ = new Mat();
+        MatCreateSeqAIJ(PETSC_COMM_SELF,
                     m_uiNumDofs,
                     m_uiNumDofs,
                     NNZ,
                     PETSC_NULL,
-                    a); // todo: 27 only good for dofs_per_node = 1
+                    m_pMatBJ);
 
-    // just to be safe if petsc calling MatGetDiagonalBlock_mf multiple times. 
-    if(m_pMatBJ!=nullptr)
-    {
-        MatDestroy(m_pMatBJ);
-        m_pMatBJ=nullptr;
     }
-    m_pMatBJ=a;
 
+    *a=*m_pMatBJ;
+    
     // set values ...
     std::vector<PetscScalar> values;
     std::vector<PetscInt> colIndices;
