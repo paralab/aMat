@@ -2838,60 +2838,61 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
         MatSetOption(*m_pMatBJ, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_TRUE);
 
     }
-
+    
+    MatZeroEntries(*m_pMatBJ);
     std::vector<MatRecord<DT,LI>> bj_mat_records;
 
     for (LI i = 0; i < m_uivIndependentElem.size(); i++)
+    {
+        // independent element id
+        const LI eid = m_uivIndependentElem[i];
+        const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+
+        // number of dofs per block must be the same for all blocks
+        assert(blocks_dim>0);
+        const LI num_dofs_per_block = m_uiDofsPerElem[eid] / blocks_dim;
+
+        for (LI block_i = 0; block_i < blocks_dim; block_i++)
         {
-            // independent element id
-            const LI eid = m_uivIndependentElem[i];
-            const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
 
-            // number of dofs per block must be the same for all blocks
-            assert(blocks_dim>0);
-            const LI num_dofs_per_block = m_uiDofsPerElem[eid] / blocks_dim;
+            const LI block_row_offset = block_i * num_dofs_per_block;
 
-            for (LI block_i = 0; block_i < blocks_dim; block_i++)
+            for (LI block_j = 0; block_j < blocks_dim; block_j++)
             {
+                const LI index            = block_i * blocks_dim + block_j;
+                const LI block_col_offset = block_j * num_dofs_per_block;
+                const LI block_ID = block_i * blocks_dim + block_j;
 
-                const LI block_row_offset = block_i * num_dofs_per_block;
-
-                for (LI block_j = 0; block_j < blocks_dim; block_j++)
+                if (m_epMat[eid][block_ID] != nullptr)
                 {
-                    const LI index            = block_i * blocks_dim + block_j;
-                    const LI block_col_offset = block_j * num_dofs_per_block;
-                    const LI block_ID = block_i * blocks_dim + block_j;
 
-                    if (m_epMat[eid][block_ID] != nullptr)
+                    for (LI r = 0; r < num_dofs_per_block; r++)
                     {
-
-                        for (LI r = 0; r < num_dofs_per_block; r++)
+                        const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
+                        for (LI c = 0; c < num_dofs_per_block; c++)
                         {
-                            const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
-                            for (LI c = 0; c < num_dofs_per_block; c++)
-                            {
-                                const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
-                                bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
-                            }
+                            const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
+                            bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
                         }
-                        
                     }
-                }   
-            }
-            
-            if(bj_mat_records.size()>500)
-            {
-                this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
-                bj_mat_records.clear();
-            }
-
+                    
+                }
+            }   
         }
-
-    if(!bj_mat_records.empty())
+        
+        if(bj_mat_records.size()>500)
         {
             this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
             bj_mat_records.clear();
         }
+
+    }
+
+    if(!bj_mat_records.empty())
+    {
+        this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+        bj_mat_records.clear();
+    }
 
     LI tmp_dof_per_block;
     for (LI i = 0; i < m_uivDependentElem.size(); i++)
