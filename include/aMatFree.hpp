@@ -2807,19 +2807,20 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
 {
 
     const LI m_uiNumDofs = m_maps.get_NumDofs();
+    const LI m_uiNumElems                    = m_maps.get_NumElems();
+    const LI* const m_uiDofsPerElem          = m_maps.get_DofsPerElem();
+    GI** const m_ulpMap                      = m_maps.get_Map();
+    LI** const m_uipLocalMap                 = m_maps.get_LocalMap();
+    GI* const m_ulpLocal2Global              = m_maps.get_Local2Global();
+    const std::vector<GI>& m_ulvLocalDofScan = m_maps.get_LocalDofScan();
+    const LI m_uiDofLocalBegin               = m_maps.get_DofLocalBegin();
+    const LI m_uiDofLocalEnd                 = m_maps.get_DofLocalEnd();
+    const std::vector<LI> & m_uivIndependentElem = m_maps.get_independentElem();
+    const std::vector<LI> & m_uivDependentElem = m_maps.get_dependentElem();
+    
     //std::cout<<"calling func : "<<__func__<<std::endl;
     if(m_pMatBJ==nullptr)
     {
-        const LI m_uiNumElems                    = m_maps.get_NumElems();
-        const LI* const m_uiDofsPerElem          = m_maps.get_DofsPerElem();
-        GI** const m_ulpMap                      = m_maps.get_Map();
-        LI** const m_uipLocalMap                 = m_maps.get_LocalMap();
-        GI* const m_ulpLocal2Global              = m_maps.get_Local2Global();
-        const std::vector<GI>& m_ulvLocalDofScan = m_maps.get_LocalDofScan();
-        const LI m_uiDofLocalBegin               = m_maps.get_DofLocalBegin();
-        const LI m_uiDofLocalEnd                 = m_maps.get_DofLocalEnd();
-        const std::vector<LI> & m_uivIndependentElem = m_maps.get_independentElem();
-        const std::vector<LI> & m_uivDependentElem = m_maps.get_dependentElem();
         m_pMatBJ = new Mat();
         MatCreate(m_comm, m_pMatBJ);
         MatSetSizes(*m_pMatBJ, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
@@ -2836,10 +2837,11 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
         // this will disable on preallocation errors (but not good for performance)
         MatSetOption(*m_pMatBJ, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_TRUE);
 
+    }
 
-        std::vector<MatRecord<DT,LI>> bj_mat_records;
+    std::vector<MatRecord<DT,LI>> bj_mat_records;
 
-        for (LI i = 0; i < m_uivIndependentElem.size(); i++)
+    for (LI i = 0; i < m_uivIndependentElem.size(); i++)
         {
             // independent element id
             const LI eid = m_uivIndependentElem[i];
@@ -2885,71 +2887,75 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
 
         }
 
-        if(!bj_mat_records.empty())
+    if(!bj_mat_records.empty())
         {
             this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
             bj_mat_records.clear();
         }
 
-        for (LI i = 0; i < m_uivDependentElem.size(); i++)
+    LI tmp_dof_per_block;
+    for (LI i = 0; i < m_uivDependentElem.size(); i++)
+    {
+        // independent element id
+        const LI eid = m_uivDependentElem[i];
+        const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+
+        // number of dofs per block must be the same for all blocks
+        assert(blocks_dim>0);
+        const LI num_dofs_per_block = m_uiDofsPerElem[eid] / blocks_dim;
+        tmp_dof_per_block=num_dofs_per_block;
+
+        for (LI block_i = 0; block_i < blocks_dim; block_i++)
         {
-            // independent element id
-            const LI eid = m_uivDependentElem[i];
-            const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
 
-            // number of dofs per block must be the same for all blocks
-            assert(blocks_dim>0);
-            const LI num_dofs_per_block = m_uiDofsPerElem[eid] / blocks_dim;
-
-            for (LI block_i = 0; block_i < blocks_dim; block_i++)
-            {
-
-                const LI block_row_offset = block_i * num_dofs_per_block;
-
-                for (LI block_j = 0; block_j < blocks_dim; block_j++)
-                {
-                    const LI index            = block_i * blocks_dim + block_j;
-                    const LI block_col_offset = block_j * num_dofs_per_block;
-                    const LI block_ID = block_i * blocks_dim + block_j;
-
-                    if (m_epMat[eid][block_ID] != nullptr)
-                    {
-
-                        for (LI r = 0; r < num_dofs_per_block; r++)
-                        {
-                            const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
-                            const LI row_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[row_lid]);
-                            for (LI c = 0; c < num_dofs_per_block; c++)
-                            {
-                                const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
-                                const LI col_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[col_lid]);
-                                if(col_rank==row_rank)
-                                    bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
-                            }
-                        }
-                        
-                    }
-                }   
-            }
+            const LI block_row_offset = block_i * num_dofs_per_block;
             
-            if(bj_mat_records.size()>500)
+
+            for (LI block_j = 0; block_j < blocks_dim; block_j++)
             {
-                this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
-                bj_mat_records.clear();
-            }
+                const LI index            = block_i * blocks_dim + block_j;
+                const LI block_col_offset = block_j * num_dofs_per_block;
+                const LI block_ID = block_i * blocks_dim + block_j;
 
+                if (m_epMat[eid][block_ID] != nullptr)
+                {
+
+                    for (LI r = 0; r < num_dofs_per_block; r++)
+                    {
+                        const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
+                        const LI row_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[row_lid]);
+                        for (LI c = 0; c < num_dofs_per_block; c++)
+                        {
+                            const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
+                            const LI col_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[col_lid]);
+                            if(col_rank==row_rank)
+                                bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
+                        }
+                    }
+                    
+                }
+            }   
         }
-
-        if(!bj_mat_records.empty())
+        
+        if(bj_mat_records.size()>500)
         {
+            // std::cout<<"dep dec: "<<bj_mat_records.size() <<" outof :  "<<m_uivDependentElem.size()*(tmp_dof_per_block*tmp_dof_per_block)<<std::endl;
             this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
             bj_mat_records.clear();
         }
-
-        MatAssemblyBegin((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
-        MatAssemblyEnd((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
 
     }
+
+    if(!bj_mat_records.empty())
+    {
+        // std::cout<<"dep dec: "<<bj_mat_records.size() <<" outof :  "<<m_uivDependentElem.size()*(tmp_dof_per_block*tmp_dof_per_block)<<std::endl;
+        this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+        bj_mat_records.clear();
+    }
+
+    MatAssemblyBegin((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+    MatAssemblyEnd((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+
 
     MatGetDiagonalBlock(*m_pMatBJ, a);
     return 0;
