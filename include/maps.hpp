@@ -858,17 +858,34 @@ Error Maps<DT, GI, LI>::set_bdr_map(GI* constrainedDofs, DT* prescribedValues, L
 template <typename DT, typename GI, typename LI>
 unsigned int Maps<DT, GI, LI>::globalId_2_rank(GI gId) const
 {
-    unsigned int rank;
-    if (gId >= m_ulvLocalDofScan[m_uiSize - 1]) {
+    LI rank;
+    auto it =std::lower_bound(m_ulvLocalDofScan.begin(),m_ulvLocalDofScan.end(),gId);
+    if(it==m_ulvLocalDofScan.end())
+    {
+        assert(gId>=m_ulvLocalDofScan[m_uiSize - 1]);
         rank = m_uiSize - 1;
-    } else {
-        for (unsigned int i = 0; i < (m_uiSize - 1); i++) {
-            if (gId >= m_ulvLocalDofScan[i] && gId < m_ulvLocalDofScan[i + 1] && (i < (m_uiSize - 1))) {
-                rank = i;
-                break;
-            }
+    }else
+    {
+        rank=std::distance(m_ulvLocalDofScan.begin(), it);
+        if(gId < m_ulvLocalDofScan[rank])
+        {
+            assert(rank>0);
+            rank=rank-1;
         }
+
     }
+    // this is a performance killer. 
+    // unsigned int rank;
+    // if (gId >= m_ulvLocalDofScan[m_uiSize - 1]) {
+    //     rank = m_uiSize - 1;
+    // } else {
+    //     for (unsigned int i = 0; i < (m_uiSize - 1); i++) {
+    //         if (gId >= m_ulvLocalDofScan[i] && gId < m_ulvLocalDofScan[i + 1] && (i < (m_uiSize - 1))) {
+    //             rank = i;
+    //             break;
+    //         }
+    //     }
+    // }
     return rank;
 
 } // globalId_2_rank

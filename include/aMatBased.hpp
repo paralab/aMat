@@ -168,7 +168,7 @@ Error aMatBased<DT, GI, LI>::allocate_matrix()
         MatSeqAIJSetPreallocation(m_pMat, NNZ, PETSC_NULL);
     }
     // this will disable on preallocation errors (but not good for performance)
-    MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
+    MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_TRUE);
 
     return Error::SUCCESS;
 } // allocate_matrix

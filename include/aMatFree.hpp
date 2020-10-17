@@ -244,7 +244,7 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI>
         m_fptr_bdiag = new std::function<PetscErrorCode(Mat, Mat*)>();
 
         (*m_fptr_bdiag) = [this](Mat A, Mat* a) {
-            this->MatGetDiagonalBlock_mf(A, a);
+            this->MatGetDiagonalBlock_mf_petsc(A, a);
             return 0;
         };
         return m_fptr_bdiag;
@@ -327,8 +327,13 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI>
     /**@brief matrix-free version of MatGetDiagonal of PETSc */
     PetscErrorCode MatGetDiagonal_mf(Mat A, Vec d);
 
-    /**@brief matrix-free version of MatGetDiagonalBlock of PETSc */
+    /**@brief matrix-free version of MatGetDiagonalBlock of PETSc (Version 1: This does the communication by aMat) */
     PetscErrorCode MatGetDiagonalBlock_mf(Mat A, Mat* a);
+
+    /**@brief matrix-free version of MatGetDiagonalBlock of PETSc (Version 2: PETSC parallel mat is used. ) */
+    PetscErrorCode MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a);
+
+    PetscErrorCode petscSetValuesInMatrix(Mat mat, std::vector<MatRecord<DT,LI>>& records, InsertMode mode);
 
     /**@brief apply Dirichlet BCs to diagonal vector used for Jacobi preconditioner */
     Error apply_bc_diagonal(Vec rhs);
@@ -2722,6 +2727,233 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf(Mat A, Mat* a)
     MatAssemblyEnd((*a), MAT_FINAL_ASSEMBLY);
 
     return 0;
+} // MatGetDiagonalBlock_mf
+
+template<typename DT, typename GI, typename LI>
+PetscErrorCode aMatFree<DT, GI, LI>::petscSetValuesInMatrix(Mat mat, std::vector<MatRecord<DT,LI>>& records, InsertMode mode)
+{
+
+    if(records.empty())
+        return 0;
+
+    // assembly code based on Dendro4
+    std::vector<PetscScalar > values;
+    std::vector<PetscInt> colIndices;
+    
+    //Can make it more efficient later.
+    if (!records.empty())
+    {
+        GI* const m_ulpLocal2Global =m_maps.get_Local2Global();
+        // GI** const m_ulpMap                      = m_maps.get_Map();
+        // LI** const m_uipLocalMap                 = m_maps.get_LocalMap();
+
+        ///TODO: change this to more efficient one later. 
+        std::vector<MatRecord<DT,LI>> tmpRecords;
+        
+        for(LI i=0;i<records.size();i++)
+            tmpRecords.push_back(records[i]);
+        
+        std::swap(tmpRecords,records);
+        tmpRecords.clear();
+        
+        //Sort Order: row first, col next, val last
+        std::sort(records.begin(), records.end());
+        
+        LI currRecord = 0;
+
+        while (currRecord < (records.size() - 1))
+        {
+            values.push_back(records[currRecord].getVal());
+            //colIndices.push_back(static_cast<PetscInt>((records[currRecord].getColDim()) + dof * m_uiLocalToGlobalNodalMap[records[currRecord].getColID()]));
+            colIndices.push_back(static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getColId()]));
+            if ((records[currRecord].getRowId() != records[currRecord + 1].getRowId()))
+            {
+                PetscInt rowId = static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getRowId()]);
+                MatSetValues(mat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())),  (&(*values.begin())), mode);
+
+                colIndices.clear();
+                values.clear();
+            }
+            currRecord++;
+        } //end while
+
+
+        PetscInt rowId = static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getRowId()]);
+        if (values.empty())
+        {
+            //Last row is different from the previous row
+            PetscInt colId = static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getColId()]);
+            PetscScalar value = records[currRecord].getVal();
+            MatSetValues(mat, 1, &rowId, 1, &colId, &value, mode);
+        }
+        else
+        {
+            //Last row is same as the previous row
+            values.push_back(records[currRecord].getVal());
+            colIndices.push_back(static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getColId()]));
+            MatSetValues(mat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
+            colIndices.clear();
+            values.clear();
+        }
+        records.clear();
+    } // records not empty
+
+    return 0;
+
+}
+
+template<typename DT, typename GI, typename LI>
+PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
+{
+
+    const LI m_uiNumDofs = m_maps.get_NumDofs();
+    //std::cout<<"calling func : "<<__func__<<std::endl;
+    if(m_pMatBJ==nullptr)
+    {
+        const LI m_uiNumElems                    = m_maps.get_NumElems();
+        const LI* const m_uiDofsPerElem          = m_maps.get_DofsPerElem();
+        GI** const m_ulpMap                      = m_maps.get_Map();
+        LI** const m_uipLocalMap                 = m_maps.get_LocalMap();
+        GI* const m_ulpLocal2Global              = m_maps.get_Local2Global();
+        const std::vector<GI>& m_ulvLocalDofScan = m_maps.get_LocalDofScan();
+        const LI m_uiDofLocalBegin               = m_maps.get_DofLocalBegin();
+        const LI m_uiDofLocalEnd                 = m_maps.get_DofLocalEnd();
+        const std::vector<LI> & m_uivIndependentElem = m_maps.get_independentElem();
+        const std::vector<LI> & m_uivDependentElem = m_maps.get_dependentElem();
+        m_pMatBJ = new Mat();
+        MatCreate(m_comm, m_pMatBJ);
+        MatSetSizes(*m_pMatBJ, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
+        if (m_uiSize > 1)
+        {
+            MatSetType(*m_pMatBJ, MATMPIAIJ);
+            MatMPIAIJSetPreallocation(*m_pMatBJ, NNZ, PETSC_NULL, NNZ, PETSC_NULL);
+        }
+        else
+        {
+            MatSetType(*m_pMatBJ, MATSEQAIJ);
+            MatSeqAIJSetPreallocation(*m_pMatBJ, NNZ, PETSC_NULL);
+        }
+        // this will disable on preallocation errors (but not good for performance)
+        MatSetOption(*m_pMatBJ, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_TRUE);
+
+
+        std::vector<MatRecord<DT,LI>> bj_mat_records;
+
+        for (LI i = 0; i < m_uivIndependentElem.size(); i++)
+        {
+            // independent element id
+            const LI eid = m_uivIndependentElem[i];
+            const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+
+            // number of dofs per block must be the same for all blocks
+            assert(blocks_dim>0);
+            const LI num_dofs_per_block = m_uiDofsPerElem[eid] / blocks_dim;
+
+            for (LI block_i = 0; block_i < blocks_dim; block_i++)
+            {
+
+                const LI block_row_offset = block_i * num_dofs_per_block;
+
+                for (LI block_j = 0; block_j < blocks_dim; block_j++)
+                {
+                    const LI index            = block_i * blocks_dim + block_j;
+                    const LI block_col_offset = block_j * num_dofs_per_block;
+                    const LI block_ID = block_i * blocks_dim + block_j;
+
+                    if (m_epMat[eid][block_ID] != nullptr)
+                    {
+
+                        for (LI r = 0; r < num_dofs_per_block; r++)
+                        {
+                            const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
+                            for (LI c = 0; c < num_dofs_per_block; c++)
+                            {
+                                const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
+                                bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
+                            }
+                        }
+                        
+                    }
+                }   
+            }
+            
+            if(bj_mat_records.size()>500)
+            {
+                this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+                bj_mat_records.clear();
+            }
+
+        }
+
+        if(!bj_mat_records.empty())
+        {
+            this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+            bj_mat_records.clear();
+        }
+
+        for (LI i = 0; i < m_uivDependentElem.size(); i++)
+        {
+            // independent element id
+            const LI eid = m_uivDependentElem[i];
+            const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+
+            // number of dofs per block must be the same for all blocks
+            assert(blocks_dim>0);
+            const LI num_dofs_per_block = m_uiDofsPerElem[eid] / blocks_dim;
+
+            for (LI block_i = 0; block_i < blocks_dim; block_i++)
+            {
+
+                const LI block_row_offset = block_i * num_dofs_per_block;
+
+                for (LI block_j = 0; block_j < blocks_dim; block_j++)
+                {
+                    const LI index            = block_i * blocks_dim + block_j;
+                    const LI block_col_offset = block_j * num_dofs_per_block;
+                    const LI block_ID = block_i * blocks_dim + block_j;
+
+                    if (m_epMat[eid][block_ID] != nullptr)
+                    {
+
+                        for (LI r = 0; r < num_dofs_per_block; r++)
+                        {
+                            const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
+                            const LI row_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[row_lid]);
+                            for (LI c = 0; c < num_dofs_per_block; c++)
+                            {
+                                const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
+                                const LI col_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[col_lid]);
+                                if(col_rank==row_rank)
+                                    bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
+                            }
+                        }
+                        
+                    }
+                }   
+            }
+            
+            if(bj_mat_records.size()>500)
+            {
+                this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+                bj_mat_records.clear();
+            }
+
+        }
+
+        if(!bj_mat_records.empty())
+        {
+            this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+            bj_mat_records.clear();
+        }
+
+        MatAssemblyBegin((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+        MatAssemblyEnd((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+
+    }
+
+    MatGetDiagonalBlock(*m_pMatBJ, a);
+    return 0;
+
 } // MatGetDiagonalBlock_mf
 
 template<typename DT, typename GI, typename LI>
