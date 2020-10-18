@@ -2840,6 +2840,7 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
         }
         // this will disable on preallocation errors (but not good for performance)
         MatSetOption(*m_pMatBJ, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_TRUE);
+        MatSetOption(*m_pMatBJ, MAT_KEEP_NONZERO_PATTERN, PETSC_TRUE);
 
     }
     
@@ -2876,7 +2877,7 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
                         for (LI c = 0; c < num_dofs_per_block; c++)
                         {
                             const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
-                            bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
+                            bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(r * num_dofs_per_block) + c]));
                         }
                     }
                     
@@ -2934,7 +2935,7 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
                             const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
                             const LI col_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[col_lid]);
                             if(col_rank==row_rank)
-                             bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
+                             bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(r * num_dofs_per_block) + c]));
                         }
                     }
                     
