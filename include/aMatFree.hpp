@@ -2819,6 +2819,7 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
     const LI m_uiDofLocalEnd                 = m_maps.get_DofLocalEnd();
     const std::vector<LI> & m_uivIndependentElem = m_maps.get_independentElem();
     const std::vector<LI> & m_uivDependentElem = m_maps.get_dependentElem();
+    const std::vector<LI> & m_localID2rank     = m_maps.get_localID2Rank();
     
     if(!m_uiRank)
         std::cout<<"[aMat] : calling func : "<<__func__<<std::endl;
@@ -2929,11 +2930,11 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
                     for (LI r = 0; r < num_dofs_per_block; r++)
                     {
                         const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
-                        const LI row_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[row_lid]);
+                        const LI row_rank = m_localID2rank[row_lid]; //m_maps.globalId_2_rank(m_ulpLocal2Global[row_lid]);
                         for (LI c = 0; c < num_dofs_per_block; c++)
                         {
                             const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
-                            const LI col_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[col_lid]);
+                            const LI col_rank = m_localID2rank[col_lid]; //m_maps.globalId_2_rank(m_ulpLocal2Global[col_lid]);
                             if(col_rank==row_rank)
                              bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(r * num_dofs_per_block) + c]));
                         }

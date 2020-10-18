@@ -100,6 +100,8 @@ protected:
     std::vector<LI> m_uivIndependentElem; // Id of independent elements, i.e. elements do not have ghost dofs
     std::vector<LI> m_uivDependentElem; // Id of dependent elements
 
+    std::vector<LI> m_localid2rank; // local id to owner proc rank (based on it gid)
+
 public:
     /**@brief constructor */
     Maps(MPI_Comm comm);
@@ -232,6 +234,11 @@ public:
     const std::vector<unsigned int>& get_RecvRankIds() const
     {
         return m_uivRecvRankIds;
+    }
+
+    const std::vector<LI> & get_localID2Rank() const 
+    {
+        return m_localid2rank;
     }
 
     const LI& get_DofPreGhostBegin() const
@@ -651,6 +658,24 @@ Error Maps<DT, GI, LI>::buildScatterMap()
         postGhostOwner[gcount] = pcount;
         gcount++;
     }
+
+    m_localid2rank.clear();
+    m_localid2rank.resize(m_uiNumDofsTotal,m_uiRank);
+
+    gcount=0;
+    for(unsigned int i = m_uiDofPreGhostBegin; i < m_uiDofPreGhostEnd; i++)
+    {
+        m_localid2rank[i] = preGhostOwner[gcount];
+        gcount++;
+    }
+
+    gcount=0;
+    for(unsigned int i = m_uiDofPostGhostBegin; i < m_uiDofPostGhostEnd; i++)
+    {
+        m_localid2rank[i] = postGhostOwner[gcount];
+        gcount++;
+    }
+
 
     LI* sendCounts = new LI[m_uiSize];
     LI* recvCounts = new LI[m_uiSize];
