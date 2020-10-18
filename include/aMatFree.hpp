@@ -341,6 +341,8 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI>
     /**@brief apply Dirichlet BCs to block diagonal matrix */
     Error apply_bc_blkdiag(Mat* blkdiagMat);
 
+    Error apply_bc_blkdiag_petsc(std::vector<MatRecord<DT,LI>> & records);
+
     /**@brief allocate an aligned memory */
     DT* create_aligned_array(unsigned int alignment, unsigned int length);
 
@@ -2818,7 +2820,9 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
     const std::vector<LI> & m_uivIndependentElem = m_maps.get_independentElem();
     const std::vector<LI> & m_uivDependentElem = m_maps.get_dependentElem();
     
-    //std::cout<<"calling func : "<<__func__<<std::endl;
+    if(!m_uiRank)
+        std::cout<<"[aMat] : calling func : "<<__func__<<std::endl;
+    
     if(m_pMatBJ==nullptr)
     {
         m_pMatBJ = new Mat();
@@ -2930,7 +2934,7 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
                             const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
                             const LI col_rank = m_maps.globalId_2_rank(m_ulpLocal2Global[col_lid]);
                             if(col_rank==row_rank)
-                                bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
+                             bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(c * num_dofs_per_block) + r]));
                         }
                     }
                     
@@ -2947,6 +2951,7 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
 
     }
 
+    
     if(!bj_mat_records.empty())
     {
         // std::cout<<"dep dec: "<<bj_mat_records.size() <<" outof :  "<<m_uivDependentElem.size()*(tmp_dof_per_block*tmp_dof_per_block)<<std::endl;
@@ -2957,8 +2962,19 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
     MatAssemblyBegin((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
     MatAssemblyEnd((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
 
+    // apply_bc_blkdiag_petsc(bj_mat_records);
+    // if(!bj_mat_records.empty())
+    // {
+    //     //std::cout<<"dep dec: "<<bj_mat_records.size() <<" outof :  "<<m_uivDependentElem.size()*(tmp_dof_per_block*tmp_dof_per_block)<<std::endl;
+    //     this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,INSERT_VALUES);
+    //     bj_mat_records.clear();
+    // }
 
+    // MatAssemblyBegin((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+    // MatAssemblyEnd((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+    
     MatGetDiagonalBlock(*m_pMatBJ, a);
+
     return 0;
 
 } // MatGetDiagonalBlock_mf
@@ -3100,6 +3116,95 @@ Error aMatFree<DT, GI, LI>::apply_bc_blkdiag(Mat* blkdiagMat)
 
     return Error::SUCCESS;
 } // apply_bc_blkdiag
+
+template<typename DT, typename GI, typename LI>
+Error aMatFree<DT, GI, LI>::apply_bc_blkdiag_petsc(std::vector<MatRecord<DT,LI>>& records)
+{
+    const LI m_uiNumElems            = m_maps.get_NumElems();
+    const LI* const m_uiDofsPerElem  = m_maps.get_DofsPerElem();
+    LI** const m_uipLocalMap         = m_maps.get_LocalMap();
+    auto m_uiDofLocalBegin           = static_cast<PetscInt>(m_maps.get_DofLocalBegin());
+    auto m_uiDofLocalEnd             = static_cast<PetscInt>(m_maps.get_DofLocalEnd());
+    unsigned int** const m_uipBdrMap = m_maps.get_BdrMap();
+    const LI m_uiNumPreGhostDofs     = m_maps.get_NumPreGhostDofs();
+
+    LI num_dofs_per_elem;
+    PetscInt loc_rowId, loc_colId;
+    for (LI eid = 0; eid < m_uiNumElems; eid++)
+    {
+        // total number of dofs per element eid
+        num_dofs_per_elem = m_uiDofsPerElem[eid];
+
+        // loop on all dofs of element
+        for (LI r = 0; r < num_dofs_per_elem; r++)
+        {
+            loc_rowId = m_uipLocalMap[eid][r];
+            // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+            if ((loc_rowId >= m_uiDofLocalBegin) && (loc_rowId < m_uiDofLocalEnd))
+            {
+                if (m_uipBdrMap[eid][r] == 1)
+                {
+                    for (LI c = 0; c < num_dofs_per_elem; c++)
+                    {
+                        loc_colId = m_uipLocalMap[eid][c];
+                        // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+                        if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd))
+                        {
+                            if (loc_rowId == loc_colId)
+                            {
+                                // 05/01/2020: add the case of penalty method for apply bc
+                                if (m_BcMeth == BC_METH::BC_IMATRIX)
+                                {
+                                    records.push_back(MatRecord<DT,LI>(m_uiRank,loc_rowId,loc_colId,1));
+                                }
+                                else if (m_BcMeth == BC_METH::BC_PENALTY)
+                                {
+                                    records.push_back(MatRecord<DT,LI>(m_uiRank,loc_rowId,loc_colId,PENALTY_FACTOR * m_dtTraceK));
+                                }
+                            }
+                            else
+                            {
+                                // 05/01/2020: only for identity-matrix method, not for penalty
+                                // method
+                                if (m_BcMeth == BC_METH::BC_IMATRIX)
+                                {
+                                    records.push_back(MatRecord<DT,LI>(m_uiRank,loc_rowId,loc_colId,0));
+                                }
+                            }
+                        }
+                    }
+                }
+                //10/11/2020: BC with NS IOWA.
+                // else
+                // {
+                //     for (LI c = 0; c < num_dofs_per_elem; c++)
+                //     {
+                //         loc_colId = m_uipLocalMap[eid][c];
+                //         // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+                //         if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd))
+                //         {
+                //             if (m_uipBdrMap[eid][c] == 1)
+                //             {
+                //                 // 05/01/2020: only for identity-matrix method, not for penalty
+                //                 // method
+                //                 if (m_BcMeth == BC_METH::BC_IMATRIX)
+                //                 {
+                //                     // MatSetValue(*blkdiagMat,
+                //                     //             (loc_rowId - m_uiNumPreGhostDofs),
+                //                     //             (loc_colId - m_uiNumPreGhostDofs),
+                //                     //             0.0,
+                //                     //             INSERT_VALUES);
+                //                     records.push_back(MatRecord<DT,LI>(m_uiRank,loc_rowId,loc_colId,0));
+                //                 }
+                //             }
+                //         }
+                //     }
+                // }
+            }
+        }
+    }
+
+}
 
 // rhs[i] = Uc_i if i is on boundary of Dirichlet condition, Uc_i is the prescribed value on
 // boundary rhs[i] = rhs[i] - sum_{j=1}^{nc}{K_ij * Uc_j} if i is a free dof

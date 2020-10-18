@@ -51,7 +51,7 @@
 // number of nonzero terms in the matrix (used in matrix-base and block Jacobi preconditioning)
 // e.g. in a structure mesh, eight of 20-node quadratic elements sharing the node
 // --> 81 nodes (3 dofs/node) constitue one row of the stiffness matrix
-#define NNZ (81 * 3)
+#define NNZ 8155//(53 *27 * 5)
 
 // weight factor for penalty method in applying BC
 #define PENALTY_FACTOR 100
