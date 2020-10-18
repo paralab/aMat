@@ -2975,6 +2975,10 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
     // MatAssemblyEnd((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
     
     MatGetDiagonalBlock(*m_pMatBJ, a);
+    apply_bc_blkdiag(a);
+    MatAssemblyBegin((*a), MAT_FINAL_ASSEMBLY);
+    MatAssemblyEnd((*a), MAT_FINAL_ASSEMBLY);
+    
 
     return 0;
 
