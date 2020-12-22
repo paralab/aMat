@@ -714,11 +714,13 @@ int main(int argc, char* argv[])
     VecAXPY(sol_exact, alpha, out);
 
     // compute the norm of sol_exact
-    VecNorm(sol_exact, NORM_INFINITY, &norm);
+    //VecNorm(sol_exact, NORM_INFINITY, &norm);
+    VecNorm(sol_exact, NORM_2, &norm);
 
     if (rank == 0)
     {
-        printf("L_inf norm= %20.10f\n", norm);
+        //printf("L_inf norm= %20.10f\n", norm);
+        printf("L2 norm= %20.10f\n", norm);
     }
 
 #ifdef AMAT_PROFILER

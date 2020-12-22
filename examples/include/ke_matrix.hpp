@@ -77,4 +77,11 @@ void ke_hex8_iso(Eigen::Matrix<double,24,24> &ke, double* xe, double E, double n
 void ke_hex20_iso(Eigen::Matrix<double,60,60> &ke, double* xe, double E, double nu,
                 const double* xw, const unsigned int NGT);
 
+/**
+* @brief: element stiffness matrix of hex 8-node element of potential problem with crack, block 01 (off diagonal)
+* @brief: ad-hoc assumption: crack plane is zeta = 0
+* */
+void ke_hex8_iso_crack_01(Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic> &ke, double* xe, double E, double nu,
+                const double* xw, const unsigned int NGT);
+                
 #endif //ADAPTIVEMATRIX_KE_MATRIX_H

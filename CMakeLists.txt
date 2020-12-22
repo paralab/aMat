@@ -143,6 +143,13 @@ target_include_directories(ex4 PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(ex4 PRIVATE ${EIGEN_HEADER_DIR})
 target_link_libraries(ex4 ${MPI_LIBRARIES} m)
 
+add_executable(ex6a examples/src/ex6a.cpp ${INCLUDE_FILES} ${SOURCE_FILES})
+target_include_directories(ex6a PUBLIC include)
+target_include_directories(ex6a PUBLIC examples/include)
+target_include_directories(ex6a PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(ex6a PRIVATE ${EIGEN_HEADER_DIR})
+target_link_libraries(ex6a ${MPI_LIBRARIES} m)
+
 if(BUILD_WITH_PETSC)
     target_include_directories(fem3d PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(fem3d ${PETSC_LIBRARIES})
@@ -164,4 +171,7 @@ if(BUILD_WITH_PETSC)
 
     target_include_directories(ex4 PUBLIC ${PETSC_INCLUDES})
     target_link_libraries(ex4 ${PETSC_LIBRARIES})
+
+    target_include_directories(ex6a PUBLIC ${PETSC_INCLUDES})
+    target_link_libraries(ex6a ${PETSC_LIBRARIES})
 endif()

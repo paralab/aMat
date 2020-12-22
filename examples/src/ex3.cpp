@@ -1078,10 +1078,12 @@ int main(int argc, char* argv[])
 
     // compute norm of error
     // VecNorm(sol_exact, NORM_INFINITY, &norm);
-    VecNorm(error, NORM_INFINITY, &norm);
+    //VecNorm(error, NORM_INFINITY, &norm);
+    VecNorm(error, NORM_2, &norm);
     if (rank == 0)
     {
-        printf("Inf norm of error = %20.10f\n", norm);
+        //printf("Inf norm of error = %20.10f\n", norm);
+        printf("L2 norm of error = %20.12f\n", norm);
     }
 
     // export ParaView
