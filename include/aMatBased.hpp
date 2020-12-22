@@ -146,7 +146,7 @@ aMatBased<DT, GI, LI>::aMatBased(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType)
 template<typename DT, typename GI, typename LI>
 aMatBased<DT, GI, LI>::~aMatBased()
 {
-    // MatDestroy(&m_pMat);
+    MatDestroy(&m_pMat);
 } // destructor
 
 template<typename DT, typename GI, typename LI>
@@ -168,7 +168,7 @@ Error aMatBased<DT, GI, LI>::allocate_matrix()
         MatSeqAIJSetPreallocation(m_pMat, NNZ, PETSC_NULL);
     }
     // this will disable on preallocation errors (but not good for performance)
-    MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
+    MatSetOption(m_pMat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_TRUE);
 
     return Error::SUCCESS;
 } // allocate_matrix

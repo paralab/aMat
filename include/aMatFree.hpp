@@ -64,6 +64,16 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI>
     DT* m_dpVvg; // used in MatMult_mf
     DT* m_dpUug;
 
+    std::function<PetscErrorCode(Mat, Vec, Vec)>*  m_fptr_mat_mult=nullptr;
+
+    std::function<PetscErrorCode(Mat, Vec)>* m_fptr_diag=nullptr;
+
+    std::function<PetscErrorCode(Mat, Mat*)>* m_fptr_bdiag=nullptr;
+
+    Mat* m_pMatBJ=nullptr; // block jacobi preconditioner.
+
+
+
 #ifdef HYBRID_PARALLEL
     unsigned int m_uiNumThreads; // max number of omp threads
     DT** m_veBufs;               // elemental vectors used in matvec
@@ -181,41 +191,63 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI>
     std::function<PetscErrorCode(Mat, Vec, Vec)>* get_MatMult_func()
     {
 
-        std::function<PetscErrorCode(Mat, Vec, Vec)>* f =
+        //std::cout<<"calling matvec func"<<std::endl;
+        if(m_fptr_mat_mult!=nullptr)
+        {
+            // no need to reallocate the function ptr to the same function.
+            // delete m_fptr_mat_mult;
+            // m_fptr_mat_mult=nullptr;
+            return m_fptr_mat_mult;
+        }
+
+        m_fptr_mat_mult =
           new std::function<PetscErrorCode(Mat, Vec, Vec)>();
 
-        (*f) = [this](Mat A, Vec u, Vec v) {
+        (*m_fptr_mat_mult) = [this](Mat A, Vec u, Vec v) {
             this->MatMult_mf(A, u, v);
             return 0;
         };
-        return f;
+        return m_fptr_mat_mult;
     }
 
     /**@brief pointer function points to MatGetDiagonal_mf */
     std::function<PetscErrorCode(Mat, Vec)>* get_MatGetDiagonal_func()
     {
+        //std::cout<<"get diag"<<std::endl;
+        if(m_fptr_diag!=nullptr)
+        {
+            // delete m_fptr_diag;
+            // m_fptr_diag=nullptr;
+            return m_fptr_diag;
+        }
 
-        std::function<PetscErrorCode(Mat, Vec)>* f = new std::function<PetscErrorCode(Mat, Vec)>();
+        m_fptr_diag = new std::function<PetscErrorCode(Mat, Vec)>();
 
-        (*f) = [this](Mat A, Vec d) {
+        (*m_fptr_diag) = [this](Mat A, Vec d) {
             this->MatGetDiagonal_mf(A, d);
             return 0;
         };
-        return f;
+        return m_fptr_diag;
     }
 
     /**@brief pointer function points to MatGetDiagonalBlock_mf */
     std::function<PetscErrorCode(Mat, Mat*)>* get_MatGetDiagonalBlock_func()
     {
+        //std::cout<<"get blk diag"<<std::endl;
+        if(m_fptr_bdiag!=nullptr)
+        {
+            // delete m_fptr_bdiag;
+            // m_fptr_bdiag=nullptr;
+            return m_fptr_bdiag;
+        }
 
-        std::function<PetscErrorCode(Mat, Mat*)>* f =
-          new std::function<PetscErrorCode(Mat, Mat*)>();
+        m_fptr_bdiag = new std::function<PetscErrorCode(Mat, Mat*)>();
 
-        (*f) = [this](Mat A, Mat* a) {
-            this->MatGetDiagonalBlock_mf(A, a);
+        (*m_fptr_bdiag) = [this](Mat A, Mat* a) {
+            this->MatGetDiagonalBlock_mf_petsc(A, a);
             return 0;
         };
-        return f;
+        return m_fptr_bdiag;
     }
 
   protected:
@@ -295,14 +327,21 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI>
     /**@brief matrix-free version of MatGetDiagonal of PETSc */
     PetscErrorCode MatGetDiagonal_mf(Mat A, Vec d);
 
-    /**@brief matrix-free version of MatGetDiagonalBlock of PETSc */
+    /**@brief matrix-free version of MatGetDiagonalBlock of PETSc (Version 1: This does the communication by aMat) */
     PetscErrorCode MatGetDiagonalBlock_mf(Mat A, Mat* a);
+
+    /**@brief matrix-free version of MatGetDiagonalBlock of PETSc (Version 2: PETSC parallel mat is used. ) */
+    PetscErrorCode MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a);
+
+    PetscErrorCode petscSetValuesInMatrix(Mat mat, std::vector<MatRecord<DT,LI>>& records, InsertMode mode);
 
     /**@brief apply Dirichlet BCs to diagonal vector used for Jacobi preconditioner */
     Error apply_bc_diagonal(Vec rhs);
 
     /**@brief apply Dirichlet BCs to block diagonal matrix */
     Error apply_bc_blkdiag(Mat* blkdiagMat);
+
+    Error apply_bc_blkdiag_petsc(std::vector<MatRecord<DT,LI>> & records);
 
     /**@brief allocate an aligned memory */
     DT* create_aligned_array(unsigned int alignment, unsigned int length);
@@ -330,7 +369,6 @@ PetscErrorCode aMat_matvec(Mat A, Vec u, Vec v)
     par::aMatFree<DT, GI, LI>* pLap                 = pCtx->aMatPtr;
     std::function<PetscErrorCode(Mat, Vec, Vec)>* f = pLap->get_MatMult_func();
     (*f)(A, u, v);
-    delete f;
     return 0;
 }
 
@@ -344,7 +382,6 @@ PetscErrorCode aMat_matgetdiagonal(Mat A, Vec d)
     par::aMatFree<DT, GI, LI>* pLap            = pCtx->aMatPtr;
     std::function<PetscErrorCode(Mat, Vec)>* f = pLap->get_MatGetDiagonal_func();
     (*f)(A, d);
-    delete f;
     return 0;
 }
 
@@ -358,7 +395,6 @@ PetscErrorCode aMat_matgetdiagonalblock(Mat A, Mat* a)
     par::aMatFree<DT, GI, LI>* pLap             = pCtx->aMatPtr;
     std::function<PetscErrorCode(Mat, Mat*)>* f = pLap->get_MatGetDiagonalBlock_func();
     (*f)(A, a);
-    delete f;
     return 0;
 }
 
@@ -450,9 +486,10 @@ aMatFree<DT, GI, LI>::~aMatFree()
 #endif
 
     // free memory allocated for Uc
-    if (m_dpUug != nullptr)
+    if (m_dpUc != nullptr)
     {
         delete[] m_dpUc;
+        m_dpUc=nullptr;
     }
 
     // free memory allocated for vvg and uug
@@ -460,6 +497,35 @@ aMatFree<DT, GI, LI>::~aMatFree()
         delete[] m_dpVvg;
     if (m_dpUug != nullptr)
         delete[] m_dpUug;
+
+    if(m_fptr_mat_mult!=nullptr)
+    {
+        delete m_fptr_mat_mult;
+        m_fptr_mat_mult=nullptr;
+    }
+
+    if(m_fptr_diag!=nullptr)
+    {
+        delete m_fptr_diag;
+        m_fptr_diag=nullptr;
+    }
+
+    if(m_fptr_bdiag!=nullptr)
+    {
+        delete m_fptr_bdiag;
+        m_fptr_bdiag=nullptr;
+    }
+
+    if(m_pMatBJ!=nullptr)
+    {
+        MatDestroy(m_pMatBJ);
+        m_pMatBJ=nullptr;
+    }
+
+    MatDestroy(m_pMat);
+
+
+
 
 } // destructor
 
@@ -565,6 +631,14 @@ Error aMatFree<DT, GI, LI>::allocate_matrix()
     // allocate memory for vvg and uug used in MatMult_mf
     m_dpVvg = new DT[m_uiNumDofsTotal];
     m_dpUug = new DT[m_uiNumDofsTotal];
+
+    if (m_dpUc != nullptr)
+    {
+        delete[] m_dpUc;
+        m_dpUc = nullptr;
+    }
+
+    m_dpUc = new DT[m_uiNumDofsTotal];
 
     return Error::SUCCESS;
 } // allocate_matrix
@@ -2592,12 +2666,19 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf(Mat A, Mat* a)
     std::vector<MatRecord<DT, LI>> ddg;
     mat_get_diagonal_block(ddg);
 
-    MatCreateSeqAIJ(PETSC_COMM_SELF,
+    if(m_pMatBJ==nullptr)
+    {
+        m_pMatBJ = new Mat();
+        MatCreateSeqAIJ(PETSC_COMM_SELF,
                     m_uiNumDofs,
                     m_uiNumDofs,
                     NNZ,
                     PETSC_NULL,
-                    a); // todo: 27 only good for dofs_per_node = 1
+                    m_pMatBJ);
+
+    }
+
+    *a=*m_pMatBJ;
 
     // set values ...
     std::vector<PetscScalar> values;
@@ -2649,6 +2730,260 @@ PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf(Mat A, Mat* a)
 
     return 0;
 } // MatGetDiagonalBlock_mf
+
+template<typename DT, typename GI, typename LI>
+PetscErrorCode aMatFree<DT, GI, LI>::petscSetValuesInMatrix(Mat mat, std::vector<MatRecord<DT,LI>>& records, InsertMode mode)
+{
+
+    if(records.empty())
+        return 0;
+
+    // assembly code based on Dendro4
+    std::vector<PetscScalar > values;
+    std::vector<PetscInt> colIndices;
+
+    //Can make it more efficient later.
+    if (!records.empty())
+    {
+        GI* const m_ulpLocal2Global =m_maps.get_Local2Global();
+        // GI** const m_ulpMap                      = m_maps.get_Map();
+        // LI** const m_uipLocalMap                 = m_maps.get_LocalMap();
+
+        ///TODO: change this to more efficient one later.
+        std::vector<MatRecord<DT,LI>> tmpRecords;
+
+        for(LI i=0;i<records.size();i++)
+            tmpRecords.push_back(records[i]);
+
+        std::swap(tmpRecords,records);
+        tmpRecords.clear();
+
+        //Sort Order: row first, col next, val last
+        std::sort(records.begin(), records.end());
+
+        LI currRecord = 0;
+
+        while (currRecord < (records.size() - 1))
+        {
+            values.push_back(records[currRecord].getVal());
+            //colIndices.push_back(static_cast<PetscInt>((records[currRecord].getColDim()) + dof * m_uiLocalToGlobalNodalMap[records[currRecord].getColID()]));
+            colIndices.push_back(static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getColId()]));
+            if ((records[currRecord].getRowId() != records[currRecord + 1].getRowId()))
+            {
+                PetscInt rowId = static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getRowId()]);
+                MatSetValues(mat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())),  (&(*values.begin())), mode);
+
+                colIndices.clear();
+                values.clear();
+            }
+            currRecord++;
+        } //end while
+
+
+        PetscInt rowId = static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getRowId()]);
+        if (values.empty())
+        {
+            //Last row is different from the previous row
+            PetscInt colId = static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getColId()]);
+            PetscScalar value = records[currRecord].getVal();
+            MatSetValues(mat, 1, &rowId, 1, &colId, &value, mode);
+        }
+        else
+        {
+            //Last row is same as the previous row
+            values.push_back(records[currRecord].getVal());
+            colIndices.push_back(static_cast<PetscInt>(m_ulpLocal2Global[records[currRecord].getColId()]));
+            MatSetValues(mat, 1, &rowId, colIndices.size(), (&(*colIndices.begin())), (&(*values.begin())), mode);
+            colIndices.clear();
+            values.clear();
+        }
+        records.clear();
+    } // records not empty
+
+    return 0;
+
+} // petscSetValuesInMatrix
+
+template<typename DT, typename GI, typename LI>
+PetscErrorCode aMatFree<DT, GI, LI>::MatGetDiagonalBlock_mf_petsc(Mat A, Mat* a)
+{
+
+    const LI m_uiNumDofs = m_maps.get_NumDofs();
+    const LI m_uiNumElems                    = m_maps.get_NumElems();
+    const LI* const m_uiDofsPerElem          = m_maps.get_DofsPerElem();
+    GI** const m_ulpMap                      = m_maps.get_Map();
+    LI** const m_uipLocalMap                 = m_maps.get_LocalMap();
+    GI* const m_ulpLocal2Global              = m_maps.get_Local2Global();
+    const std::vector<GI>& m_ulvLocalDofScan = m_maps.get_LocalDofScan();
+    const LI m_uiDofLocalBegin               = m_maps.get_DofLocalBegin();
+    const LI m_uiDofLocalEnd                 = m_maps.get_DofLocalEnd();
+    const std::vector<LI> & m_uivIndependentElem = m_maps.get_independentElem();
+    const std::vector<LI> & m_uivDependentElem = m_maps.get_dependentElem();
+    const std::vector<LI> & m_localID2rank     = m_maps.get_localID2Rank();
+
+    if(!m_uiRank)
+        std::cout<<"[aMat] : calling func : "<<__func__<<std::endl;
+
+    if(m_pMatBJ==nullptr)
+    {
+        m_pMatBJ = new Mat();
+        MatCreate(m_comm, m_pMatBJ);
+        MatSetSizes(*m_pMatBJ, m_uiNumDofs, m_uiNumDofs, PETSC_DECIDE, PETSC_DECIDE);
+        if (m_uiSize > 1)
+        {
+            MatSetType(*m_pMatBJ, MATMPIAIJ);
+            MatMPIAIJSetPreallocation(*m_pMatBJ, NNZ, PETSC_NULL, NNZ, PETSC_NULL);
+        }
+        else
+        {
+            MatSetType(*m_pMatBJ, MATSEQAIJ);
+            MatSeqAIJSetPreallocation(*m_pMatBJ, NNZ, PETSC_NULL);
+        }
+        // this will disable on preallocation errors (but not good for performance)
+        MatSetOption(*m_pMatBJ, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_TRUE);
+        MatSetOption(*m_pMatBJ, MAT_KEEP_NONZERO_PATTERN, PETSC_TRUE);
+
+    }
+
+    MatZeroEntries(*m_pMatBJ);
+    std::vector<MatRecord<DT,LI>> bj_mat_records;
+
+    for (LI i = 0; i < m_uivIndependentElem.size(); i++)
+    {
+        // independent element id
+        const LI eid = m_uivIndependentElem[i];
+        const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+
+        // number of dofs per block must be the same for all blocks
+        assert(blocks_dim>0);
+        const LI num_dofs_per_block = m_uiDofsPerElem[eid] / blocks_dim;
+
+        for (LI block_i = 0; block_i < blocks_dim; block_i++)
+        {
+
+            const LI block_row_offset = block_i * num_dofs_per_block;
+
+            for (LI block_j = 0; block_j < blocks_dim; block_j++)
+            {
+                const LI index            = block_i * blocks_dim + block_j;
+                const LI block_col_offset = block_j * num_dofs_per_block;
+                const LI block_ID = block_i * blocks_dim + block_j;
+
+                if (m_epMat[eid][block_ID] != nullptr)
+                {
+
+                    for (LI r = 0; r < num_dofs_per_block; r++)
+                    {
+                        const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
+                        for (LI c = 0; c < num_dofs_per_block; c++)
+                        {
+                            const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
+                            bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(r * num_dofs_per_block) + c]));
+                        }
+                    }
+
+                }
+            }
+        }
+
+        if(bj_mat_records.size()>500)
+        {
+            this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+            bj_mat_records.clear();
+        }
+
+    }
+
+    if(!bj_mat_records.empty())
+    {
+        this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+        bj_mat_records.clear();
+    }
+
+    LI tmp_dof_per_block;
+    for (LI i = 0; i < m_uivDependentElem.size(); i++)
+    {
+        // independent element id
+        const LI eid = m_uivDependentElem[i];
+        const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
+
+        // number of dofs per block must be the same for all blocks
+        assert(blocks_dim>0);
+        const LI num_dofs_per_block = m_uiDofsPerElem[eid] / blocks_dim;
+        tmp_dof_per_block=num_dofs_per_block;
+
+        for (LI block_i = 0; block_i < blocks_dim; block_i++)
+        {
+
+            const LI block_row_offset = block_i * num_dofs_per_block;
+
+
+            for (LI block_j = 0; block_j < blocks_dim; block_j++)
+            {
+                const LI index            = block_i * blocks_dim + block_j;
+                const LI block_col_offset = block_j * num_dofs_per_block;
+                const LI block_ID = block_i * blocks_dim + block_j;
+
+                if (m_epMat[eid][block_ID] != nullptr)
+                {
+
+                    for (LI r = 0; r < num_dofs_per_block; r++)
+                    {
+                        const LI row_lid = m_uipLocalMap[eid][block_row_offset + r];
+                        const LI row_rank = m_localID2rank[row_lid]; //m_maps.globalId_2_rank(m_ulpLocal2Global[row_lid]);
+                        for (LI c = 0; c < num_dofs_per_block; c++)
+                        {
+                            const LI col_lid = m_uipLocalMap[eid][block_col_offset + c];
+                            const LI col_rank = m_localID2rank[col_lid]; //m_maps.globalId_2_rank(m_ulpLocal2Global[col_lid]);
+                            if(col_rank==row_rank)
+                             bj_mat_records.push_back(MatRecord<DT,LI>(m_uiRank,row_lid,col_lid,m_epMat[eid][index][(r * num_dofs_per_block) + c]));
+                        }
+                    }
+
+                }
+            }
+        }
+
+        if(bj_mat_records.size()>500)
+        {
+            // std::cout<<"dep dec: "<<bj_mat_records.size() <<" outof :  "<<m_uivDependentElem.size()*(tmp_dof_per_block*tmp_dof_per_block)<<std::endl;
+            this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+            bj_mat_records.clear();
+        }
+
+    }
+
+
+    if(!bj_mat_records.empty())
+    {
+        // std::cout<<"dep dec: "<<bj_mat_records.size() <<" outof :  "<<m_uivDependentElem.size()*(tmp_dof_per_block*tmp_dof_per_block)<<std::endl;
+        this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,ADD_VALUES);
+        bj_mat_records.clear();
+    }
+
+    MatAssemblyBegin((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+    MatAssemblyEnd((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+
+    // apply_bc_blkdiag_petsc(bj_mat_records);
+    // if(!bj_mat_records.empty())
+    // {
+    //     //std::cout<<"dep dec: "<<bj_mat_records.size() <<" outof :  "<<m_uivDependentElem.size()*(tmp_dof_per_block*tmp_dof_per_block)<<std::endl;
+    //     this->petscSetValuesInMatrix(*m_pMatBJ,bj_mat_records,INSERT_VALUES);
+    //     bj_mat_records.clear();
+    // }
+
+    // MatAssemblyBegin((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+    // MatAssemblyEnd((*m_pMatBJ), MAT_FINAL_ASSEMBLY);
+
+    MatGetDiagonalBlock(*m_pMatBJ, a);
+    apply_bc_blkdiag(a);
+    MatAssemblyBegin((*a), MAT_FINAL_ASSEMBLY);
+    MatAssemblyEnd((*a), MAT_FINAL_ASSEMBLY);
+
+
+    return 0;
+
+} // MatGetDiagonalBlock_mf_petsc
 
 template<typename DT, typename GI, typename LI>
 Error aMatFree<DT, GI, LI>::apply_bc_diagonal(Vec diag)
@@ -2786,6 +3121,95 @@ Error aMatFree<DT, GI, LI>::apply_bc_blkdiag(Mat* blkdiagMat)
 
     return Error::SUCCESS;
 } // apply_bc_blkdiag
+
+template<typename DT, typename GI, typename LI>
+Error aMatFree<DT, GI, LI>::apply_bc_blkdiag_petsc(std::vector<MatRecord<DT,LI>>& records)
+{
+    const LI m_uiNumElems            = m_maps.get_NumElems();
+    const LI* const m_uiDofsPerElem  = m_maps.get_DofsPerElem();
+    LI** const m_uipLocalMap         = m_maps.get_LocalMap();
+    auto m_uiDofLocalBegin           = static_cast<PetscInt>(m_maps.get_DofLocalBegin());
+    auto m_uiDofLocalEnd             = static_cast<PetscInt>(m_maps.get_DofLocalEnd());
+    unsigned int** const m_uipBdrMap = m_maps.get_BdrMap();
+    const LI m_uiNumPreGhostDofs     = m_maps.get_NumPreGhostDofs();
+
+    LI num_dofs_per_elem;
+    PetscInt loc_rowId, loc_colId;
+    for (LI eid = 0; eid < m_uiNumElems; eid++)
+    {
+        // total number of dofs per element eid
+        num_dofs_per_elem = m_uiDofsPerElem[eid];
+
+        // loop on all dofs of element
+        for (LI r = 0; r < num_dofs_per_elem; r++)
+        {
+            loc_rowId = m_uipLocalMap[eid][r];
+            // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+            if ((loc_rowId >= m_uiDofLocalBegin) && (loc_rowId < m_uiDofLocalEnd))
+            {
+                if (m_uipBdrMap[eid][r] == 1)
+                {
+                    for (LI c = 0; c < num_dofs_per_elem; c++)
+                    {
+                        loc_colId = m_uipLocalMap[eid][c];
+                        // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+                        if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd))
+                        {
+                            if (loc_rowId == loc_colId)
+                            {
+                                // 05/01/2020: add the case of penalty method for apply bc
+                                if (m_BcMeth == BC_METH::BC_IMATRIX)
+                                {
+                                    records.push_back(MatRecord<DT,LI>(m_uiRank,loc_rowId,loc_colId,1));
+                                }
+                                else if (m_BcMeth == BC_METH::BC_PENALTY)
+                                {
+                                    records.push_back(MatRecord<DT,LI>(m_uiRank,loc_rowId,loc_colId,PENALTY_FACTOR * m_dtTraceK));
+                                }
+                            }
+                            else
+                            {
+                                // 05/01/2020: only for identity-matrix method, not for penalty
+                                // method
+                                if (m_BcMeth == BC_METH::BC_IMATRIX)
+                                {
+                                    records.push_back(MatRecord<DT,LI>(m_uiRank,loc_rowId,loc_colId,0));
+                                }
+                            }
+                        }
+                    }
+                }
+                 else
+                 {
+                     for (LI c = 0; c < num_dofs_per_elem; c++)
+                     {
+                         loc_colId = m_uipLocalMap[eid][c];
+                         // 05.21.20: bug loc_rowId <= m_uiDofLocalEnd is fixed
+                         if ((loc_colId >= m_uiDofLocalBegin) && (loc_colId < m_uiDofLocalEnd))
+                         {
+                             if (m_uipBdrMap[eid][c] == 1)
+                             {
+                                 // 05/01/2020: only for identity-matrix method, not for penalty
+                                 // method
+                                 if (m_BcMeth == BC_METH::BC_IMATRIX)
+                                 {
+                                     // MatSetValue(*blkdiagMat,
+                                     //             (loc_rowId - m_uiNumPreGhostDofs),
+                                     //             (loc_colId - m_uiNumPreGhostDofs),
+                                     //             0.0,
+                                     //             INSERT_VALUES);
+                                     records.push_back(MatRecord<DT,LI>(m_uiRank,loc_rowId,loc_colId,0));
+                                 }
+                             }
+                         }
+                     }
+                 }
+            }
+        }
+    }
+    return Error::SUCCESS;
+
+} // apply_bc_blkdiag_petsc
 
 // rhs[i] = Uc_i if i is on boundary of Dirichlet condition, Uc_i is the prescribed value on
 // boundary rhs[i] = rhs[i] - sum_{j=1}^{nc}{K_ij * Uc_j} if i is a free dof
