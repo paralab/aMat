@@ -1,19 +1,18 @@
 /**
- * @file ex3.cpp
+ * @file ex4.cpp: same as ex4 but all ranks own the same number of nodes
  * @author Hari Sundar   hsundar@gmail.com
  * @author Han Duc Tran  hantran@cs.utah.edu
  *
  * @brief Example: Stretching of a prismatic bar by its own weight (Timoshenko page 246)
+ * @brief          using 20-node quadratic element
  * @brief Exact solution (origin at centroid of bottom face)
  * @brief    uniform stress s_zz = rho * g * z
  * @brief    displacement u = -(nu * rho * g/E) * x * z
  * @brief    displacement v = -(nu * rho * g/E) * y * z
  * @brief    displacement w = (rho * g/2/E)(z^2 - Lz^2) + (nu * rho * g)/2/E(x^2 + y^2)
- * @brief Boundary condition: traction tz = rho * g * Lz applied on top surface + blocking rigid
- * motions
- * @brief Partition of elements in z direction: owned elements in z direction ~ Nez/(number of
- * ranks)
- * @brief Size of the domain: Lx = Ly = 1; Lz = 4.0
+ * @brief Boundary condition: traction tz = rho * g * Lz applied on top surface + blocking rigid motions
+ * @brief Partition of elements in z direction: owned elements in z direction ~ Nez/(number of ranks)
+ * @brief Size of the domain: Lx = Ly = 1; Lz = 1.0
  *
  * @version 0.1
  * @date 2020-02-26
@@ -22,8 +21,8 @@
  *
  */
 
-#include "ex3.hpp"
-AppData Ex3AppData;
+#include "ex4.hpp"
+AppData Ex4AppData;
 
 // number of cracks allowed in 1 element
 #define MAX_CRACK_LEVEL 3
@@ -33,46 +32,38 @@ AppData Ex3AppData;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void usage() {
+void usage()
+{
     std::cout << "\n";
     std::cout << "Usage:\n";
-    std::cout << "  ex3 <Nex> <Ney> <Nez> <matrix based/free> <bc-method>\n";
+    std::cout << "  ex4 <Nex> <Ney> <Nez> <matrix based/free> <bc-method>\n";
     std::cout << "\n";
     std::cout << "     1) Nex: Number of elements in X\n";
     std::cout << "     2) Ney: Number of elements in y\n";
     std::cout << "     3) Nez: Number of elements in z\n";
-    std::cout << "     4) method (0, 1, 2, 3, 4, 5)\n";
-    std::cout << "     5) use identity-matrix: 0  ;  use penalty method: 1 \n";
+    std::cout << "     4) method (0, 1, 2, 3, 4, 5) \n";
+    std::cout << "     5) use identity-matrix: 0    use penalty method: 1 \n";
     std::cout << "     6) number of streams (used in method 3, 4, 5)\n";
     std::cout << "     7) name of output file\n";
     exit(0);
 }
 
-typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> EigenMat;
-
-// function to compute element matrix used for method = 2
+// function to compute element matrix used in method = 2
 void computeElemMat(unsigned int eid, double *ke, double* xe) {
     
-    const double hx = Ex3AppData.hx;
-    const double hy = Ex3AppData.hy;
-    const double hz = Ex3AppData.hz;
+    const unsigned int NDOF_PER_NODE = Ex4AppData.NDOF_PER_NODE;
+    const unsigned int NNODE_PER_ELEM = Ex4AppData.NNODE_PER_ELEM;
     
-    const unsigned int Nex  = Ex3AppData.Nex;
-    const unsigned int Ney  = Ex3AppData.Ney;
-    const unsigned int Nez  = Ex3AppData.Nez;
-    const unsigned int NDOF_PER_NODE = Ex3AppData.NDOF_PER_NODE;
-    const double Lx = Ex3AppData.Lx;
-    const double Ly = Ex3AppData.Ly;
-
     // get coordinates of all nodes
-    for (unsigned int nid = 0; nid < Ex3AppData.NNODE_PER_ELEM; nid++) {
-        unsigned int gNodeId = Ex3AppData.ElementToGIDNode[eid][nid];
-        xe[nid * NDOF_PER_NODE] = (double)(gNodeId % (Nex + 1)) * hx - Lx/2;
-        xe[(nid * NDOF_PER_NODE) + 1] = (double)((gNodeId % ((Nex + 1) * (Ney + 1))) / (Nex + 1)) * hy - Ly/2;
-        xe[(nid * NDOF_PER_NODE) + 2] = (double)(gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
+    unsigned int lNodeId;
+    for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
+        unsigned int lNodeId = Ex4AppData.localMap[eid][nid];
+        xe[nid * NDOF_PER_NODE] = Ex4AppData.localNodes[lNodeId].get_x() - Ex4AppData.Lx / 2;
+        xe[(nid * NDOF_PER_NODE) + 1] = Ex4AppData.localNodes[lNodeId].get_y() - Ex4AppData.Ly / 2;
+        xe[(nid * NDOF_PER_NODE) + 2] = Ex4AppData.localNodes[lNodeId].get_z();
     }
 
-    ke_hex8_iso(ke, xe, Ex3AppData.E, Ex3AppData.nu, Ex3AppData.intData->Pts_n_Wts, Ex3AppData.NGT);
+    ke_hex20_iso(ke, xe, Ex4AppData.E, Ex4AppData.nu, Ex4AppData.intData->Pts_n_Wts, Ex4AppData.NGT);
     
     return;
 } // computeElemMat
@@ -80,72 +71,78 @@ void computeElemMat(unsigned int eid, double *ke, double* xe) {
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char* argv[]) {
-    // User provides: 1) Nex - number of elements (global) in x direction
-    //                2) Ney - number of elements (global) in y direction
-    //                3) Nez - number of elements (global) in z direction
-    //                4) method (0, 1, 2, 3, 4, 5)
-    //                5)method for BCs (0 = identity matrix method; 1 = penalty method)
-    //                6) number of streams (applied for method = 3, 4, 5)
+    // User provides: Nex - number of elements (global) in x direction
+    //                Ney - number of elements (global) in y direction
+    //                Nez - number of elements (global) in z direction
+    //                method (0, 1, 2, 3, 4, 5)
+    //                bcMethod = 0 --> identity matrix method; 1 --> penalty method
 
     int rc;
 
     double x, y, z;
     double hx, hy, hz;
 
-    unsigned int emin = 0;
+    unsigned int emin = 0, emax = 0;
 
-    const unsigned int NDOF_PER_NODE  = 3; // number of dofs per node
-    const unsigned int NDIM           = 3; // number of dimension
-    const unsigned int NNODE_PER_ELEM = 8; // number of nodes per element
+    const unsigned int NDOF_PER_NODE  = 3;  // number of dofs per node
+    const unsigned int NDIM           = 3;  // number of dimension
+    const unsigned int NNODE_PER_ELEM = 20; // number of nodes per element
 
     // material properties of alumina
+    // const double E = 300.0; // GPa
     const double E = 1.0E6;
+    // const double nu = 0.2;
     const double nu = 0.3;
+    // const double rho = 3950;// kg.m^-3
     const double rho = 1.0;
+    // const double g = 9.8;   // m.s^-2
     const double g = 1.0;
-    // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
-    // Gauss points and weights
-    const unsigned int NGT = 2;
-    integration<double> intData(NGT);
 
     // number of (global) elements in x, y and z directions
     const unsigned int Nex = atoi(argv[1]);
     const unsigned int Ney = atoi(argv[2]);
     const unsigned int Nez = atoi(argv[3]);
 
-    const unsigned int matType = atoi(argv[4]); // matrix-free method (0, 1, 2, 3, 4, 5)
+    // 05.19.20 only use Eigen matrix
+    const bool useEigen = true;
+
+    const unsigned int matType  = atoi(argv[4]); // approach (0, 1, 2, 3, 4, 5)
     const unsigned int bcMethod = atoi(argv[5]); // method of applying BC
     const unsigned int nStreams = atoi(argv[6]); // number of streams used for method 3, 4, 5
+
+    // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
+    const double Lx = 1000, Ly = 1000, Lz = 1000;
+    // Gauss points and weights
+    const unsigned int NGT = 2;
+    integration<double> intData(NGT);
 
     // element sizes
     hx = Lx / double(Nex); // element size in x direction
     hy = Ly / double(Ney); // element size in y direction
     hz = Lz / double(Nez); // element size in z direction
 
-    // 05.19.20 only use Eigen matrix
-    const bool useEigen = true;
-    
-    Ex3AppData.E = E;
-    Ex3AppData.nu = nu;
-    Ex3AppData.rho = rho;
-    Ex3AppData.g = g;
+    Ex4AppData.E = E;
+    Ex4AppData.nu = nu;
+    Ex4AppData.rho = rho;
+    Ex4AppData.g = g;
 
-    Ex3AppData.Lx = Lx;
-    Ex3AppData.Ly = Ly;
-    Ex3AppData.Lz = Lz;
+    Ex4AppData.Lx = Lx;
+    Ex4AppData.Ly = Ly;
+    Ex4AppData.Lz = Lz;
     
-    Ex3AppData.Nex = Nex;
-    Ex3AppData.Ney = Ney;
-    Ex3AppData.Nez = Nez;
+    Ex4AppData.Nex = Nex;
+    Ex4AppData.Ney = Ney;
+    Ex4AppData.Nez = Nez;
 
-    Ex3AppData.hx = hx;
-    Ex3AppData.hy = hy;
-    Ex3AppData.hz = hz;
+    Ex4AppData.hx = hx;
+    Ex4AppData.hy = hy;
+    Ex4AppData.hz = hz;
 
-    Ex3AppData.NGT = NGT;
-    Ex3AppData.intData = &intData;
-    
+    Ex4AppData.NGT = NGT;
+    Ex4AppData.intData = &intData;
+
+    Ex4AppData.NDOF_PER_NODE = NDOF_PER_NODE;
+    Ex4AppData.NNODE_PER_ELEM = NNODE_PER_ELEM;
 
     const double zero_number = 1E-12;
 
@@ -167,17 +164,26 @@ int main(int argc, char* argv[]) {
         usage();
     }
 
-    // element matrix and vector
-    EigenMat** kee;
+    // element matrix (contains multiple matrix blocks)
+    typedef Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM> EigenMat;
+    typedef Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1> EigenVec;
 
-    std::vector<Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1>> fee;
-    fee.resize(MAX_BLOCKS_PER_ELEMENT);
+    EigenMat** kee;
+    EigenVec** fee;
 
     kee = new EigenMat*[MAX_BLOCKS_PER_ELEMENT];
+    fee = new EigenVec*[MAX_BLOCKS_PER_ELEMENT];
     for (unsigned int i = 1; i < MAX_BLOCKS_PER_ELEMENT; i++) {
         kee[i] = nullptr;
+        fee[i] = nullptr;
     }
     kee[0] = new EigenMat;
+    fee[0] = new EigenVec;
+
+    // element force vector
+    // std::vector<Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1>> fee;
+    // fee.resize(MAX_BLOCKS_PER_ELEMENT);
+    // Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1> fee;
 
     // nodal coordinates of element
     double* xe = new double[NDIM * NNODE_PER_ELEM];
@@ -201,15 +207,13 @@ int main(int argc, char* argv[]) {
         petsc_matvec_time.clear();
     }
 
-    if (!rank) {
+    if (!rank)
+    {
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNex : " << Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
         std::cout << "\t\tLx : " << Lx << " Ly: " << Ly << " Lz: " << Lz << "\n";
-        std::cout << "\t\tMethod (0 = matrix based; 1 = hybrid; 2 = matrix free; 3 = gpu matvec) = " << matType << "\n";
+        std::cout << "\t\tMethod = " << matType << "\n";
         std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
-        if ((matType == 3) || (matType == 4) || (matType == 5)){
-            std::cout << "\t\tNumber of streams: " << nStreams << "\n";
-        }
     }
 
     #ifdef VECTORIZED_AVX512
@@ -271,7 +275,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // find min & max element index in z direction
     // partition number of elements in z direction
     unsigned int nelem_z;
     // minimum number of elements in z-dir for each rank
@@ -279,57 +282,213 @@ int main(int argc, char* argv[]) {
     // remaining
     unsigned int nRemain = Nez % size;
     // distribute nRemain uniformly from rank = 0 up to rank = nRemain - 1
-    if (rank < nRemain) {
+    if (rank < nRemain)
+    {
         nelem_z = nzmin + 1;
-    } else {
+    }
+    else
+    {
         nelem_z = nzmin;
     }
-    if (rank < nRemain) {
+    if (rank < nRemain)
+    {
         emin = rank * nzmin + rank;
-    } else {
+    }
+    else
+    {
         emin = rank * nzmin + nRemain;
     }
+    emax = emin + nelem_z - 1;
 
     // number of owned elements
     unsigned int nelem_y = Ney;
     unsigned int nelem_x = Nex;
     unsigned int nelem   = (nelem_x) * (nelem_y) * (nelem_z);
 
-    // number of owned nodes
-    unsigned int nnode_z;
-    if (rank == 0) {
-        nnode_z = nelem_z + 1;
-    } else {
-        nnode_z = nelem_z;
+    double origin[3] = { 0.0 };
+    origin[2]        = emin * hz;
+    // printf("[%d] emin= %d, emax= %d\n", rank,emin,emax);
+    // printf("[%d] origin = {%f,%f,%f}\n", rank, origin[0], origin[1], origin[2]);
+
+    // generate nodes...
+    std::vector<nodeData<double, unsigned int>> localNodes;
+    nodeData<double, unsigned int> node;
+    unsigned int nid = 0;
+    for (unsigned int k = 0; k < (2 * nelem_z + 1); k++)
+    {
+        z = k * (hz / 2) + origin[2];
+        for (unsigned int j = 0; j < (2 * nelem_y + 1); j++)
+        {
+            y = j * (hy / 2) + origin[1];
+            for (unsigned int i = 0; i < (2 * nelem_x + 1); i++)
+            {
+                x = i * (hx / 2) + origin[0];
+                if (!(((i % 2 == 1) && (j % 2 == 1)) || ((i % 2 == 1) && (k % 2 == 1)) ||
+                      ((j % 2 == 1) && (k % 2 == 1))))
+                {
+                    node.set_nodeId(nid);
+                    node.set_x(x);
+                    node.set_y(y);
+                    node.set_z(z);
+                    localNodes.push_back(node);
+                    nid++;
+                }
+            }
+        }
+    }
+    // total number of local nodes
+    unsigned int numLocalNodes = localNodes.size();
+
+    // number of local dofs
+    unsigned int numLocalDofs = numLocalNodes * NDOF_PER_NODE;
+
+    Ex4AppData.localNodes = localNodes.data();
+
+    /* for (unsigned int i = 0; i < localNodes.size(); i++){
+        printf("[rank %d] node %d, {x,y,z}= %4.3f,%4.3f,%4.3f\n",rank,localNodes[i].get_nodeId(),
+    localNodes[i].get_x(), localNodes[i].get_y(), localNodes[i].get_z());
+    } */
+
+    // map from elemental nodes to local nodes
+    unsigned int** localMap;
+    localMap = new unsigned int*[nelem];
+    for (unsigned int eid = 0; eid < nelem; eid++)
+    {
+        localMap[eid] = new unsigned int[MAX_BLOCKS_PER_ELEMENT * NNODE_PER_ELEM];
+    }
+    for (unsigned int k = 0; k < nelem_z; k++)
+    {
+        for (unsigned int j = 0; j < nelem_y; j++)
+        {
+            for (unsigned int i = 0; i < nelem_x; i++)
+            {
+                unsigned int elemID = nelem_x * nelem_y * k + nelem_x * j + i;
+                localMap[elemID][0] =
+                  (2 * i) + j * (3 * Nex + 2) +
+                  k * ((2 * Nex + 1) * (2 * Ney + 1) - (Nex * Ney) + (Nex + 1) * (Ney + 1));
+                localMap[elemID][1] = localMap[elemID][0] + 2;
+                localMap[elemID][3] = localMap[elemID][0] + (3 * Nex + 2);
+                localMap[elemID][2] = localMap[elemID][3] + 2;
+                localMap[elemID][4] = localMap[elemID][0] + ((2 * Nex + 1) * (2 * Ney + 1) -
+                                                             (Nex * Ney) + (Nex + 1) * (Ney + 1));
+                localMap[elemID][5] = localMap[elemID][4] + 2;
+                localMap[elemID][7] = localMap[elemID][4] + (3 * Nex + 2);
+                localMap[elemID][6] = localMap[elemID][7] + 2;
+
+                localMap[elemID][8]  = localMap[elemID][0] + 1;
+                localMap[elemID][10] = localMap[elemID][3] + 1;
+                localMap[elemID][11] = localMap[elemID][0] + (2 * Nex + 1) - i;
+                localMap[elemID][9]  = localMap[elemID][11] + 1;
+
+                localMap[elemID][12] = localMap[elemID][4] + 1;
+                localMap[elemID][14] = localMap[elemID][7] + 1;
+                localMap[elemID][15] = localMap[elemID][4] + (2 * Nex + 1) - i;
+                localMap[elemID][13] = localMap[elemID][15] + 1;
+
+                localMap[elemID][16] = localMap[elemID][0] +
+                                       ((2 * Nex + 1) * (2 * Ney + 1) - (Nex * Ney) - i) -
+                                       j * (2 * Nex + 1);
+                localMap[elemID][17] = localMap[elemID][16] + 1;
+                localMap[elemID][19] = localMap[elemID][16] + (Nex + 1);
+                localMap[elemID][18] = localMap[elemID][19] + 1;
+            }
+        }
     }
 
-    unsigned int nnode_y = nelem_y + 1;
-    unsigned int nnode_x = nelem_x + 1;
-    unsigned int nnode   = (nnode_x) * (nnode_y) * (nnode_z);
+    // set globalMap to AppData so that we can used in function compute element stiffness matrix
+    Ex4AppData.localMap = localMap;
 
-    // map from elemental node to global nodes
+    // map from local dof to global dof
+    unsigned int** localDofMap;
+    localDofMap = new unsigned int*[nelem];
+    for (unsigned int eid = 0; eid < nelem; eid++)
+    {
+        localDofMap[eid] =
+          new unsigned int[MAX_BLOCKS_PER_ELEMENT * NNODE_PER_ELEM * NDOF_PER_NODE];
+    }
+    for (unsigned int eid = 0; eid < nelem; eid++)
+    {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
+        {
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++)
+            {
+                localDofMap[eid][(nid * NDOF_PER_NODE) + did] =
+                  (localMap[eid][nid] * NDOF_PER_NODE) + did;
+            }
+        }
+    }
+
+
+    // compute number of owned nodes
+    unsigned int nnode;
+    // number of nodes on each interface
+    const unsigned int nInterface = (2 * Nex + 1) * (2 * Ney + 1) - (Nex * Ney);
+    // total interface nodes
+    const unsigned int nTotalInterface = (size - 1) * nInterface;
+    // remainder after equally dividing to ranks
+    const unsigned int nRemainInterface = nTotalInterface % size;
+
+    if (rank < nRemainInterface) {
+        nnode = numLocalNodes - ((nTotalInterface / size) + 1);
+    } else {
+        nnode = numLocalNodes - (nTotalInterface / size);
+    }
+    //printf("=====rank %d, nLocalNodes= %d, nnode= %d\n", rank, numLocalNodes, nnode);
+
+    //==== very ad-hoc, this nnode1 is only to serve the calculation of globalMap, which mimic ex4
+    unsigned int nnode_ex4;
+    if (rank == 0) {
+        nnode_ex4 = numLocalNodes;
+    } else {
+        nnode_ex4 = numLocalNodes - ((2 * Nex + 1) * (2 * Ney + 1) - (Nex * Ney));
+    }
+    unsigned int* nnodeCount_ex4 = new unsigned int[size];
+    MPI_Allgather(&nnode_ex4, 1, MPI_UNSIGNED, nnodeCount_ex4, 1, MPI_UNSIGNED, comm);
+    unsigned int* nnodeOffset_ex4 = new unsigned int[size];
+    nnodeOffset_ex4[0] = 0;
+    for (unsigned int i = 1; i < size; i++) {
+        nnodeOffset_ex4[i] = nnodeOffset_ex4[i - 1] + nnodeCount_ex4[i - 1];
+    }
+    //======
+
+
+    // gather number of own nodes across ranks
+    unsigned int* nnodeCount = new unsigned int[size];
+    MPI_Allgather(&nnode, 1, MPI_UNSIGNED, nnodeCount, 1, MPI_UNSIGNED, comm);
+
+    // offset of nnodeCount
+    unsigned int* nnodeOffset = new unsigned int[size];
+    nnodeOffset[0]            = 0;
+    for (unsigned int i = 1; i < size; i++)
+    {
+        nnodeOffset[i] = nnodeOffset[i - 1] + nnodeCount[i - 1];
+    }
+    // total number of nodes for all ranks
+    unsigned long int nnode_total, ndofs_total;
+    nnode_total = nnodeOffset[size - 1] + nnodeCount[size - 1];
+    ndofs_total = nnode_total * NDOF_PER_NODE;
+    if (rank == 0)
+        printf("Total nodes = %d; total dofs = %d\n", nnode_total, ndofs_total);
+
+
+    // build global map from local map
     unsigned long gNodeId;
     unsigned long int** globalMap;
     globalMap = new unsigned long int*[nelem];
     for (unsigned int eid = 0; eid < nelem; eid++) {
         globalMap[eid] = new unsigned long int[MAX_BLOCKS_PER_ELEMENT * NNODE_PER_ELEM];
     }
-    for (unsigned k = 0; k < nelem_z; k++) {
-        for (unsigned j = 0; j < nelem_y; j++) {
-            for (unsigned i = 0; i < nelem_x; i++) {
-                unsigned int elemID = nelem_x * nelem_y * k + nelem_x * j + i;
-                globalMap[elemID][0] =
-                  (emin * (Nex + 1) * (Ney + 1) + i) + j * (Nex + 1) + k * (Nex + 1) * (Ney + 1);
-                globalMap[elemID][1] = globalMap[elemID][0] + 1;
-                globalMap[elemID][3] = globalMap[elemID][0] + (Nex + 1);
-                globalMap[elemID][2] = globalMap[elemID][3] + 1;
-                globalMap[elemID][4] = globalMap[elemID][0] + (Nex + 1) * (Ney + 1);
-                globalMap[elemID][5] = globalMap[elemID][4] + 1;
-                globalMap[elemID][7] = globalMap[elemID][4] + (Nex + 1);
-                globalMap[elemID][6] = globalMap[elemID][7] + 1;
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
+            if (rank == 0) {
+                globalMap[eid][nid] = localMap[eid][nid];
+            } else {
+                globalMap[eid][nid] = localMap[eid][nid] + nnodeOffset_ex4[rank] -
+                                      ((2 * Nex + 1) * (2 * Ney + 1) - (Nex * Ney));
             }
         }
     }
+
 
     // map from elemental dof to global dof
     unsigned long int** globalDofMap;
@@ -347,116 +506,17 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // set globalMap to AppData so that we can used in function compute element stiffness matrix
-    Ex3AppData.ElementToGIDNode = globalMap;
-
-    // build localMap from globalMap (this is just to conform with aMat interface used for bsamxx)
-    unsigned int numPreGhostNodes, numPostGhostNodes, numLocalNodes;
-    std::vector<unsigned int> preGhostGIds, postGhostGIds;
-
-    // counts of owned nodes: nnodeCount[0] = nnode0, nnodeCount[1] = nnode1, ...
-    unsigned int* nnodeCount = new unsigned int[size];
-    MPI_Allgather(&nnode, 1, MPI_UNSIGNED, nnodeCount, 1, MPI_UNSIGNED, comm);
-
-    // offset of nnodeCount
-    unsigned int* nnodeOffset = new unsigned int[size];
-    nnodeOffset[0] = 0;
-    for (unsigned int i = 1; i < size; i++) {
-        nnodeOffset[i] = nnodeOffset[i - 1] + nnodeCount[i - 1];
-    }
-    // total number of nodes for all ranks
-    unsigned long int nnode_total, ndofs_total;
-    nnode_total = nnodeOffset[size - 1] + nnodeCount[size - 1];
-    ndofs_total = nnode_total * NDOF_PER_NODE;
-    if (rank == 0)
-        printf("Total dofs = %d\n", ndofs_total);
-
-
-    // determine ghost nodes based on:
-    // rank 0 owns [0,...,nnode0-1], rank 1 owns [nnode0,..., nnode0 + nnode1 - 1]...
-    preGhostGIds.clear();
-    postGhostGIds.clear();
-    for (unsigned int eid = 0; eid < nelem; eid++) {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-            gNodeId = globalMap[eid][nid];
-            if (gNodeId < nnodeOffset[rank]) {
-                preGhostGIds.push_back(gNodeId);
-            } else if (gNodeId >= nnodeOffset[rank] + nnode) {
-                postGhostGIds.push_back(gNodeId);
-            }
-        }
-    }
-    // sort (in ascending order) to prepare for deleting repeated nodes in preGhostGIds and postGhostGIds
-    std::sort(preGhostGIds.begin(), preGhostGIds.end());
-    std::sort(postGhostGIds.begin(), postGhostGIds.end());
-
-    // remove consecutive duplicates and erase all after .end()
-    preGhostGIds.erase(std::unique(preGhostGIds.begin(), preGhostGIds.end()), preGhostGIds.end());
-    postGhostGIds.erase(std::unique(postGhostGIds.begin(), postGhostGIds.end()),
-                        postGhostGIds.end());
-
-    // number of pre and post ghost nodes of my rank
-    numPreGhostNodes  = preGhostGIds.size();
-    numPostGhostNodes = postGhostGIds.size();
-
-    // number of local nodes
-    numLocalNodes = numPreGhostNodes + nnode + numPostGhostNodes;
-
-    // number of local dofs
-    unsigned int numLocalDofs = numLocalNodes * NDOF_PER_NODE;
-
-    // map from elemental nodes to local nodes
-    unsigned int** localMap;
-    localMap = new unsigned int*[nelem];
-    for (unsigned int eid = 0; eid < nelem; eid++) {
-        localMap[eid] = new unsigned int[MAX_BLOCKS_PER_ELEMENT * NNODE_PER_ELEM];
-    }
-    for (unsigned int eid = 0; eid < nelem; eid++) {
-        for (unsigned int i = 0; i < NNODE_PER_ELEM; i++) {
-            gNodeId = globalMap[eid][i];
-            if ((gNodeId >= nnodeOffset[rank]) && (gNodeId < (nnodeOffset[rank] + nnode))) {
-                // nid is owned by me
-                localMap[eid][i] = gNodeId - nnodeOffset[rank] + numPreGhostNodes;
-            } else if (gNodeId < nnodeOffset[rank]) {
-                // nid is owned by someone before me
-                const unsigned int lookUp =
-                  std::lower_bound(preGhostGIds.begin(), preGhostGIds.end(), gNodeId) -
-                  preGhostGIds.begin();
-                localMap[eid][i] = lookUp;
-            } else if (gNodeId >= (nnodeOffset[rank] + nnode)) {
-                // nid is owned by someone after me
-                const unsigned int lookUp =
-                  std::lower_bound(postGhostGIds.begin(), postGhostGIds.end(), gNodeId) -
-                  postGhostGIds.begin();
-                localMap[eid][i] = numPreGhostNodes + nnode + lookUp;
-            }
-        }
-    }
-
-    // map from local dof to global dof
-    unsigned int** localDofMap;
-    localDofMap = new unsigned int*[nelem];
-    for (unsigned int eid = 0; eid < nelem; eid++) {
-        localDofMap[eid] =
-          new unsigned int[MAX_BLOCKS_PER_ELEMENT * NNODE_PER_ELEM * NDOF_PER_NODE];
-    }
-    for (unsigned int eid = 0; eid < nelem; eid++) {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-            for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
-                localDofMap[eid][(nid * NDOF_PER_NODE) + did] =
-                  (localMap[eid][nid] * NDOF_PER_NODE) + did;
-            }
-        }
-    }
-
     // local node to global node map
     unsigned long* local2GlobalMap = new unsigned long[numLocalNodes];
     for (unsigned int eid = 0; eid < nelem; eid++) {
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-            gNodeId = globalMap[eid][nid];
+            gNodeId                             = globalMap[eid][nid];
             local2GlobalMap[localMap[eid][nid]] = gNodeId;
         }
     }
+    /* for (unsigned int nid = 0; nid < numLocalNodes; nid++){
+        printf("local2Global[%d]= %d\n",nid,local2GlobalMap[nid]);
+    } */
 
     // local dof to global dof map
     unsigned long* local2GlobalDofMap = new unsigned long[numLocalNodes * NDOF_PER_NODE];
@@ -481,29 +541,31 @@ int main(int argc, char* argv[]) {
 
     // number of dofs per element
     unsigned int* ndofs_per_element = new unsigned int[nelem];
-    for (unsigned eid = 0; eid < nelem; eid++) {
+    for (unsigned eid = 0; eid < nelem; eid++)
+    {
         ndofs_per_element[eid] = NNODE_PER_ELEM * NDOF_PER_NODE;
     }
 
     // elemental boundary dofs and prescribed value
     unsigned int** bound_dofs = new unsigned int*[nelem];
     double** bound_values     = new double*[nelem];
-    for (unsigned int eid = 0; eid < nelem; eid++) {
+    for (unsigned int eid = 0; eid < nelem; eid++)
+    {
         bound_dofs[eid]   = new unsigned int[ndofs_per_element[eid]];
         bound_values[eid] = new double[ndofs_per_element[eid]];
     }
 
     // construct elemental constrained DoFs and prescribed values
-    for (unsigned int eid = 0; eid < nelem; eid++) {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-
-            // global node id of elemental node n
-            gNodeId = globalMap[eid][nid];
-
-            // compute nodal coordinate
-            x = (double)(gNodeId % (Nex + 1)) * hx;
-            y = (double)((gNodeId % ((Nex + 1) * (Ney + 1))) / (Nex + 1)) * hy;
-            z = (double)(gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
+    unsigned int lNodeId;
+    for (unsigned int eid = 0; eid < nelem; eid++)
+    {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
+        {
+            lNodeId = localMap[eid][nid];
+            // get nodal coordinates
+            x = localNodes[lNodeId].get_x();
+            y = localNodes[lNodeId].get_y();
+            z = localNodes[lNodeId].get_z();
 
             // translate origin to center of bottom face
             x = x - Lx / 2;
@@ -573,83 +635,154 @@ int main(int argc, char* argv[]) {
         constrainedDofs_ptr[i]  = list_of_constraints[i].get_dofId();
         prescribedValues_ptr[i] = list_of_constraints[i].get_preVal();
     }
+    /* for (unsigned int i = 0; i < list_of_constraints.size(); i++){
+        printf("[rank %d], constraint[%d] = %d, value = %f\n",rank,i,
+    constrainedDofs_ptr[i],prescribedValues_ptr[i]);
+    } */
+
 
     // elemental traction vector
-    Matrix<double, Eigen::Dynamic, 1>* elem_trac;
-    elem_trac = new Matrix<double, Eigen::Dynamic, 1>[nelem];
+    Eigen::Matrix<double, Eigen::Dynamic, 1>* elem_trac;
+    elem_trac = new Eigen::Matrix<double, Eigen::Dynamic, 1>[nelem];
 
     // nodal traction of tractioned face
-    double nodalTraction[12] = { 0.0 };
-    // nodal coordinates of tractioned face
-    double xeSt[12];
-    // force vector due to traction
-    Matrix<double, 12, 1> feT;
+    double nodalTraction[24] = { 0.0 };
 
-    
-    for (unsigned int eid = 0; eid < nelem; eid++) {
+    // nodal coordinates of tractioned face
+    double xeSt[24];
+
+    // force vector due to traction
+    Eigen::Matrix<double, 24, 1> feT;
+
+
+    for (unsigned int eid = 0; eid < nelem; eid++)
+    {
         bool traction = false;
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-            gNodeId = globalMap[eid][nid];
-            z       = (double)(gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
-            if (fabs(z - Lz) < zero_number) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
+        {
+            lNodeId = localMap[eid][nid];
+            z       = localNodes[lNodeId].get_z();
+            // top face is subjected to traction t3 = sigma_33 = -rho * g
+            if (fabs(z - Lz) < zero_number)
+            {
                 // element eid has one face is the top surface with applied traction
                 traction = true;
                 break;
             }
         }
-        if (traction) {
+        if (traction)
+        {
             // get coordinates of all nodes
-            for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-                gNodeId = globalMap[eid][nid];
+            for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
+            {
+                lNodeId = localMap[eid][nid];
                 // get node coordinates
-                x = (double)(gNodeId % (Nex + 1)) * hx;
-                y = (double)((gNodeId % ((Nex + 1) * (Ney + 1))) / (Nex + 1)) * hy;
-                z = (double)(gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
+                x = localNodes[lNodeId].get_x();
+                y = localNodes[lNodeId].get_y();
+                z = localNodes[lNodeId].get_z();
 
+                // tranlation origin
                 x = x - Lx / 2;
                 y = y - Ly / 2;
 
                 xe[nid * NDOF_PER_NODE]       = x;
                 xe[(nid * NDOF_PER_NODE) + 1] = y;
                 xe[(nid * NDOF_PER_NODE) + 2] = z;
-
-                //printf("eid=%d nid=%d gid=%d ------> x = %f y = %f z = %f\n",eid,nid,gNodeId,xe[nid * NDOF_PER_NODE], xe[nid * NDOF_PER_NODE+1], xe[nid * NDOF_PER_NODE+2]);
             }
 
             // get coordinates of nodes belonging to the face where traction is applied
-            // traction applied on face 4-5-6-7 ==> nodes [4,5,6,7] corresponds to nodes [0,1,2,3]
-            // of 2D element
-            for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
-                xeSt[did]                     = xe[4 * NDOF_PER_NODE + did];
-                xeSt[NDOF_PER_NODE + did]     = xe[5 * NDOF_PER_NODE + did];
+            // traction applied on face 4-5-6-7-12-13-14-15 ==> nodes [4,5,6,7] corresponds to nodes
+            // [0,1,2,3,4,5,6,7] of 2D element
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++)
+            {
+                // node 0 of 2D element <-- node 4 of 3D element
+                xeSt[did] = xe[4 * NDOF_PER_NODE + did];
+
+                // node 1 of 2D element <-- node 5 of 3D element
+                xeSt[NDOF_PER_NODE + did] = xe[5 * NDOF_PER_NODE + did];
+
+                // node 2 of 2D element <-- node 6 of 3D element
                 xeSt[2 * NDOF_PER_NODE + did] = xe[6 * NDOF_PER_NODE + did];
+
+                // node 3 of 2D element <-- node 7 of 3D element
                 xeSt[3 * NDOF_PER_NODE + did] = xe[7 * NDOF_PER_NODE + did];
+
+                // node 4 of 2D element <-- node 12 of 3D element
+                xeSt[4 * NDOF_PER_NODE + did] = xe[12 * NDOF_PER_NODE + did];
+
+                // node 5 of 2D element <-- node 13 of 3D element
+                xeSt[5 * NDOF_PER_NODE + did] = xe[13 * NDOF_PER_NODE + did];
+
+                // node 6 of 2D element <-- node 14 of 3D element
+                xeSt[6 * NDOF_PER_NODE + did] = xe[14 * NDOF_PER_NODE + did];
+
+                // node 7 of 2D element <-- node 15 of 3D element
+                xeSt[7 * NDOF_PER_NODE + did] = xe[15 * NDOF_PER_NODE + did];
             }
 
             // get nodal traction of face where traction is applied (uniform traction t3 = rho*g*Lz
             // applied on top surface)
-            for (unsigned int nid = 0; nid < 4; nid++) {
+            for (unsigned int nid = 0; nid < 8; nid++)
+            {
                 nodalTraction[nid * NDOF_PER_NODE + 2] = rho * g * Lz;
             }
+            /* for (unsigned int nid = 0; nid < 8; nid++){
+                printf("[e %d][n %d] nodalTraction = %f, %f, %f\n", eid, nid,
+            nodalTraction[nid*NDOF_PER_NODE],
+                nodalTraction[nid*NDOF_PER_NODE+1],nodalTraction[nid*NDOF_PER_NODE+2]);
+            } */
 
             // compute force vector due traction applied on one face of element
-            feT_hex8_iso(feT, xeSt, nodalTraction, intData.Pts_n_Wts, NGT);
+            feT_hex20_iso(feT, xeSt, nodalTraction, intData.Pts_n_Wts, NGT);
+            /* for (unsigned int nid = 0; nid < 8; nid++){
+                printf("[e %d][n %d] feT = %f, %f, %f\n", eid, nid, feT(nid*NDOF_PER_NODE),
+                feT(nid*NDOF_PER_NODE + 1),feT(nid*NDOF_PER_NODE + 2));
+            } */
 
             // put traction force vector into element force vector
             elem_trac[eid].resize(NNODE_PER_ELEM * NDOF_PER_NODE, 1);
-            for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-                for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
+            for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
+            {
+                for (unsigned int did = 0; did < NDOF_PER_NODE; did++)
+                {
                     // nodes [4,5,6,7] of 3D element are nodes [0,1,2,3] of 2D element where
                     // traction applied
-                    if (nid == 4) {
+                    if (nid == 4)
+                    {
                         elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[did];
-                    } else if (nid == 5) {
+                    }
+                    else if (nid == 5)
+                    {
                         elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[NDOF_PER_NODE + did];
-                    } else if (nid == 6) {
+                    }
+                    else if (nid == 6)
+                    {
                         elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[2 * NDOF_PER_NODE + did];
-                    } else if (nid == 7) {
+                    }
+                    else if (nid == 7)
+                    {
                         elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[3 * NDOF_PER_NODE + did];
-                    } else {
+                        // nodes [12,13,14,15] of 3D element are nodes [4,5,6,7] of 2D element where
+                        // traction applied
+                    }
+                    else if (nid == 12)
+                    {
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[4 * NDOF_PER_NODE + did];
+                    }
+                    else if (nid == 13)
+                    {
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[5 * NDOF_PER_NODE + did];
+                    }
+                    else if (nid == 14)
+                    {
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[6 * NDOF_PER_NODE + did];
+                    }
+                    else if (nid == 15)
+                    {
+                        elem_trac[eid]((nid * NDOF_PER_NODE) + did) = feT[7 * NDOF_PER_NODE + did];
+                    }
+                    else
+                    {
                         elem_trac[eid]((nid * NDOF_PER_NODE) + did) = 0.0;
                     }
                 }
@@ -668,6 +801,7 @@ int main(int argc, char* argv[]) {
 
     // declare Maps object  =================================
     par::Maps<double, unsigned long, unsigned int> meshMaps(comm);
+
     meshMaps.set_map(nelem,
                      localDofMap,
                      ndofs_per_element,
@@ -676,13 +810,15 @@ int main(int argc, char* argv[]) {
                      start_global_dof,
                      end_global_dof,
                      ndofs_total);
-                     
+
     meshMaps.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
 
     /// declare aMat object =================================
-    typedef par::aMat<par::aMatBased<double, unsigned long, unsigned int>, double, unsigned long, unsigned int>
+    typedef par::
+      aMat<par::aMatBased<double, unsigned long, unsigned int>, double, unsigned long, unsigned int>
         aMatBased; // aMat type taking aMatBased as derived class
-    typedef par::aMat<par::aMatFree<double, unsigned long, unsigned int>, double, unsigned long, unsigned int>
+    typedef par::
+      aMat<par::aMatFree<double, unsigned long, unsigned int>, double, unsigned long, unsigned int>
         aMatFree; // aMat type taking aMatBased as derived class
 
     aMatBased* stMatBased; // pointer of aMat taking aMatBased as derived
@@ -694,20 +830,13 @@ int main(int argc, char* argv[]) {
     } else {
         // assign stMatFree to the derived class aMatFree
         stMatFree = new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
-        // set matrix-free type: 1 = hybrid-OpenMP, 2 = matrix-free, 3 = hybrid-GPU_OVER_CPU-matvec
         stMatFree->set_matfree_type((par::MATFREE_TYPE)matType);
         if ((matType == 3) || (matType == 4) || (matType == 5)){
-            
             #ifdef USE_GPU
                 stMatFree->set_num_streams(nStreams);
             #endif
-
         }
     }
-
-    // compute element stiffness matrix and force vector, then assemble
-    // nodal value of body force
-    double beN[24] = { 0.0 };
 
     // set function to compute element matrix if using matrix-free
     if (matType == 2){
@@ -721,13 +850,17 @@ int main(int argc, char* argv[]) {
     par::create_vec(meshMaps, sol_exact);
     par::create_vec(meshMaps, error);
 
+    // compute element stiffness matrix and force vector, then assemble
+    // nodal value of body force
+    double beN[60] = { 0.0 };
+
     for (unsigned int eid = 0; eid < nelem; eid++) {
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-            gNodeId = globalMap[eid][nid];
+            lNodeId = localMap[eid][nid];
             // get node coordinates
-            x = (double)(gNodeId % (Nex + 1)) * hx;
-            y = (double)((gNodeId % ((Nex + 1) * (Ney + 1))) / (Nex + 1)) * hy;
-            z = (double)(gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
+            x = localNodes[lNodeId].get_x();
+            y = localNodes[lNodeId].get_y();
+            z = localNodes[lNodeId].get_z();
 
             // translate origin
             x = x - Lx / 2;
@@ -752,7 +885,7 @@ int main(int argc, char* argv[]) {
             aMat_elem_compute_time.start();
         }
         if (useEigen) {
-            ke_hex8_iso(*kee[0], xe, E, nu, intData.Pts_n_Wts, NGT);
+            ke_hex20_iso(*kee[0], xe, E, nu, intData.Pts_n_Wts, NGT);
         } else {
             printf("Error: not yet implement element stiffness matrix which is not Eigen matrix "
                    "format\n");
@@ -765,11 +898,10 @@ int main(int argc, char* argv[]) {
         }
 
         // assemble element stiffness matrix to global K
-        if (matType == 0) {
+        if (matType == 0)
             stMatBased->set_element_matrix(eid, *kee[0], 0, 0, 1);
-        } else {
+        else
             stMatFree->set_element_matrix(eid, *kee[0], 0, 0, 1);
-        }
 
         if (matType == 0){
             petsc_setup_time.stop();
@@ -778,9 +910,10 @@ int main(int argc, char* argv[]) {
         }
 
         // compute element force vector due to body force
-        fe_hex8_iso(fee[0], xe, beN, intData.Pts_n_Wts, NGT);
+        fe_hex20_iso(*fee[0], xe, beN, intData.Pts_n_Wts, NGT);
 
-        par::set_element_vec(meshMaps, rhs, eid, fee[0], 0u, ADD_VALUES);
+        // assemble element load vector due to body force
+        par::set_element_vec(meshMaps, rhs, eid, *fee[0], 0u, ADD_VALUES);
 
         // assemble element load vector due to traction
         if (elem_trac[eid].size() != 0) {
@@ -788,17 +921,22 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    delete [] xe;
+    delete[] xe;
 
+    // Pestc begins and completes assembling the global stiffness matrix
     if (matType == 0) {
         petsc_setup_time.start();
-        stMatBased->finalize(); // Pestc begins and completes assembling the global stiffness matrix
+        stMatBased->finalize();
         petsc_setup_time.stop();
     } else {
         aMat_setup_time.start();
         stMatFree->finalize(); // compute trace of matrix when using penalty method
         aMat_setup_time.stop();
     }
+
+    // char fname[256];
+    // sprintf(fname,"matrix_%d.dat",matType);
+    // stMat->dump_mat(fname);
 
     // Pestc begins and completes assembling the global load vector
     // These are needed because we used ADD_VALUES for rhs when assembling
@@ -812,32 +950,25 @@ int main(int argc, char* argv[]) {
         stMatBased->apply_bc(rhs);
     else
         stMatFree->apply_bc(rhs);
-
     VecAssemblyBegin(rhs);
     VecAssemblyEnd(rhs);
 
-    // char fname[256];
-    // apply dirichlet BCs to the matrix
+    // assemble matrix after matrix is modified by bc
     if (matType == 0) {
-        // stMat.apply_bc_mat();
         petsc_setup_time.start();
         stMatBased->finalize();
         petsc_setup_time.stop();
-        // sprintf(fname,"matrix_%d.dat",size);
-        // stMat.dump_mat(fname);
     }
 
-    // sprintf(fname,"rhsVec_%d.dat",size);
-    // stMat.dump_vec(rhs,fname);
-
     // ====================== profiling matvec ====================================
-    const unsigned int numDofsTotal = meshMaps.get_NumDofsTotal(); // total dofs including ghost
-    const unsigned int numDofs = meshMaps.get_NumDofs(); // total owned dofs
+    // generate random vector of length = number of owned dofs
+    const unsigned int numDofsTotal = meshMaps.get_NumDofsTotal();
+    const unsigned int numDofs = meshMaps.get_NumDofs();
 
     double* X = (double*) malloc(sizeof(double) * (numDofsTotal));
     for (unsigned int i = 0; i < (numDofsTotal); i++){
         //X[i] = (double)std::rand()/(double)(RAND_MAX/5.0);
-        X[i] = 1.5;
+        X[i] = 1.0;
     }
     // result vector Y = [K] * X
     double* Y = (double*) malloc(sizeof(double) * (numDofsTotal));
@@ -848,7 +979,7 @@ int main(int argc, char* argv[]) {
 
     if( matType == 0) {
         Vec petsc_X, petsc_Y;
-        par::create_vec(meshMaps, petsc_X, 1.5);
+        par::create_vec(meshMaps, petsc_X, 1.0);
         par::create_vec(meshMaps, petsc_Y);
 
         for (unsigned int i = 0; i < num_matvecs; i++){
@@ -873,34 +1004,34 @@ int main(int argc, char* argv[]) {
             Y = temp;
         }
     }
-
     free (Y);
     free (X);
+    // ====================== finish profiling matvec ==============================
 
-    // ===================== solve ================================================
+
+    // ====================== solve ================================================
     /* if (matType == 0) {
         petsc_matvec_time.start();
     } else {
         aMat_matvec_time.start();
     }
 
-    if (matType == 0) {
+    if (matType == 0)
         par::solve(*stMatBased, (const Vec)rhs, out);
-    } else {
+    else
         par::solve(*stMatFree, (const Vec)rhs, out);
-    }
-
+    
     if (matType == 0) {
         petsc_matvec_time.stop();
     } else {
         aMat_matvec_time.stop();
     } */
-    // ===================== finish solve =========================================
+    // ======================finish solve ===========================================
 
     // sprintf(fname,"outVec_%d.dat",size);
     // stMat.dump_vec(out,fname);
 
-    // ============================ comparing with exact solution =================
+    // ============================= comparing with exact solution ==========================
     /* PetscScalar norm, alpha = -1.0;
     // compute norm of solution
     VecNorm(out, NORM_2, &norm);
@@ -909,14 +1040,15 @@ int main(int argc, char* argv[]) {
     }
 
     // exact solution
-    Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1> e_exact;
+    Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1> e_exact;
     double disp[3];
     for (unsigned int eid = 0; eid < nelem; eid++) {
         for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
-            gNodeId = globalMap[eid][nid];
-            x       = (double)(gNodeId % (Nex + 1)) * hx;
-            y       = (double)((gNodeId % ((Nex + 1) * (Ney + 1))) / (Nex + 1)) * hy;
-            z       = (double)(gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
+            lNodeId = localMap[eid][nid];
+            // get node coordinates
+            x = localNodes[lNodeId].get_x();
+            y = localNodes[lNodeId].get_y();
+            z = localNodes[lNodeId].get_z();
 
             // transformed coordinates
             x = x - Lx / 2;
@@ -931,6 +1063,7 @@ int main(int argc, char* argv[]) {
                 e_exact[(nid * NDOF_PER_NODE) + did] = disp[did];
             }
         }
+
         par::set_element_vec(meshMaps, sol_exact, eid, e_exact, 0u, INSERT_VALUES);
     }
 
@@ -949,7 +1082,7 @@ int main(int argc, char* argv[]) {
     // compute the error vector
     VecCopy(sol_exact, error);
 
-    // subtract error = sol_exact - out
+    // subtract error = error(=sol_exact) - out
     VecAXPY(error, alpha, out);
 
     // compute norm of error
@@ -958,7 +1091,8 @@ int main(int argc, char* argv[]) {
     if (rank == 0) {
         printf("Inf norm of error = %20.10f\n", norm);
     } */
-    // ============================ finish comparing with exact solution ============
+    // ============================= finish comparing with exact solution =================
+
 
     // computing time acrossing ranks and display
     if (matType == 0) {
@@ -1015,6 +1149,9 @@ int main(int argc, char* argv[]) {
         }
     } else if ((matType == 3) || (matType == 4) || (matType == 5)) {
         if (size > 1) {
+            //printf("(2) rank = %d, aMatGpu setup time = %Lf\n", rank, aMat_setup_time.seconds);
+            //printf("(3) rank = %d, aMatGpu matvec time = %Lf\n", rank, aMat_matvec_time.seconds);
+            
             long double aMat_elem_compute_maxTime;
             long double aMat_setup_maxTime;
             long double aMat_matvec_maxTime;
@@ -1040,35 +1177,38 @@ int main(int argc, char* argv[]) {
     // export ParaView
     /* std::ofstream myfile;
     if (!rank){
-        myfile.open("ex3.vtk");
+        myfile.open("ex4.vtk");
         myfile << "# vtk DataFile Version 2.0 " << std::endl;
         myfile << "Stress field" << std::endl;
         myfile << "ASCII" << std::endl;
         myfile << "DATASET UNSTRUCTURED_GRID" << std::endl;
-        myfile << "POINTS " << nnode << " float" << std::endl;
+        myfile << "POINTS " << numLocalNodes << " float" << std::endl;
         for (unsigned int nid = 0; nid < numLocalNodes; nid++){
-            gNodeId = local2GlobalMap[nid];
-            x = (double)(gNodeId % (Nex + 1)) * hx;
-            y = (double)((gNodeId % ((Nex + 1)*(Ney + 1))) / (Nex + 1)) * hy;
-            z = (double) (gNodeId / ((Nex + 1) * (Ney + 1))) * hz;
-
-            // translate origin
+            x = localNodes[nid].get_x();
+            y = localNodes[nid].get_y();
+            z = localNodes[nid].get_z();
+            // transformed coordinates
             x = x - Lx/2;
             y = y - Ly/2;
-
             myfile << x << "  " << y << "  " << z << std::endl;
         }
-        unsigned int size_cell_list = nelem * 9;
+        unsigned int size_cell_list = nelem * 21;
         myfile << "CELLS " << nelem << " " << size_cell_list << std::endl;
         for (unsigned int eid = 0; eid < nelem; eid++){
-            myfile << "8 " << globalMap[eid][0] << " " << globalMap[eid][1] << " "
-             << globalMap[eid][2] << " " << globalMap[eid][3] << " "
-              << globalMap[eid][4] << " " << globalMap[eid][5] << " "
-               << globalMap[eid][6] << " " << globalMap[eid][7] << std::endl;
+            myfile << "20 " << localMap[eid][0] << " " << localMap[eid][1] << " "
+             << localMap[eid][2] << " " << localMap[eid][3] << " "
+              << localMap[eid][4] << " " << localMap[eid][5] << " "
+               << localMap[eid][6] << " " << localMap[eid][7] << " "
+               << localMap[eid][8] << " " << localMap[eid][9] << " "
+               << localMap[eid][10] << " " << localMap[eid][11] << " "
+               << localMap[eid][12] << " " << localMap[eid][13] << " "
+               << localMap[eid][14] << " " << localMap[eid][15] << " "
+               << localMap[eid][16] << " " << localMap[eid][17] << " "
+               << localMap[eid][18] << " " << localMap[eid][19] << " " << std::endl;
         }
         myfile << "CELL_TYPES " << nelem << std::endl;
         for (unsigned int eid = 0; eid < nelem; eid++){
-            myfile << "12" << std::endl;
+            myfile << "25" << std::endl;
         }
         myfile << "POINT_DATA " << nnode << std::endl;
         myfile << "VECTORS " << "displacement " << "float " << std::endl;
@@ -1083,7 +1223,8 @@ int main(int argc, char* argv[]) {
             myfile << values[0] << " " << values[1] << " " << values[2] << std::endl;
         }
         myfile.close();
-    } */
+    }*/
+    
 
     for (unsigned int eid = 0; eid < nelem; eid++) {
         delete[] globalMap[eid];
@@ -1098,6 +1239,9 @@ int main(int argc, char* argv[]) {
     delete[] localMap;
     delete[] nnodeCount;
     delete[] nnodeOffset;
+
+    delete [] nnodeOffset_ex4;
+    delete [] nnodeCount_ex4;
 
     for (unsigned int eid = 0; eid < nelem; eid++) {
         delete[] localDofMap[eid];
@@ -1119,23 +1263,26 @@ int main(int argc, char* argv[]) {
     delete[] prescribedValues_ptr;
 
     delete[] elem_trac;
-
     for (unsigned int i = 0; i < MAX_BLOCKS_PER_ELEMENT; i++) {
         if (kee[i] != nullptr)
             delete kee[i];
+        if (fee[i] != nullptr)
+            delete fee[i];
     }
     delete[] kee;
+    delete[] fee;
 
     if (matType == 0) {
         delete stMatBased;
     } else {
         delete stMatFree;
     }
-
+    
     VecDestroy(&out);
     VecDestroy(&sol_exact);
     VecDestroy(&rhs);
     VecDestroy(&error);
+
     PetscFinalize();
     return 0;
 }

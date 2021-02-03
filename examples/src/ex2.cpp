@@ -66,7 +66,7 @@ void usage()
     std::cout << "\n";
     std::cout << "     Nex: Number of elements in X\n";
     std::cout << "     Ney: Number of elements in y\n";
-    std::cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
+    std::cout << "     method (0, 1, 2, 3, 4, 5) \n";
     std::cout << "     use identity-matrix: 0    use penalty method: 1 \n";
     exit(0);
 }
@@ -75,12 +75,12 @@ void usage()
 
 int main(int argc, char* argv[])
 {
-    // User provides: Nex = number of elements in x direction
-    //                Ney = number of elements in y direction
-    //                flag = 1 --> matrix-free method; 0 --> matrix-based method
-    //                bcMethod = 0 --> identity matrix method; 1 --> penalty method
-    if (argc < 5)
-    {
+    // User provides: 1) Nex - number of elements (global) in x direction
+    //                2) Ney - number of elements (global) in y direction
+    //                3) method (0 = matrix_based; 1 = quasi-free; 2 = free; 3 = gpu independent; 4 = gpu all)
+    //                4)method for BCs (0 = identity matrix method; 1 = penalty method)
+    //                5) number of streams (applied for method = 3 and 4)
+    if (argc < 6){
         usage();
     }
 
@@ -88,6 +88,12 @@ int main(int argc, char* argv[])
     const unsigned int Ney      = atoi(argv[2]);
     const unsigned int matType  = atoi(argv[3]);
     const unsigned int bcMethod = atoi(argv[4]); // method of applying BC
+    const unsigned int nStreams = atoi(argv[5]); // number of streams used for method 3, 4, 5
+
+    if (matType == 2){
+        printf("Method of free is not implemented for this example!\n");
+        exit(0);
+    }
 
     const unsigned int NDOF_PER_NODE  = 2; // number of dofs per node
     const unsigned int NDIM           = 2; // number of dimension
@@ -126,60 +132,63 @@ int main(int argc, char* argv[])
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNex : " << Nex << " Ney: " << Ney << "\n";
         std::cout << "\t\tLx : " << Lx << " Ly: " << Ly << "\n";
-        std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
+        std::cout << "\t\tMethod = " << matType << "\n";
         std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
 
-#ifdef VECTORIZED_AVX512
+    #ifdef VECTORIZED_AVX512
     if (!rank)
     {
         std::cout << "\t\tVectorization using AVX_512\n";
     }
-#elif VECTORIZED_AVX256
+    #elif VECTORIZED_AVX256
     if (!rank)
     {
         std::cout << "\t\tVectorization using AVX_256\n";
     }
-#elif VECTORIZED_OPENMP
+    #elif VECTORIZED_OPENMP
     if (!rank)
     {
         std::cout << "\t\tVectorization using OpenMP\n";
     }
-#elif VECTORIZED_OPENMP_ALIGNED
+    #elif VECTORIZED_OPENMP_ALIGNED
     if (!rank)
     {
         std::cout << "\t\tVectorization using OpenMP with aligned memory\n";
     }
-#else
+    #else
     if (!rank)
     {
         std::cout << "\t\tNo vectorization\n";
     }
-#endif
+    #endif
 
-#ifdef HYBRID_PARALLEL
+    #ifdef HYBRID_PARALLEL
     if (!rank)
     {
         std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
         std::cout << "\t\tMax number of threads: " << omp_get_max_threads() << "\n";
         std::cout << "\t\tNumber of MPI processes: " << size << "\n";
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            std::cout << "\t\tNumber of streams: " << nStreams << "\n";
+        }
     }
-#else
+    #else
     if (!rank)
     {
         std::cout << "\t\tOnly MPI parallel\n";
         std::cout << "\t\tNumber of MPI processes: " << size << "\n";
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            std::cout << "\t\tNumber of streams: " << nStreams << "\n";
+        }
     }
-#endif
+    #endif
 
     // partition in y direction...
     int rc;
-    if (size > Ney)
-    {
-        if (!rank)
-        {
-            std::cout << "Number of ranks must be <= Ney, program stops..."
-                      << "\n";
+    if (size > Ney) {
+        if (!rank) {
+            std::cout << "Number of ranks must be <= Ney, program stops..." << "\n";
             MPI_Abort(comm, rc);
             exit(0);
         }
@@ -591,11 +600,6 @@ int main(int argc, char* argv[])
                      end_global_dof,
                      ndof_total);
 
-    if (matType == 1)
-    {
-        meshMaps.buildScatterMap();
-    }
-
     meshMaps.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
 
     /// declare aMat object =================================
@@ -609,17 +613,18 @@ int main(int argc, char* argv[])
     aMatBased* stMatBased; // pointer of aMat taking aMatBased as derived
     aMatFree* stMatFree;   // pointer of aMat taking aMatFree as derived
 
-    if (matType == 0)
-    {
+    if (matType == 0) {
         // assign stMatBased to the derived class aMatBased
-        stMatBased =
-          new par::aMatBased<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
-    }
-    else
-    {
+        stMatBased = new par::aMatBased<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+    } else {
         // assign stMatFree to the derived class aMatFree
-        stMatFree =
-          new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+        stMatFree = new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+        stMatFree->set_matfree_type((par::MATFREE_TYPE)matType);
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            #ifdef USE_GPU
+                stMatFree->set_num_streams(nStreams);
+            #endif
+        }
     }
 
     Vec rhs, out, sol_exact;
@@ -689,8 +694,7 @@ int main(int argc, char* argv[])
     // char fname[256];
 
     // apply bc to the matrix
-    if (matType == 0)
-    {
+    if (matType == 0) {
         stMatBased->finalize();
         // sprintf(fname,"matrix_%d.dat",size);
         // stMat.dump_mat(fname);

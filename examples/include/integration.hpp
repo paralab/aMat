@@ -18,12 +18,13 @@ template <typename DT>
 class integration {
 
 public:
-    DT*	Pts_n_Wts;  // coordinates and weights of Gauss points
+    DT*	Pts_n_Wts = nullptr;  // coordinates and weights of Gauss points
 
 private:
     unsigned int nPoints; // number of Gauss points in one direction
 
 public:
+    integration(){};
     integration(unsigned int N);
     ~integration();
 
@@ -41,7 +42,10 @@ integration<DT>::integration(const unsigned int N){
 
 template <typename DT>
 integration<DT>::~integration(){
-    if (Pts_n_Wts != nullptr) delete [] Pts_n_Wts;
+    if (Pts_n_Wts != nullptr) {
+        delete [] Pts_n_Wts;
+        Pts_n_Wts = nullptr;
+    }
 }
 
 template <typename DT>

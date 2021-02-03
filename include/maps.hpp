@@ -236,7 +236,7 @@ public:
         return m_uivRecvRankIds;
     }
 
-    const std::vector<LI> & get_localID2Rank() const 
+    const std::vector<LI> & get_localID2Rank() const
     {
         return m_localid2rank;
     }
@@ -676,7 +676,6 @@ Error Maps<DT, GI, LI>::buildScatterMap()
         gcount++;
     }
 
-
     LI* sendCounts = new LI[m_uiSize];
     LI* recvCounts = new LI[m_uiSize];
     LI* sendOffset = new LI[m_uiSize];
@@ -914,6 +913,7 @@ unsigned int Maps<DT, GI, LI>::globalId_2_rank(GI gId) const
     return rank;
 
 } // globalId_2_rank
+
 
 template <typename DT, typename GI, typename LI>
 Error Maps<DT, GI, LI>::identifyIndependentElements()

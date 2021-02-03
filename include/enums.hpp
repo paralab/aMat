@@ -52,5 +52,8 @@ enum class PROFILER { MATVEC = 0,
 enum class MATRIX_TYPE { MATRIX_BASED,
     MATRIX_FREE };
 
+// UNDEFINED implicitly refer to matrix-based approach
+enum class MATFREE_TYPE {UNDEFINED = 0, QUASI_FREE = 1, FREE = 2, GPU_PURE = 3, GPU_OVER_CPU = 4, GPU_OVER_GPU = 5};
+
 } // namespace par
 #endif // APTIVEMATRIX_ENUMS_H

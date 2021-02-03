@@ -10,10 +10,8 @@
  * @brief    displacement u = -(nu * rho * g/E) * x * z
  * @brief    displacement v = -(nu * rho * g/E) * y * z
  * @brief    displacement w = (rho * g/2/E)(z^2 - Lz^2) + (nu * rho * g)/2/E(x^2 + y^2)
- * @brief Boundary condition: traction tz = rho * g * Lz applied on top surface + blocking rigid
- * motions
- * @brief Partition of elements in z direction: owned elements in z direction ~ Nez/(number of
- * ranks)
+ * @brief Boundary condition: traction tz = rho * g * Lz applied on top surface + blocking rigid motions
+ * @brief Partition of elements in z direction: owned elements in z direction ~ Nez/(number of ranks)
  * @brief Size of the domain: Lx = Ly = 1; Lz = 1.0
  *
  * @version 0.1
@@ -23,30 +21,8 @@
  *
  */
 
-#include <fstream>
-#include <iostream>
-#include <mpi.h>
-
-#ifdef BUILD_WITH_PETSC
-#include <petsc.h>
-#endif
-
-#include "aMat.hpp"
-#include "aMatBased.hpp"
-#include "aMatFree.hpp"
-#include "aVec.hpp"
-#include "constraintRecord.hpp"
-#include "enums.hpp"
-#include "fe_vector.hpp"
-#include "integration.hpp"
-#include "ke_matrix.hpp"
-#include "maps.hpp"
-#include "profiler.hpp"
-#include "solve.hpp"
-
-#include <Eigen/Dense>
-
-// using Eigen::Matrix;
+#include "ex4.hpp"
+AppData Ex4AppData;
 
 // number of cracks allowed in 1 element
 #define MAX_CRACK_LEVEL 3
@@ -62,100 +38,46 @@ void usage()
     std::cout << "Usage:\n";
     std::cout << "  ex4 <Nex> <Ney> <Nez> <matrix based/free> <bc-method>\n";
     std::cout << "\n";
-    std::cout << "     Nex: Number of elements in X\n";
-    std::cout << "     Ney: Number of elements in y\n";
-    std::cout << "     Nez: Number of elements in z\n";
-    std::cout << "     use matrix-free: 1 => yes.  0 => matrix-based method. \n";
-    std::cout << "     use identity-matrix: 0    use penalty method: 1 \n";
+    std::cout << "     1) Nex: Number of elements in X\n";
+    std::cout << "     2) Ney: Number of elements in y\n";
+    std::cout << "     3) Nez: Number of elements in z\n";
+    std::cout << "     4) method (0, 1, 2, 3, 4, 5) \n";
+    std::cout << "     5) use identity-matrix: 0    use penalty method: 1 \n";
+    std::cout << "     6) number of streams (used in method 3, 4, 5)\n";
+    std::cout << "     7) name of output file\n";
     exit(0);
 }
 
+// function to compute element matrix used in method = 2
+void computeElemMat(unsigned int eid, double *ke, double* xe) {
+    
+    const unsigned int NDOF_PER_NODE = Ex4AppData.NDOF_PER_NODE;
+    const unsigned int NNODE_PER_ELEM = Ex4AppData.NNODE_PER_ELEM;
+    
+    // get coordinates of all nodes
+    unsigned int lNodeId;
+    for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
+        unsigned int lNodeId = Ex4AppData.localMap[eid][nid];
+        xe[nid * NDOF_PER_NODE] = Ex4AppData.localNodes[lNodeId].get_x() - Ex4AppData.Lx / 2;
+        xe[(nid * NDOF_PER_NODE) + 1] = Ex4AppData.localNodes[lNodeId].get_y() - Ex4AppData.Ly / 2;
+        xe[(nid * NDOF_PER_NODE) + 2] = Ex4AppData.localNodes[lNodeId].get_z();
+    }
+
+    ke_hex20_iso(ke, xe, Ex4AppData.E, Ex4AppData.nu, Ex4AppData.intData->Pts_n_Wts, Ex4AppData.NGT);
+    
+    return;
+} // computeElemMat
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////
-template<typename DT, typename LI>
-class nodeData
-{
-  private:
-    LI nodeId;
-    DT x;
-    DT y;
-    DT z;
 
-  public:
-    nodeData()
-    {
-        nodeId = 0;
-        x      = 0.0;
-        y      = 0.0;
-        z      = 0.0;
-    }
-
-    inline LI get_nodeId() const
-    {
-        return nodeId;
-    }
-    inline DT get_x() const
-    {
-        return x;
-    }
-    inline DT get_y() const
-    {
-        return y;
-    }
-    inline DT get_z() const
-    {
-        return z;
-    }
-
-    inline void set_nodeId(LI id)
-    {
-        nodeId = id;
-    }
-    inline void set_x(DT value)
-    {
-        x = value;
-    }
-    inline void set_y(DT value)
-    {
-        y = value;
-    }
-    inline void set_z(DT value)
-    {
-        z = value;
-    }
-
-    bool operator==(nodeData const& other) const
-    {
-        return (nodeId == other.get_nodeId());
-    }
-    bool operator<(nodeData const& other) const
-    {
-        if (nodeId < other.get_nodeId())
-            return true;
-        else
-            return false;
-    }
-    bool operator<=(nodeData const& other) const
-    {
-        return (((*this) < other) || ((*this) == other));
-    }
-
-    ~nodeData() {}
-};
-
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     // User provides: Nex - number of elements (global) in x direction
     //                Ney - number of elements (global) in y direction
     //                Nez - number of elements (global) in z direction
-    //                flag1 - 1 matrix-free method, 0 matrix-based method
+    //                method (0, 1, 2, 3, 4, 5)
     //                bcMethod = 0 --> identity matrix method; 1 --> penalty method
-    if (argc < 6)
-    {
-        usage();
-    }
 
     int rc;
-    double zmin, zmax;
 
     double x, y, z;
     double hx, hy, hz;
@@ -184,16 +106,43 @@ int main(int argc, char* argv[])
     // 05.19.20 only use Eigen matrix
     const bool useEigen = true;
 
-    const unsigned int matType  = atoi(argv[4]); // approach (matrix based/free)
+    const unsigned int matType  = atoi(argv[4]); // approach (0, 1, 2, 3, 4, 5)
     const unsigned int bcMethod = atoi(argv[5]); // method of applying BC
+    const unsigned int nStreams = atoi(argv[6]); // number of streams used for method 3, 4, 5
 
     // domain sizes: Lx, Ly, Lz - length of the (global) domain in x/y/z direction
-    const double Lx = 1.0, Ly = 1.0, Lz = 1.0;
+    const double Lx = 1000, Ly = 1000, Lz = 1000;
+    // Gauss points and weights
+    const unsigned int NGT = 2;
+    integration<double> intData(NGT);
 
     // element sizes
     hx = Lx / double(Nex); // element size in x direction
     hy = Ly / double(Ney); // element size in y direction
     hz = Lz / double(Nez); // element size in z direction
+
+    Ex4AppData.E = E;
+    Ex4AppData.nu = nu;
+    Ex4AppData.rho = rho;
+    Ex4AppData.g = g;
+
+    Ex4AppData.Lx = Lx;
+    Ex4AppData.Ly = Ly;
+    Ex4AppData.Lz = Lz;
+    
+    Ex4AppData.Nex = Nex;
+    Ex4AppData.Ney = Ney;
+    Ex4AppData.Nez = Nez;
+
+    Ex4AppData.hx = hx;
+    Ex4AppData.hy = hy;
+    Ex4AppData.hz = hz;
+
+    Ex4AppData.NGT = NGT;
+    Ex4AppData.intData = &intData;
+
+    Ex4AppData.NDOF_PER_NODE = NDOF_PER_NODE;
+    Ex4AppData.NNODE_PER_ELEM = NNODE_PER_ELEM;
 
     const double zero_number = 1E-12;
 
@@ -205,9 +154,18 @@ int main(int argc, char* argv[])
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
 
+    // output file in csv format, open in append mode
+    std::ofstream outFile;
+    const char* filename = argv[7];
+    if (rank == 0)
+        outFile.open(filename, std::fstream::app);
+
+    if (argc < 8) {
+        usage();
+    }
+
     // element matrix (contains multiple matrix blocks)
-    typedef Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM>
-      EigenMat;
+    typedef Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, NDOF_PER_NODE * NNODE_PER_ELEM> EigenMat;
     typedef Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1> EigenVec;
 
     EigenMat** kee;
@@ -215,8 +173,7 @@ int main(int argc, char* argv[])
 
     kee = new EigenMat*[MAX_BLOCKS_PER_ELEMENT];
     fee = new EigenVec*[MAX_BLOCKS_PER_ELEMENT];
-    for (unsigned int i = 1; i < MAX_BLOCKS_PER_ELEMENT; i++)
-    {
+    for (unsigned int i = 1; i < MAX_BLOCKS_PER_ELEMENT; i++) {
         kee[i] = nullptr;
         fee[i] = nullptr;
     }
@@ -232,74 +189,76 @@ int main(int argc, char* argv[])
     double* xe = new double[NDIM * NNODE_PER_ELEM];
 
     // timing variables
-    profiler_t aMat_time;
-    profiler_t petsc_time;
-    profiler_t total_time;
-    if (matType != 0)
-    {
-        aMat_time.clear();
+    profiler_t aMat_elem_compute_time;
+    profiler_t aMat_setup_time;
+    profiler_t aMat_matvec_time;
+
+    profiler_t petsc_elem_compute_time;
+    profiler_t petsc_setup_time;
+    profiler_t petsc_matvec_time;
+    
+    if (matType != 0) {
+        aMat_elem_compute_time.clear();
+        aMat_setup_time.clear();
+        aMat_matvec_time.clear();
+    } else {
+        petsc_elem_compute_time.clear();
+        petsc_setup_time.clear();
+        petsc_matvec_time.clear();
     }
-    else
-    {
-        petsc_time.clear();
-    }
-    total_time.clear();
 
     if (!rank)
     {
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNex : " << Nex << " Ney: " << Ney << " Nez: " << Nez << "\n";
         std::cout << "\t\tLx : " << Lx << " Ly: " << Ly << " Lz: " << Lz << "\n";
-        std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
+        std::cout << "\t\tMethod = " << matType << "\n";
         std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
 
-#ifdef VECTORIZED_AVX512
-    if (!rank)
-    {
+    #ifdef VECTORIZED_AVX512
+    if (!rank) {
         std::cout << "\t\tVectorization using AVX_512\n";
     }
-#elif VECTORIZED_AVX256
-    if (!rank)
-    {
+    #elif VECTORIZED_AVX256
+    if (!rank) {
         std::cout << "\t\tVectorization using AVX_256\n";
     }
-#elif VECTORIZED_OPENMP
-    if (!rank)
-    {
+    #elif VECTORIZED_OPENMP
+    if (!rank) {
         std::cout << "\t\tVectorization using OpenMP\n";
     }
-#elif VECTORIZED_OPENMP_ALIGNED
-    if (!rank)
-    {
+    #elif VECTORIZED_OPENMP_ALIGNED
+    if (!rank) {
         std::cout << "\t\tVectorization using OpenMP with aligned memory\n";
     }
-#else
-    if (!rank)
-    {
+    #else
+    if (!rank) {
         std::cout << "\t\tNo vectorization\n";
     }
-#endif
+    #endif
 
-#ifdef HYBRID_PARALLEL
-    if (!rank)
-    {
+    #ifdef HYBRID_PARALLEL
+    if (!rank) {
         std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
         std::cout << "\t\tMax number of threads: " << omp_get_max_threads() << "\n";
         std::cout << "\t\tNumber of MPI processes: " << size << "\n";
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            std::cout << "\t\tNumber of streams: " << nStreams << "\n";
+        }
     }
-#else
-    if (!rank)
-    {
+    #else
+    if (!rank) {
         std::cout << "\t\tOnly MPI parallel\n";
         std::cout << "\t\tNumber of MPI processes: " << size << "\n";
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            std::cout << "\t\tNumber of streams: " << nStreams << "\n";
+        }
     }
-#endif
+    #endif
 
-    if (rank == 0)
-    {
-        if (size > Nez)
-        {
+    if (rank == 0) {
+        if (size > Nez) {
             printf("The number of processes must be less than or equal Nez, program stops.\n");
             MPI_Abort(comm, rc);
             exit(0);
@@ -308,10 +267,8 @@ int main(int argc, char* argv[])
 
     // for fixing rigid motions at centroid of the top/bottom face
     // number of elements in x and y directions must be even numbers
-    if ((Nex % 2 != 0) || (Ney % 2 != 0))
-    {
-        if (!rank)
-        {
+    if ((Nex % 2 != 0) || (Ney % 2 != 0)) {
+        if (!rank) {
             printf("Number of elements in x and y must be even numbers, program stops.\n");
             MPI_Abort(comm, rc);
             exit(0);
@@ -385,6 +342,8 @@ int main(int argc, char* argv[])
     // number of local dofs
     unsigned int numLocalDofs = numLocalNodes * NDOF_PER_NODE;
 
+    Ex4AppData.localNodes = localNodes.data();
+
     /* for (unsigned int i = 0; i < localNodes.size(); i++){
         printf("[rank %d] node %d, {x,y,z}= %4.3f,%4.3f,%4.3f\n",rank,localNodes[i].get_nodeId(),
     localNodes[i].get_x(), localNodes[i].get_y(), localNodes[i].get_z());
@@ -435,6 +394,9 @@ int main(int argc, char* argv[])
             }
         }
     }
+
+    // set globalMap to AppData so that we can used in function compute element stiffness matrix
+    Ex4AppData.localMap = localMap;
 
     // map from local dof to global dof
     unsigned int** localDofMap;
@@ -494,20 +456,14 @@ int main(int argc, char* argv[])
     unsigned long gNodeId;
     unsigned long int** globalMap;
     globalMap = new unsigned long int*[nelem];
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
         globalMap[eid] = new unsigned long int[MAX_BLOCKS_PER_ELEMENT * NNODE_PER_ELEM];
     }
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
-        {
-            if (rank == 0)
-            {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
+            if (rank == 0) {
                 globalMap[eid][nid] = localMap[eid][nid];
-            }
-            else
-            {
+            } else {
                 globalMap[eid][nid] = localMap[eid][nid] + nnodeOffset[rank] -
                                       ((2 * Nex + 1) * (2 * Ney + 1) - (Nex * Ney));
             }
@@ -518,17 +474,13 @@ int main(int argc, char* argv[])
     // map from elemental dof to global dof
     unsigned long int** globalDofMap;
     globalDofMap = new unsigned long int*[nelem];
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
         globalDofMap[eid] =
           new unsigned long int[MAX_BLOCKS_PER_ELEMENT * NNODE_PER_ELEM * NDOF_PER_NODE];
     }
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
-        {
-            for (unsigned int did = 0; did < NDOF_PER_NODE; did++)
-            {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
                 globalDofMap[eid][(nid * NDOF_PER_NODE) + did] =
                   (globalMap[eid][nid] * NDOF_PER_NODE) + did;
             }
@@ -537,10 +489,8 @@ int main(int argc, char* argv[])
 
     // local node to global node map
     unsigned long* local2GlobalMap = new unsigned long[numLocalNodes];
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
-        {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
             gNodeId                             = globalMap[eid][nid];
             local2GlobalMap[localMap[eid][nid]] = gNodeId;
         }
@@ -551,12 +501,9 @@ int main(int argc, char* argv[])
 
     // local dof to global dof map
     unsigned long* local2GlobalDofMap = new unsigned long[numLocalNodes * NDOF_PER_NODE];
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
-        {
-            for (unsigned int did = 0; did < NDOF_PER_NODE; did++)
-            {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
                 local2GlobalDofMap[localDofMap[eid][(nid * NDOF_PER_NODE) + did]] =
                   globalDofMap[eid][(nid * NDOF_PER_NODE) + did];
             }
@@ -606,8 +553,7 @@ int main(int argc, char* argv[])
             y = y - Ly / 2;
 
             // node at centroid of top face: fix all directions
-            if ((fabs(x) < zero_number) && (fabs(y) < zero_number) && (fabs(z - Lz) < zero_number))
-            {
+            if ((fabs(x) < zero_number) && (fabs(y) < zero_number) && (fabs(z - Lz) < zero_number)) {
                 bound_dofs[eid][(nid * NDOF_PER_NODE)]     = 1;
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 1] = 1;
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 2] = 1;
@@ -615,19 +561,15 @@ int main(int argc, char* argv[])
                 bound_values[eid][(nid * NDOF_PER_NODE)]     = 0.0;
                 bound_values[eid][(nid * NDOF_PER_NODE) + 1] = 0.0;
                 bound_values[eid][(nid * NDOF_PER_NODE) + 2] = 0.0;
-            }
-            else
-            {
-                for (unsigned int did = 0; did < NDOF_PER_NODE; did++)
-                {
+            } else {
+                for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
                     bound_dofs[eid][(nid * NDOF_PER_NODE) + did]   = 0; // free dof
                     bound_values[eid][(nid * NDOF_PER_NODE) + did] = -1000000;
                 }
             }
 
             // node at centroid of bottom surface: fix in x and y
-            if ((fabs(x) < zero_number) && (fabs(y) < zero_number) && (fabs(z) < zero_number))
-            {
+            if ((fabs(x) < zero_number) && (fabs(y) < zero_number) && (fabs(z) < zero_number)) {
                 bound_dofs[eid][nid * NDOF_PER_NODE]     = 1;
                 bound_dofs[eid][nid * NDOF_PER_NODE + 1] = 1;
 
@@ -637,8 +579,7 @@ int main(int argc, char* argv[])
 
             // node at center of right edge of bottom surface: fix in y
             if ((fabs(x - Lx / 2) < zero_number) && (fabs(y) < zero_number) &&
-                (fabs(z) < zero_number))
-            {
+                (fabs(z) < zero_number)) {
                 bound_dofs[eid][(nid * NDOF_PER_NODE) + 1]   = 1;
                 bound_values[eid][(nid * NDOF_PER_NODE) + 1] = 0.0;
             }
@@ -648,14 +589,10 @@ int main(int argc, char* argv[])
     // create lists of constrained dofs
     std::vector<par::ConstraintRecord<double, unsigned long int>> list_of_constraints;
     par::ConstraintRecord<double, unsigned long int> cdof;
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
-        {
-            for (unsigned int did = 0; did < NDOF_PER_NODE; did++)
-            {
-                if (bound_dofs[eid][(nid * NDOF_PER_NODE) + did] == 1)
-                {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
+                if (bound_dofs[eid][(nid * NDOF_PER_NODE) + did] == 1) {
                     // save the global id of constrained dof
                     cdof.set_dofId(globalDofMap[eid][(nid * NDOF_PER_NODE) + did]);
                     cdof.set_preVal(bound_values[eid][(nid * NDOF_PER_NODE) + did]);
@@ -675,8 +612,7 @@ int main(int argc, char* argv[])
     double* prescribedValues_ptr;
     constrainedDofs_ptr  = new unsigned long int[list_of_constraints.size()];
     prescribedValues_ptr = new double[list_of_constraints.size()];
-    for (unsigned int i = 0; i < list_of_constraints.size(); i++)
-    {
+    for (unsigned int i = 0; i < list_of_constraints.size(); i++) {
         constrainedDofs_ptr[i]  = list_of_constraints[i].get_dofId();
         prescribedValues_ptr[i] = list_of_constraints[i].get_preVal();
     }
@@ -699,9 +635,6 @@ int main(int argc, char* argv[])
     // force vector due to traction
     Eigen::Matrix<double, 24, 1> feT;
 
-    // Gauss points and weights
-    const unsigned int NGT = 4;
-    integration<double> intData(NGT);
 
     for (unsigned int eid = 0; eid < nelem; eid++)
     {
@@ -847,8 +780,6 @@ int main(int argc, char* argv[])
         }
     } */
 
-    total_time.start();
-
     // declare Maps object  =================================
     par::Maps<double, unsigned long, unsigned int> meshMaps(comm);
 
@@ -860,11 +791,6 @@ int main(int argc, char* argv[])
                      start_global_dof,
                      end_global_dof,
                      ndofs_total);
-
-    if (matType == 1)
-    {
-        meshMaps.buildScatterMap();
-    }
 
     meshMaps.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
 
@@ -879,19 +805,24 @@ int main(int argc, char* argv[])
     aMatBased* stMatBased; // pointer of aMat taking aMatBased as derived
     aMatFree* stMatFree;   // pointer of aMat taking aMatFree as derived
 
-    if (matType == 0)
-    {
+    if (matType == 0) {
         // assign stMatBased to the derived class aMatBased
-        stMatBased =
-          new par::aMatBased<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
-    }
-    else
-    {
+        stMatBased = new par::aMatBased<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+    } else {
         // assign stMatFree to the derived class aMatFree
-        stMatFree =
-          new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+        stMatFree = new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+        stMatFree->set_matfree_type((par::MATFREE_TYPE)matType);
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            #ifdef USE_GPU
+                stMatFree->set_num_streams(nStreams);
+            #endif
+        }
     }
 
+    // set function to compute element matrix if using matrix-free
+    if (matType == 2){
+        stMatFree->set_element_matrix_function(&computeElemMat);
+    }
 
     // create rhs, solution and exact solution vectors
     Vec rhs, out, sol_exact, error;
@@ -904,10 +835,8 @@ int main(int argc, char* argv[])
     // nodal value of body force
     double beN[60] = { 0.0 };
 
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
-        {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
             lNodeId = localMap[eid][nid];
             // get node coordinates
             x = localNodes[lNodeId].get_x();
@@ -929,81 +858,62 @@ int main(int argc, char* argv[])
         }
 
         // compute element stiffness matrix
-        if (useEigen)
-        {
-            ke_hex20_iso(*kee[0], xe, E, nu, intData.Pts_n_Wts, NGT);
+        if (matType == 0){
+            petsc_setup_time.start();
+            petsc_elem_compute_time.start();
+        } else {
+            aMat_setup_time.start();
+            aMat_elem_compute_time.start();
         }
-        else
-        {
+        if (useEigen) {
+            ke_hex20_iso(*kee[0], xe, E, nu, intData.Pts_n_Wts, NGT);
+        } else {
             printf("Error: not yet implement element stiffness matrix which is not Eigen matrix "
                    "format\n");
+            exit(0);
+        }
+        if (matType == 0){
+            petsc_elem_compute_time.stop();
+        } else {
+            aMat_elem_compute_time.stop();
         }
 
         // assemble element stiffness matrix to global K
-        if (matType == 0)
-            petsc_time.start();
-        else
-            aMat_time.start();
-
         if (matType == 0)
             stMatBased->set_element_matrix(eid, *kee[0], 0, 0, 1);
         else
             stMatFree->set_element_matrix(eid, *kee[0], 0, 0, 1);
 
-        if (matType == 0)
-            petsc_time.stop();
-        else
-            aMat_time.stop();
+        if (matType == 0){
+            petsc_setup_time.stop();
+        } else {
+            aMat_setup_time.stop();
+        }
 
         // compute element force vector due to body force
         fe_hex20_iso(*fee[0], xe, beN, intData.Pts_n_Wts, NGT);
 
         // assemble element load vector due to body force
-        if (matType == 0)
-            petsc_time.start();
-        else
-            aMat_time.start();
-
         par::set_element_vec(meshMaps, rhs, eid, *fee[0], 0u, ADD_VALUES);
 
-        if (matType == 0)
-            petsc_time.stop();
-        else
-            aMat_time.stop();
-
         // assemble element load vector due to traction
-        if (elem_trac[eid].size() != 0)
-        {
-            if (matType == 0)
-                petsc_time.start();
-            else
-                aMat_time.start();
-
+        if (elem_trac[eid].size() != 0) {
             par::set_element_vec(meshMaps, rhs, eid, elem_trac[eid], 0u, ADD_VALUES);
-
-            if (matType == 0)
-                petsc_time.stop();
-            else
-                aMat_time.stop();
         }
     }
+
     delete[] xe;
 
-
     // Pestc begins and completes assembling the global stiffness matrix
-    if (matType == 0)
-    {
-        petsc_time.start();
+    if (matType == 0) {
+        petsc_setup_time.start();
         stMatBased->finalize();
-        petsc_time.stop();
-    }
-    else
-    {
-        aMat_time.start();
+        petsc_setup_time.stop();
+    } else {
+        aMat_setup_time.start();
         stMatFree->finalize(); // compute trace of matrix when using penalty method
-        aMat_time.stop();
+        aMat_setup_time.stop();
     }
-
 
     // char fname[256];
     // sprintf(fname,"matrix_%d.dat",matType);
@@ -1012,13 +922,9 @@ int main(int argc, char* argv[])
     // Pestc begins and completes assembling the global load vector
     // These are needed because we used ADD_VALUES for rhs when assembling
     // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
-    if (matType != 0)
-        aMat_time.start();
-    else
-        petsc_time.start();
-
     VecAssemblyBegin(rhs);
     VecAssemblyEnd(rhs);
+
     // apply bc for rhs: this must be done before applying bc for the matrix
     // because we use the original matrix to compute KfcUc in matrix-based method
     if (matType == 0)
@@ -1028,118 +934,97 @@ int main(int argc, char* argv[])
     VecAssemblyBegin(rhs);
     VecAssemblyEnd(rhs);
 
-    if (matType != 0)
-        aMat_time.stop();
-    else
-        petsc_time.stop();
-
     // assemble matrix after matrix is modified by bc
-    if (matType == 0)
-    {
-        petsc_time.start();
+    if (matType == 0) {
+        petsc_setup_time.start();
         stMatBased->finalize();
-        petsc_time.stop();
+        petsc_setup_time.stop();
     }
 
-    // solve
-    if (matType != 0)
-        aMat_time.start();
-    else
-        petsc_time.start();
+    // ====================== profiling matvec ====================================
+    // generate random vector of length = number of owned dofs
+    const unsigned int numDofsTotal = meshMaps.get_NumDofsTotal();
+    const unsigned int numDofs = meshMaps.get_NumDofs();
+
+    double* X = (double*) malloc(sizeof(double) * (numDofsTotal));
+    for (unsigned int i = 0; i < (numDofsTotal); i++){
+        //X[i] = (double)std::rand()/(double)(RAND_MAX/5.0);
+        X[i] = 1.0;
+    }
+    // result vector Y = [K] * X
+    double* Y = (double*) malloc(sizeof(double) * (numDofsTotal));
+
+    // total number of matvec's we want to profile
+    const unsigned int num_matvecs = 10;
+    if (rank == 0) printf("Number of matvecs= %d\n", num_matvecs);
+
+    if( matType == 0) {
+        Vec petsc_X, petsc_Y;
+        par::create_vec(meshMaps, petsc_X, 1.0);
+        par::create_vec(meshMaps, petsc_Y);
+
+        for (unsigned int i = 0; i < num_matvecs; i++){
+            petsc_matvec_time.start();
+            stMatBased->matmult(petsc_Y, petsc_X);
+            //VecAssemblyBegin(petsc_X);
+            //VecAssemblyEnd(petsc_X);
+            petsc_matvec_time.stop();
+            VecSwap(petsc_Y, petsc_X);
+        }
+        VecDestroy(&petsc_X);
+        VecDestroy(&petsc_Y);
+
+    } else {
+        for (unsigned int i = 0; i < num_matvecs; i++){
+            
+            aMat_matvec_time.start();     
+            stMatFree->matvec(Y, X, true);
+            aMat_matvec_time.stop();
+            double * temp = X;
+            X = Y;
+            Y = temp;
+        }
+    }
+    free (Y);
+    free (X);
+    // ====================== finish profiling matvec ==============================
+
+
+    // ====================== solve ================================================
+    /* if (matType == 0) {
+        petsc_matvec_time.start();
+    } else {
+        aMat_matvec_time.start();
+    }
 
     if (matType == 0)
         par::solve(*stMatBased, (const Vec)rhs, out);
     else
         par::solve(*stMatFree, (const Vec)rhs, out);
-
-    /* if (matType == 0){
-        par::solve(*dynamic_cast<aMatBased_ptr>(stMat), (const Vec)rhs, out);
+    
+    if (matType == 0) {
+        petsc_matvec_time.stop();
     } else {
-        par::solve(*dynamic_cast<aMatFree_ptr>(stMat), (const Vec)rhs, out);
+        aMat_matvec_time.stop();
     } */
-
-    if (matType != 0)
-        aMat_time.stop();
-    else
-        petsc_time.stop();
-
-    total_time.stop();
-
-    // display timing
-    if (matType != 0)
-    {
-        if (size > 1)
-        {
-            long double aMat_maxTime;
-            MPI_Reduce(&aMat_time.seconds, &aMat_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
-            if (rank == 0)
-            {
-                std::cout << "aMat time = " << aMat_maxTime << "\n";
-            }
-        }
-        else
-        {
-            if (rank == 0)
-            {
-                std::cout << "aMat time = " << aMat_time.seconds << "\n";
-            }
-        }
-    }
-    else
-    {
-        if (size > 1)
-        {
-            long double petsc_maxTime;
-            MPI_Reduce(&petsc_time.seconds, &petsc_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
-            if (rank == 0)
-            {
-                std::cout << "PETSC time = " << petsc_maxTime << "\n";
-            }
-        }
-        else
-        {
-            if (rank == 0)
-            {
-                std::cout << "PETSC time = " << petsc_time.seconds << "\n";
-            }
-        }
-    }
-    if (size > 1)
-    {
-        long double total_time_max;
-        MPI_Reduce(&total_time.seconds, &total_time_max, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
-        if (rank == 0)
-        {
-            std::cout << "total time = " << total_time_max << "\n";
-        }
-    }
-    else
-    {
-        if (rank == 0)
-        {
-            std::cout << "total time = " << total_time.seconds << "\n";
-        }
-    }
+    // ======================finish solve ===========================================
 
     // sprintf(fname,"outVec_%d.dat",size);
     // stMat.dump_vec(out,fname);
 
-    PetscScalar norm, alpha = -1.0;
-
+    // ============================= comparing with exact solution ==========================
+    /* PetscScalar norm, alpha = -1.0;
     // compute norm of solution
     VecNorm(out, NORM_2, &norm);
-    if (rank == 0)
-    {
+    if (rank == 0) {
         printf("L2 norm of computed solution = %20.10f\n", norm);
     }
 
     // exact solution
     Eigen::Matrix<double, NDOF_PER_NODE * NNODE_PER_ELEM, 1> e_exact;
     double disp[3];
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
-        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++)
-        {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
+        for (unsigned int nid = 0; nid < NNODE_PER_ELEM; nid++) {
             lNodeId = localMap[eid][nid];
             // get node coordinates
             x = localNodes[lNodeId].get_x();
@@ -1155,8 +1040,7 @@ int main(int argc, char* argv[])
             disp[2] =
               (rho * g / 2 / E) * (z * z - Lz * Lz) + (nu * rho * g / 2 / E) * (x * x + y * y);
 
-            for (unsigned int did = 0; did < NDOF_PER_NODE; did++)
-            {
+            for (unsigned int did = 0; did < NDOF_PER_NODE; did++) {
                 e_exact[(nid * NDOF_PER_NODE) + did] = disp[did];
             }
         }
@@ -1172,8 +1056,7 @@ int main(int argc, char* argv[])
 
     // compute norm of exact solution
     VecNorm(sol_exact, NORM_2, &norm);
-    if (rank == 0)
-    {
+    if (rank == 0) {
         printf("L2 norm of exact solution = %20.10f\n", norm);
     }
 
@@ -1186,10 +1069,92 @@ int main(int argc, char* argv[])
     // compute norm of error
     // VecNorm(sol_exact, NORM_INFINITY, &norm);
     VecNorm(error, NORM_INFINITY, &norm);
-    if (rank == 0)
-    {
+    if (rank == 0) {
         printf("Inf norm of error = %20.10f\n", norm);
+    } */
+    // ============================= finish comparing with exact solution =================
+
+
+    // computing time acrossing ranks and display
+    if (matType == 0) {
+        if (size > 1) {
+            long double petsc_elem_compute_maxTime;
+            long double petsc_setup_maxTime;
+            long double petsc_matvec_maxTime;
+            MPI_Reduce(&petsc_elem_compute_time.seconds, &petsc_elem_compute_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            MPI_Reduce(&petsc_setup_time.seconds, &petsc_setup_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            MPI_Reduce(&petsc_matvec_time.seconds, &petsc_matvec_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0) {
+                std::cout << "(1) PETSc elem compute time = " << petsc_elem_compute_maxTime << "\n";
+                std::cout << "(2) PETSc setup time = " << petsc_setup_maxTime << "\n";
+                std::cout << "(3) PETSc matvec time = " << petsc_matvec_maxTime << "\n";
+                outFile << "PETSc, " << petsc_elem_compute_maxTime << "," << petsc_setup_maxTime << "," << petsc_matvec_maxTime << "\n";
+            }
+        } else {
+            std::cout << "(1) PETSc elem compute time = " << petsc_elem_compute_time.seconds << "\n";
+            std::cout << "(2) PETSc setup time = " << petsc_setup_time.seconds << "\n";
+            std::cout << "(3) PETSc matvec time = " << petsc_matvec_time.seconds << "\n";
+            outFile << "PETSc, " << petsc_elem_compute_time.seconds << ", " << petsc_setup_time.seconds << ", " << petsc_matvec_time.seconds << "\n";
+        }
+    } else if (matType == 1) {
+        if (size > 1) {
+            long double aMat_elem_compute_maxTime;
+            long double aMat_setup_maxTime;
+            long double aMat_matvec_maxTime;
+            MPI_Reduce(&aMat_elem_compute_time.seconds, &aMat_elem_compute_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            MPI_Reduce(&aMat_setup_time.seconds, &aMat_setup_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            MPI_Reduce(&aMat_matvec_time.seconds, &aMat_matvec_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0) {
+                std::cout << "(1) aMat-hybrid elem compute time = " << aMat_elem_compute_maxTime << "\n";
+                std::cout << "(2) aMat-hybrid setup time = " << aMat_setup_maxTime << "\n";
+                std::cout << "(3) aMat-hybrid matvec time = " << aMat_matvec_maxTime << "\n";
+                outFile << "aMat-hybrid, " << aMat_elem_compute_maxTime << ", " << aMat_setup_maxTime << ", " << aMat_matvec_maxTime << "\n";
+            }
+        } else {
+            std::cout << "(1) aMat-hybrid elem compute time = " << aMat_elem_compute_time.seconds << "\n";
+            std::cout << "(2) aMat-hybrid setup time = " << aMat_setup_time.seconds << "\n";
+            std::cout << "(3) aMat-hybrid matvec time = " << aMat_matvec_time.seconds << "\n";
+            outFile << "aMat-hybrid, " << aMat_elem_compute_time.seconds << ", " << aMat_setup_time.seconds << ", " << aMat_matvec_time.seconds << "\n";
+        }
+    } else if (matType == 2) {
+        if (size > 1) {
+            long double aMat_matvec_maxTime;
+            MPI_Reduce(&aMat_matvec_time.seconds, &aMat_matvec_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0) {
+                std::cout << "(3) aMat-free matvec time = " << aMat_matvec_maxTime << "\n";
+                outFile << "aMat-free, " << aMat_matvec_maxTime << "\n";
+            }
+        } else {
+            std::cout << "(3) aMat-free matvec time = " << aMat_matvec_time.seconds << "\n";
+            outFile << "aMat-free, " << aMat_matvec_time.seconds << "\n";
+        }
+    } else if ((matType == 3) || (matType == 4) || (matType == 5)) {
+        if (size > 1) {
+            //std::cout << "(1) rank " << rank << ", aMatGpu elem compute time = " << aMat_elem_compute_time.seconds << "\n";
+            //printf("(2) rank = %d, aMatGpu setup time = %Lf\n", rank, aMat_setup_time.seconds);
+            //printf("(3) rank = %d, aMatGpu matvec time = %Lf\n", rank, aMat_matvec_time.seconds);
+            
+            long double aMat_elem_compute_maxTime;
+            long double aMat_setup_maxTime;
+            long double aMat_matvec_maxTime;
+            MPI_Reduce(&aMat_elem_compute_time.seconds, &aMat_elem_compute_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            MPI_Reduce(&aMat_setup_time.seconds, &aMat_setup_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            MPI_Reduce(&aMat_matvec_time.seconds, &aMat_matvec_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+            if (rank == 0) {
+                std::cout << "(1) aMatGpu elem compute time = " << aMat_elem_compute_maxTime << "\n";
+                std::cout << "(2) aMatGpu setup time = " << aMat_setup_maxTime << "\n";
+                std::cout << "(3) aMatGpu matvec time = " << aMat_matvec_maxTime << "\n";
+                outFile << "aMatGpu_" << matType << ", " << aMat_elem_compute_maxTime << ", " << aMat_setup_maxTime << ", " << aMat_matvec_maxTime << "\n";
+            }
+        } else {
+            std::cout << "(1) aMatGpu elem compute time = " << aMat_elem_compute_time.seconds << "\n";
+            std::cout << "(2) aMatGpu setup time = " << aMat_setup_time.seconds << "\n";
+            std::cout << "(3) aMatGpu matvec time = " << aMat_matvec_time.seconds << "\n";
+            outFile << "aMatGpu_" << matType << ", " << aMat_elem_compute_time.seconds << ", " << aMat_setup_time.seconds << ", " << aMat_matvec_time.seconds << "\n";
+        }
     }
+    if (rank == 0) outFile.close();
+
 
     // export ParaView
     /* std::ofstream myfile;
@@ -1241,25 +1206,23 @@ int main(int argc, char* argv[])
         }
         myfile.close();
     }*/
+    
 
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
         delete[] globalMap[eid];
         delete[] globalDofMap[eid];
     }
     delete[] globalMap;
     delete[] globalDofMap;
 
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
         delete[] localMap[eid];
     }
     delete[] localMap;
     delete[] nnodeCount;
     delete[] nnodeOffset;
 
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
         delete[] localDofMap[eid];
     }
     delete[] localDofMap;
@@ -1268,8 +1231,7 @@ int main(int argc, char* argv[])
 
     delete[] ndofs_per_element;
 
-    for (unsigned int eid = 0; eid < nelem; eid++)
-    {
+    for (unsigned int eid = 0; eid < nelem; eid++) {
         delete[] bound_dofs[eid];
         delete[] bound_values[eid];
     }
@@ -1280,8 +1242,7 @@ int main(int argc, char* argv[])
     delete[] prescribedValues_ptr;
 
     delete[] elem_trac;
-    for (unsigned int i = 0; i < MAX_BLOCKS_PER_ELEMENT; i++)
-    {
+    for (unsigned int i = 0; i < MAX_BLOCKS_PER_ELEMENT; i++) {
         if (kee[i] != nullptr)
             delete kee[i];
         if (fee[i] != nullptr)
@@ -1290,9 +1251,16 @@ int main(int argc, char* argv[])
     delete[] kee;
     delete[] fee;
 
+    if (matType == 0) {
+        delete stMatBased;
+    } else {
+        delete stMatFree;
+    }
+    
     VecDestroy(&out);
     VecDestroy(&sol_exact);
     VecDestroy(&rhs);
+    VecDestroy(&error);
 
     PetscFinalize();
     return 0;

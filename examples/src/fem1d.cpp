@@ -44,20 +44,21 @@ void usage()
     std::cout << "Usage:\n";
     std::cout << "  fem1d <Nex> <use matrix/free> <bc method>\n";
     std::cout << "\n";
-    std::cout << "     Nex: Number of elements in X\n";
-    std::cout << "     use matrix-free: 1 => yes.  0 => matrix-based method.\n";
-    std::cout << "     use identity-matrix: 0    use penalty method: 1 \n";
+    std::cout << "     1) Nex: Number of elements in X\n";
+    std::cout << "     2) Method (0, 1, 2, 3, 4, 5).\n";
+    std::cout << "     3) BCs: use identity-matrix: 0    use penalty method: 1 \n";
+    std::cout << "     4) number of streams used with GPU \n";
     std::cout << "\n";
     std::exit(0);
 }
 
 int main(int argc, char* argv[])
 {
-    // User provides: Ne = number of elements
-    //                matType = 0 --> matrix-based method; 1 --> matrix-free method
-    //                bcMethod = 0 --> identity matrix method; 1 --> penalty method
-    if (argc < 4)
-    {
+    // User provides: 1) Ne = number of elements
+    //                2) method (0 = matrix_based; 1 = quasi-free; 2 = free; 3 = gpu independent; 4 = gpu all)
+    //                3) bcMethod = 0 --> identity matrix method; 1 --> penalty method
+    //                4) number of streams (used in method = 3 and 4)
+    if (argc < 5) {
         usage();
     }
 
@@ -68,7 +69,13 @@ int main(int argc, char* argv[])
     const unsigned int Ne       = atoi(argv[1]);
     const unsigned int matType  = atoi(argv[2]);
     const unsigned int bcMethod = atoi(argv[3]); // method of applying BC
+    const unsigned int nStreams = atoi(argv[4]); // number of streams used for GPU (method 3, 4, 5)
 
+    if (matType == 2){
+        printf("Method of free is not implemented for this example!\n");
+        exit(0);
+    }
+    
     // element matrix and force vector
     Matrix<double, 2, 2> ke;
     Matrix<double, 2, 1> fe;
@@ -83,6 +90,7 @@ int main(int argc, char* argv[])
 
     // MPI initialize
     PetscInitialize(&argc, &argv, NULL, NULL);
+
     int rank, size;
     MPI_Comm comm = PETSC_COMM_WORLD;
     MPI_Comm_rank(comm, &rank);
@@ -93,57 +101,54 @@ int main(int argc, char* argv[])
         std::cout << "============ parameters read  =======================\n";
         std::cout << "\t\tNe : " << Ne << "\n";
         std::cout << "\t\tL : " << L << "\n";
-        std::cout << "\t\tMethod (0 = matrix based; 1 = matrix free) = " << matType << "\n";
+        std::cout << "\t\tMethod: " << matType << "\n";
         std::cout << "\t\tBC method (0 = 'identity-matrix'; 1 = penalty): " << bcMethod << "\n";
     }
 
-#ifdef VECTORIZED_AVX512
-    if (!rank)
-    {
+    #ifdef VECTORIZED_AVX512
+    if (!rank) {
         std::cout << "\t\tVectorization using AVX_512\n";
     }
-#elif VECTORIZED_AVX256
-    if (!rank)
-    {
+    #elif VECTORIZED_AVX256
+    if (!rank) {
         std::cout << "\t\tVectorization using AVX_256\n";
     }
-#elif VECTORIZED_OPENMP
-    if (!rank)
-    {
+    #elif VECTORIZED_OPENMP
+    if (!rank) {
         std::cout << "\t\tVectorization using OpenMP\n";
     }
-#elif VECTORIZED_OPENMP_ALIGNED
-    if (!rank)
-    {
+    #elif VECTORIZED_OPENMP_ALIGNED
+    if (!rank) {
         std::cout << "\t\tVectorization using OpenMP with aligned memory\n";
     }
-#else
-    if (!rank)
-    {
+    #else
+    if (!rank) {
         std::cout << "\t\tNo vectorization\n";
     }
-#endif
+    #endif
 
-#ifdef HYBRID_PARALLEL
-    if (!rank)
-    {
+    #ifdef HYBRID_PARALLEL
+    if (!rank) {
         std::cout << "\t\tHybrid parallel OpenMP + MPI\n";
         std::cout << "\t\tMax number of threads: " << omp_get_max_threads() << "\n";
         std::cout << "\t\tNumber of MPI processes: " << size << "\n";
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            std::cout << "\t\tNumber of streams: " << nStreams << "\n";
+        }
     }
-#else
-    if (!rank)
-    {
+    #else
+    if (!rank) {
         std::cout << "\t\tOnly MPI parallel\n";
         std::cout << "\t\tNumber of MPI processes: " << size << "\n";
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            std::cout << "\t\tNumber of streams: " << nStreams << "\n";
+        }
     }
-#endif
+    #endif
 
     int rc;
-    if (size > Ne)
-    {
-        if (!rank)
-        {
+    if (size > Ne) {
+        if (!rank) {
             std::cout << "Number of ranks must be <= Ne, program stops..."
                       << "\n";
             MPI_Abort(comm, rc);
@@ -159,20 +164,14 @@ int main(int argc, char* argv[])
     // remaining
     unsigned int nRemain = Ne % size;
     // distribute nRemain uniformly from rank = 0 up to rank = nRemain - 1
-    if (rank < nRemain)
-    {
+    if (rank < nRemain) {
         nelem = nxmin + 1;
-    }
-    else
-    {
+    } else {
         nelem = nxmin;
     }
-    if (rank < nRemain)
-    {
+    if (rank < nRemain) {
         emin = rank * nxmin + rank;
-    }
-    else
-    {
+    } else {
         emin = rank * nxmin + nRemain;
     }
     emax = emin + nelem - 1;
@@ -180,12 +179,9 @@ int main(int argc, char* argv[])
     // number of nodes owned by my rank (rank 0 owns 2 boundary nodes, other ranks own right
     // boundary node)
     unsigned int nnode;
-    if (rank == 0)
-    {
+    if (rank == 0) {
         nnode = nelem + 1;
-    }
-    else
-    {
+    } else {
         nnode = nelem;
     }
 
@@ -390,11 +386,6 @@ int main(int argc, char* argv[])
                      end_global_dof,
                      ndofs_total);
 
-    if (matType == 1)
-    {
-        meshMaps.buildScatterMap();
-    }
-
     meshMaps.set_bdr_map(constrainedDofs_ptr, prescribedValues_ptr, list_of_constraints.size());
 
     // declare aMat object =================================
@@ -408,24 +399,23 @@ int main(int argc, char* argv[])
     aMatBased* stMatBased; // pointer of aMat taking aMatBased as derived
     aMatFree* stMatFree;   // pointer of aMat taking aMatFree as derived
 
-    if (matType == 0)
-    {
+    if (matType == 0) {
         // assign stMatBased to the derived class aMatBased
-        stMatBased =
-          new par::aMatBased<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
-    }
-    else
-    {
+        stMatBased = new par::aMatBased<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+    } else {
         // assign stMatFree to the derived class aMatFree
-        stMatFree =
-          new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+        stMatFree = new par::aMatFree<double, unsigned long, unsigned int>(meshMaps, (par::BC_METH)bcMethod);
+        stMatFree->set_matfree_type((par::MATFREE_TYPE)matType);
+        if ((matType == 3) || (matType == 4) || (matType == 5)){
+            #ifdef USE_GPU
+                stMatFree->set_num_streams(nStreams);
+            #endif
+        }
     }
-
 
     Vec rhs, out;
     par::create_vec(meshMaps, rhs);
     par::create_vec(meshMaps, out);
-
 
     // element stiffness matrix and assembly
     for (unsigned int eid = 0; eid < nelem; eid++)
@@ -448,7 +438,7 @@ int main(int argc, char* argv[])
     if (matType == 0)
         stMatBased->finalize();
     else
-        stMatFree->finalize(); // compute trace of matrix when using penalty method
+        stMatFree->finalize();
 
     // These are needed because we used ADD_VALUES for rhs when assembling
     // now we are going to use INSERT_VALUE for Fc in apply_bc_rhs
@@ -465,8 +455,7 @@ int main(int argc, char* argv[])
     VecAssemblyEnd(rhs);
 
     // communication for matrix-based approach
-    if (matType == 0)
-    {
+    if (matType == 0) {
         // stMat->apply_bc_mat();
         stMatBased->finalize();
         stMatBased->dump_mat(fname);

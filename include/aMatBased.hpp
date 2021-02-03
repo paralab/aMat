@@ -17,7 +17,7 @@
 
 #include "aMat.hpp"
 
-namespace par
+namespace par 
 {
 
 // class aMatBased derived from base class aMat
@@ -35,14 +35,15 @@ class aMatBased : public aMat<aMatBased<DT, GI, LI>, DT, GI, LI>
     using ParentType::m_dtTraceK; // penalty number
     using ParentType::m_maps;     // reference to mesh_maps passed in constructor
     using ParentType::m_matType;
+    using ParentType::m_freeType; // 2021.01.06
     using ParentType::m_pMat;   // Petsc matrix
     using ParentType::m_uiRank; // my rank id
     using ParentType::m_uiSize; // total number of ranks
     using typename ParentType::EigenMat;
 
-#ifdef AMAT_PROFILER
+    #ifdef AMAT_PROFILER
     using ParentType::timing_aMat;
-#endif
+    #endif
 
   public:
     /**@brief constructor to initialize variables of aMatBased */
@@ -113,6 +114,9 @@ class aMatBased : public aMat<aMatBased<DT, GI, LI>, DT, GI, LI>
     // Note: can't be 'const' because may call matvec which may need MPI data to be stored...
     Error dump_mat(const char* filename = nullptr);
 
+    /*@brief v = aMat_matrix * u, usef for profiling */
+    Error matmult(Vec v, Vec u);
+
   protected:
     /**@brief matrix-based version of set_element_matrix */
     template<typename MatrixType>
@@ -134,8 +138,7 @@ class aMatBased : public aMat<aMatBased<DT, GI, LI>, DT, GI, LI>
 //==============================================================================================================
 
 template<typename DT, typename GI, typename LI>
-aMatBased<DT, GI, LI>::aMatBased(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType)
-  : ParentType(mesh_maps, bcType)
+aMatBased<DT, GI, LI>::aMatBased(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType) : ParentType(mesh_maps, bcType)
 {
     m_matType = MATRIX_TYPE::MATRIX_BASED;
     // allocate memory holding elemental matrices
@@ -233,9 +236,9 @@ Error aMatBased<DT, GI, LI>::petsc_set_element_matrix(LI eid,
 {
     GI** const m_ulpMap = m_maps.get_Map();
 
-#ifdef AMAT_PROFILER
+    #ifdef AMAT_PROFILER
     timing_aMat[static_cast<int>(PROFILER::PETSC_ASS)].start();
-#endif
+    #endif
 
     // this is number of dofs per block:
     const LI num_dofs_per_block = e_mat.rows();
@@ -268,16 +271,15 @@ Error aMatBased<DT, GI, LI>::petsc_set_element_matrix(LI eid,
             m_dtTraceK += e_mat(r, r);
     }
 
-#ifdef AMAT_PROFILER
+    #ifdef AMAT_PROFILER
     timing_aMat[static_cast<int>(PROFILER::PETSC_ASS)].stop();
-#endif
+    #endif
 
     return Error::SUCCESS;
 } // petsc_set_element_matrix
 
 template<typename DT, typename GI, typename LI>
-Error aMatBased<DT, GI, LI>::dump_mat(const char* filename /* = nullptr */)
-{
+Error aMatBased<DT, GI, LI>::dump_mat(const char* filename /* = nullptr */) {
 
     if (m_pMat == nullptr)
     {
@@ -410,9 +412,9 @@ Error aMatBased<DT, GI, LI>::apply_bc_rhs(Vec rhs)
     // compute KfcUc
     if (m_BcMeth == BC_METH::BC_IMATRIX)
     {
-#ifdef AMAT_PROFILER
+    #ifdef AMAT_PROFILER
         timing_aMat[static_cast<int>(PROFILER::PETSC_KfcUc)].start();
-#endif
+    #endif
         Vec uVec, vVec;
         // this->petsc_create_vec( uVec );
         // this->petsc_create_vec( vVec );
@@ -457,9 +459,9 @@ Error aMatBased<DT, GI, LI>::apply_bc_rhs(Vec rhs)
         VecDestroy(&uVec);
         VecDestroy(&vVec);
 
-#ifdef AMAT_PROFILER
+    #ifdef AMAT_PROFILER
         timing_aMat[static_cast<int>(PROFILER::PETSC_KfcUc)].stop();
-#endif
+    #endif
     } // if (m_BcMeth == BC_METH::BC_IMATRIX)
 
     // modify Fc
@@ -500,6 +502,12 @@ Error aMatBased<DT, GI, LI>::apply_bc_rhs(Vec rhs)
 
     return Error::SUCCESS;
 } // apply_bc_rhs
+
+template<typename DT, typename GI, typename LI>
+Error aMatBased<DT, GI, LI>::matmult(Vec v, Vec u){
+    MatMult(m_pMat, u, v);
+    return Error::SUCCESS;
+}
 
 } // namespace par
 #endif // APTIVEMATRIX_AMATBASED_H
