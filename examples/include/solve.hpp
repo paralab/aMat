@@ -49,7 +49,7 @@ namespace par {
         KSPSetType(ksp, KSPCG);
         KSPSetFromOptions(ksp);
 
-        KSPSetTolerances(ksp, 1E-12, 1E-12, PETSC_DEFAULT, 20000);
+        KSPSetTolerances(ksp, 1E-12, 1E-12, PETSC_DEFAULT, 10000);
 
         // set the matrix associated the linear system
         KSPSetOperators(ksp, m_pMat, m_pMat);
@@ -58,6 +58,7 @@ namespace par {
         // could be overwritten at runtime using -pc_type <type>
         KSPGetPC(ksp,&pc);
         PCSetType(pc, PCJACOBI);
+        //PCSetType(pc, PCNONE);
         PCSetFromOptions(pc);
 
         // solve the system

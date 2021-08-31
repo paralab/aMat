@@ -676,7 +676,6 @@ Error Maps<DT, GI, LI>::buildScatterMap()
         gcount++;
     }
 
-
     LI* sendCounts = new LI[m_uiSize];
     LI* recvCounts = new LI[m_uiSize];
     LI* sendOffset = new LI[m_uiSize];
