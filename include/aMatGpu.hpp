@@ -26,10 +26,15 @@ protected:
 
     unsigned int mui_nElems; // number of independent elements handled by device
     unsigned int mui_nMats; // number of matrices handled by device (i.e. total number of blocks)
+    unsigned int mui_numDofsTotal; // number of local dofs (including ghost dofs)
 
     const std::vector<double *> *m_epMat; // pointer to total elements
     std::vector<unsigned int> m_elemList; // list of elements handled by gpu
     unsigned int** m_localMap;
+
+    // for exclusive write:
+    std::vector<unsigned int> * m_localDof2vHostId;
+    std::vector<unsigned int> * m_localDof2StreamId;
 
     // queue ID of each stream
     magma_queue_t *m_queueStream;
@@ -76,9 +81,15 @@ public:
         return Error::SUCCESS;
     }
 
-    // set map
+    // set maps
     Error set_localMap_pointer(unsigned int **localMap) {
         m_localMap = localMap;
+        return Error::SUCCESS;
+    }
+
+    // set number of local dofs
+    Error set_numDofsTotal(unsigned int numDofsTotal) {
+        mui_numDofsTotal = numDofsTotal;
         return Error::SUCCESS;
     }
 
@@ -91,8 +102,11 @@ public:
     // loop over elements and copy element vectors to pinned host memory md_uHost
     Error scatter_u2uHost(double *u);
 
-    // put
+    // put elemental vectors back to (local) vector
     Error gather_vHost2v(double *v);
+
+    // exclusive-write version of gather_vHost2v
+    Error gather_vHost2v_ew(double * v);
 
     // matrix-vector multiplication
     Error matvec_v1(); // version 1
@@ -107,6 +121,9 @@ protected:
 
     // allocate local-to-thread vectors ue and ve
     Error allocate_local_thread_ue();
+
+    // build maps used in exclusive-write gather_vHost2v()
+    Error build_ewMaps();
 
 }; // class aMatGpu
 
@@ -263,6 +280,9 @@ aMatGpu::~aMatGpu() {
     }
     free(md_ueBufs);
 
+    delete [] m_localDof2StreamId;
+    delete [] m_localDof2vHostId;
+
 } // aMatGpu destructor
 
 
@@ -350,10 +370,40 @@ Error aMatGpu::compute_maps_stream2eid() {
 } // compute_maps_stream2eid
 
 
+// build maps used in exclusive-write gather_vHost2v()
+Error aMatGpu::build_ewMaps(void) {
+    // allocate maps
+    m_localDof2StreamId = new std::vector<unsigned int>[mui_numDofsTotal];
+    m_localDof2vHostId = new std::vector<unsigned int>[mui_numDofsTotal];
+    for (unsigned int s = 0; s < mui_nStreams; s++) {
+        // loop over all matrices (i.e. non-zero blocks) of stream s
+        for (unsigned int m = 0; m < mui_nMatsStream[s]; m++) {
+            // get element id associated with this matrix
+            const unsigned int eid = mui_streamMat2Eid[s][m];
+            // get block_i associated with this matrix
+            const unsigned int blk_i = mui_streamMat2BlkI[s][m];
+            // compute block offse
+            const unsigned int block_row_offset = blk_i * mui_matSize;
+            // loop over all dofs of this block
+            for (unsigned int r = 0; r < mui_matSize; r++) {
+                // compute row id (of the element holding this block) associated with this dof r of block m
+                const unsigned int rowId = m_localMap[eid][block_row_offset + r];
+                // append to ew maps
+                m_localDof2StreamId[rowId].push_back(s);
+                m_localDof2vHostId[rowId].push_back((m * mui_matSize) + r);
+            }
+        }
+    }
+}
+
+
 Error aMatGpu::allocate_device_host_memory() {
 
     // compute maps from [sid][mid] to eid, block_i, block_j, blocks_dim
     compute_maps_stream2eid();
+
+    // build maps used in exclusive-write gather_vHost()
+    build_ewMaps();
 
     magma_int_t err;
     for (unsigned int sid = 0; sid < mui_nStreams; sid++) {
@@ -511,6 +561,39 @@ Error aMatGpu::gather_vHost2v(double *v) {
 
     return Error::SUCCESS;
 } // gather_vHost2v
+
+
+// exclusive-write version of gather_vHost2v
+// this subroutine should be called after the transfer from device to host is done for all stream to md_vHost_s
+Error aMatGpu::gather_vHost2v_ew(double *v) {
+    unsigned int num_finished_streams = 0;
+    std::vector<bool> is_stream_done;
+    is_stream_done.resize(mui_nStreams, false);
+    do {
+        for (unsigned int sid = 0; sid < mui_nStreams; sid++) {
+            if ((!is_stream_done[sid]) &&
+                (cudaStreamQuery(magma_queue_get_cuda_stream(m_queueStream[sid])) == cudaSuccess)) {
+                num_finished_streams++;
+                is_stream_done[sid] = true;
+            }
+        }
+    } while (num_finished_streams < mui_nStreams);
+    #pragma omp parallel
+    {
+        #pragma omp for
+        for (unsigned int d = 0; d < mui_numDofsTotal; d++) {
+            for (unsigned int e = 0; e < m_localDof2StreamId[d].size(); e++) {
+                // get associated stream id
+                const unsigned int sId = m_localDof2StreamId[d][e];
+                // get associated id of vHost vector
+                const unsigned int vHostId = m_localDof2vHostId[d][e];
+                // accumulate the element dof to local dof vector
+                v[d] += md_vHost_s[sId][vHostId];
+            }
+        }
+    }
+    return Error::SUCCESS;
+} // gather_vHost2v_ew
 
 
 Error aMatGpu::matvec_v1() {

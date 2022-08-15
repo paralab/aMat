@@ -650,6 +650,7 @@ Error aMatFree<DT,GI,LI>::finalize_begin() {
         const std::vector<LI>& m_uivDependentElem = m_maps.get_dependentElem();
         LI** const m_uipLocalMap = m_maps.get_LocalMap();
         const LI m_uiNumElems = m_maps.get_NumElems();
+        const LI m_uiNumDofsTotal = m_maps.get_NumDofsTotal();
 
         // initialize MAGMA, allocate object m_aMatGpu and m_aMapGpu_dep for option 5
         init_gpu();
@@ -660,6 +661,7 @@ Error aMatFree<DT,GI,LI>::finalize_begin() {
             // link the object member pointers to element matrix, independent vector, and local map
             m_aMatGpu->set_matrix_pointer(m_epMat, m_uivIndependentElem);
             m_aMatGpu->set_localMap_pointer(m_uipLocalMap);
+            m_aMatGpu->set_numDofsTotal(m_uiNumDofsTotal);
 
             // allocate device memory (ke, ue, ve) and host memory (ue, ve)
             m_aMatGpu->allocate_device_host_memory();
@@ -675,6 +677,7 @@ Error aMatFree<DT,GI,LI>::finalize_begin() {
             }
             m_aMatGpu->set_matrix_pointer(m_epMat, allElem);
             m_aMatGpu->set_localMap_pointer(m_uipLocalMap);
+            m_aMatGpu->set_numDofsTotal(m_uiNumDofsTotal);
 
             // allocate device memory (ke, ue, ve) and host memory (ue, ve)
             m_aMatGpu->allocate_device_host_memory();
@@ -686,13 +689,19 @@ Error aMatFree<DT,GI,LI>::finalize_begin() {
             // for independent elements:
             m_aMatGpu->set_matrix_pointer(m_epMat, m_uivIndependentElem);
             m_aMatGpu->set_localMap_pointer(m_uipLocalMap);
+            m_aMatGpu->set_numDofsTotal(m_uiNumDofsTotal);
+
             m_aMatGpu->allocate_device_host_memory();
+            
             m_aMatGpu->transfer_matrices();
 
             // for dependent elements:
             m_aMatGpu_dep->set_matrix_pointer(m_epMat, m_uivDependentElem);
             m_aMatGpu_dep->set_localMap_pointer(m_uipLocalMap);
+            m_aMatGpu_dep->set_numDofsTotal(m_uiNumDofsTotal);
+
             m_aMatGpu_dep->allocate_device_host_memory();
+            
             m_aMatGpu_dep->transfer_matrices();
         }
     #endif
@@ -3658,7 +3667,8 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuPure(DT *v, DT *u){
 
     // accumulate elemental vectors ve's in vHost (managed by aMatGpu) to v
     // (note: inside this function, we synchronize stream to guaranty vHost received all vectors ve's)
-    m_aMatGpu->gather_vHost2v(v);
+    //m_aMatGpu->gather_vHost2v(v);
+    m_aMatGpu->gather_vHost2v_ew(v);
 
     /* printf("v vector after gathering from vHost\n");
     for (LI i = 0; i < m_uiNumDofsTotal; i++){
@@ -3772,7 +3782,8 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuOverCpu(DT* v, DT* u){
 
     // accumulate elemental vectors ve's in vHost (managed by aMatGpu) to v
     // (note: inside this function, we synchronize stream to guaranty vHost received all vectors ve's)
-    m_aMatGpu->gather_vHost2v(v);
+    //m_aMatGpu->gather_vHost2v(v);
+    m_aMatGpu->gather_vHost2v_ew(v);
 
     // send data from ghost nodes back to owned nodes after computing v
     ghost_send_begin(v);
@@ -3798,11 +3809,13 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuOverGpu(DT *v, DT *u){
 
     ghost_receive_end(u);
 
-    m_aMatGpu->gather_vHost2v(v);
+    //m_aMatGpu->gather_vHost2v(v);
+    m_aMatGpu->gather_vHost2v_ew(v);
 
     m_aMatGpu_dep->scatter_u2uHost(u);
     m_aMatGpu_dep->matvec_v1();
-    m_aMatGpu_dep->gather_vHost2v(v);
+    //m_aMatGpu_dep->gather_vHost2v(v);
+    m_aMatGpu_dep->gather_vHost2v_ew(v);
 
     // send data from ghost nodes back to owned nodes after computing v
     ghost_send_begin(v);

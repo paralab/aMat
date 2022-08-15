@@ -176,6 +176,7 @@ public:
     {
         return m_uipLocalMap;
     }
+
     GI* get_Local2Global() const
     {
         return m_ulpLocal2Global;
