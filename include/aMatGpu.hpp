@@ -566,7 +566,7 @@ Error aMatGpu::gather_vHost2v(double *v) {
                         for (unsigned int r = 0; r < mui_matSize; r++) {
                             const unsigned int rowId = m_localMap[eid][block_row_offset + r];
                             /* no need to omp atomic because the matrices in each stream are completely separate */
-                            #pragma omp atomic
+                            //#pragma omp atomic
                             v[rowId] += md_vHost_s[sid][(mid * mui_matSize) + r];
                         }
                     }
