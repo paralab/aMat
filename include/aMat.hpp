@@ -189,6 +189,9 @@ class aMat {
     Error set_num_streams(LI nStreams) {
         return static_cast<Derived*>(this)->set_num_streams(nStreams);
     }
+    Error get_timer(long double *scatterTime, long double *gatherTime, long double *mvTime, long double *mvTotalTime) {
+        return static_cast<Derived*>(this)->get_timer(scatterTime, gatherTime, mvTime, mvTotalTime);
+    }
     #endif
 
     /**@brief v = aMat_matrix * u, using quasi matrix free */
