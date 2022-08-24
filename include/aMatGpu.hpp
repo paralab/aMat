@@ -53,13 +53,6 @@ protected:
     // list of matrix ids per stream
     std::vector<unsigned int> * m_matIdsPerStream;
 
-    // map of [stream id][mat id] to (global) element id, block_i, block_j, blocks_dim
-    unsigned int **mui_streamMat2Eid;
-    unsigned int **mui_streamMat2BlkI;
-    unsigned int **mui_streamMat2BlkJ;
-    //unsigned int **mui_streamMat2BlkDim;
-    unsigned int **mui_streamMat2BlkId;
-
     // address of array of double on device memory holding values of ke matrices, ue/ve vectors
     double **md_kDevice_s;
     double **md_uDevice_s;
@@ -207,20 +200,6 @@ aMatGpu::~aMatGpu() {
     // delete host memory holding number of matrices per stream
     delete[] mui_nMatsStream;
 
-    // delete map from stream id, mat id to element id
-    for (unsigned int sid = 0; sid < mui_nStreams; sid++) {
-        delete[] mui_streamMat2Eid[sid];
-        delete[] mui_streamMat2BlkI[sid];
-        delete[] mui_streamMat2BlkJ[sid];
-        //delete[] mui_streamMat2BlkDim[sid];
-        delete[] mui_streamMat2BlkId[sid];
-    }
-    delete[] mui_streamMat2Eid;
-    delete[] mui_streamMat2BlkI;
-    delete[] mui_streamMat2BlkJ;
-    //delete[] mui_streamMat2BlkDim;
-    delete[] mui_streamMat2BlkId;
-
     // delete host memory holding local-to-thread element vectors
     for (unsigned int tid = 0; tid < mui_nThreads; tid++) {
         free(md_ueBufs[tid]);
@@ -353,13 +332,6 @@ Error aMatGpu::allocate_variables() {
     
     // mui_nMatsStream = new unsigned int[mui_nStreams];   /* this was done in compute_nStreams */
 
-    /* map from stream id, mat id to (global) element id, block_i, block_j, blocks_dim */
-    mui_streamMat2Eid = new unsigned int *[mui_nStreams];
-    mui_streamMat2BlkI = new unsigned int *[mui_nStreams];
-    mui_streamMat2BlkJ = new unsigned int *[mui_nStreams];
-    //mui_streamMat2BlkDim = new unsigned int *[mui_nStreams];
-    mui_streamMat2BlkId = new unsigned int *[mui_nStreams];
-
     // pointers to device memory holding matrices ke, vectors ue and ve
     md_kDevice_s = new double *[mui_nStreams];
     md_uDevice_s = new double *[mui_nStreams];
@@ -375,12 +347,6 @@ Error aMatGpu::allocate_variables() {
     md_vHost_s = new double *[mui_nStreams];
 
     for (unsigned int sid = 0; sid < mui_nStreams; sid++) {
-        mui_streamMat2Eid[sid] = nullptr;
-        mui_streamMat2BlkI[sid] = nullptr;
-        mui_streamMat2BlkJ[sid] = nullptr;
-        //mui_streamMat2BlkDim[sid] = nullptr;
-        mui_streamMat2BlkId[sid] = nullptr;
-
         md_kDevice_s[sid] = nullptr;
         md_uDevice_s[sid] = nullptr;
         md_vDevice_s[sid] = nullptr;
@@ -488,12 +454,6 @@ Error aMatGpu::transfer_matrices() {
         for (unsigned int mid = 0; mid < mui_nMatsStream[sid]; mid++) {
             const unsigned int m = m_matIdsPerStream[sid][mid];
             const unsigned int eid = m_matId_2_eid[m];
-            //const unsigned int eid = mui_streamMat2Eid[sid][mid];
-            // const unsigned int block_i = mui_streamMat2BlkI[sid][mid];
-            // const unsigned int block_j = mui_streamMat2BlkJ[sid][mid];
-            // const unsigned int blocks_dim = mui_streamMat2BlkDim[sid][mid];
-            // const unsigned int block_id = block_i * blocks_dim + block_j;
-            //const unsigned int block_id = mui_streamMat2BlkId[sid][mid];
             const unsigned int block_id = m_matId_2_blkId[m];
             magma_dsetvector(mui_matSize * mui_matSize, m_epMat[eid][block_id], 1,
                              (md_kDevice_s[sid] + (mid * mui_matSize * mui_matSize)), 1, m_queueStream[sid]);
@@ -526,9 +486,6 @@ Error aMatGpu::scatter_u2uHost(double *u) {
                 const unsigned int eid = m_matId_2_eid[m];
                 const unsigned int block_j = m_matId_2_blkJ[m];
                 const unsigned int block_col_offset = block_j * mui_matSize;
-                // const unsigned int eid = mui_streamMat2Eid[sid][mid];
-                // const unsigned int block_j = mui_streamMat2BlkJ[sid][mid];
-                // const unsigned int block_col_offset = block_j * mui_matSize;
                 for (unsigned int c = 0; c < mui_matSize; c++) {
                     const unsigned int colId = m_localMap[eid][block_col_offset + c];
                     ueLocal[c] = u[colId];
@@ -560,9 +517,6 @@ Error aMatGpu::gather_vHost2v(double *v) {
                         const unsigned int eid = m_matId_2_eid[m];
                         const unsigned int block_i = m_matId_2_blkI[m];
                         const unsigned int block_row_offset = block_i * mui_matSize;
-                        // const unsigned int eid = mui_streamMat2Eid[sid][mid];
-                        // const unsigned int block_i = mui_streamMat2BlkI[sid][mid];
-                        // const unsigned int block_row_offset = block_i * mui_matSize;
                         for (unsigned int r = 0; r < mui_matSize; r++) {
                             const unsigned int rowId = m_localMap[eid][block_row_offset + r];
                             /* no need to omp atomic because the matrices in each stream are completely separate */
