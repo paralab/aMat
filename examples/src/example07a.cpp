@@ -839,7 +839,7 @@ int main(int argc, char* argv[]) {
 
     // ====================== profiling matvec ====================================
     // generate random vector of length = number of owned dofs
-    /* const unsigned int numDofsTotal = meshMaps.get_NumDofsTotal();
+    const unsigned int numDofsTotal = meshMaps.get_NumDofsTotal();
     const unsigned int numDofs = meshMaps.get_NumDofs();
 
     double* X = (double*) malloc(sizeof(double) * (numDofsTotal));
@@ -851,7 +851,7 @@ int main(int argc, char* argv[]) {
     double* Y = (double*) malloc(sizeof(double) * (numDofsTotal));
 
     // total number of matvec's we want to profile
-    const unsigned int num_matvecs = 10;
+    const unsigned int num_matvecs = 50;
     if (rank == 0) printf("Number of matvecs= %d\n", num_matvecs);
 
     if( matType == 0) {
@@ -860,11 +860,11 @@ int main(int argc, char* argv[]) {
         par::create_vec(meshMaps, petsc_Y);
 
         for (unsigned int i = 0; i < num_matvecs; i++){
-            petsc_matvec_time.start();
+            matvec_time.start();
             stMatBased->matmult(petsc_Y, petsc_X);
             //VecAssemblyBegin(petsc_X);
             //VecAssemblyEnd(petsc_X);
-            petsc_matvec_time.stop();
+            matvec_time.stop();
             VecSwap(petsc_Y, petsc_X);
 
             // this is added on May 26, 2021, following ex6
@@ -876,9 +876,9 @@ int main(int argc, char* argv[]) {
     } else {
         for (unsigned int i = 0; i < num_matvecs; i++){
             
-            aMat_matvec_time.start();     
+            matvec_time.start();     
             stMatFree->matvec(Y, X, true);
-            aMat_matvec_time.stop();
+            matvec_time.stop();
 
             // this is the way ex4 done before:
             // double * temp = X;
@@ -892,7 +892,7 @@ int main(int argc, char* argv[]) {
         }
     }
     free (Y);
-    free (X); */
+    free (X);
     // ====================== finish profiling matvec ==============================
 
 
@@ -904,7 +904,8 @@ int main(int argc, char* argv[]) {
     } else {
         stMatFree->dump_mat(fname);
     } */
-    matvec_time.start();
+
+    /* matvec_time.start();
     if (matType == 0)
         par::solve(*stMatBased, (const Vec)rhs, out);
     else
@@ -973,6 +974,11 @@ int main(int argc, char* argv[]) {
     VecNorm(error, NORM_INFINITY, &norm);
     if (rank == 0) {
         printf("Inf norm of error = %20.10f\n", norm);
+    } */
+
+    long double gather_time, scatter_time, mv_time, mvTotal_time;
+    if ((matType == 3) || (matType == 4) || (matType == 5)) {
+       stMatFree->get_timer(&scatter_time, &gather_time, &mv_time, &mvTotal_time);
     }
     // ============================= finish comparing with exact solution =================
 
@@ -980,10 +986,15 @@ int main(int argc, char* argv[]) {
     long double elem_compute_maxTime;
     long double setup_maxTime;
     long double matvec_maxTime;
+    long double gather_maxTime, scatter_maxTime, mv_maxTime, mvTotal_maxTime;
 
     MPI_Reduce(&elem_compute_time.seconds, &elem_compute_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
     MPI_Reduce(&setup_time.seconds, &setup_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
     MPI_Reduce(&matvec_time.seconds, &matvec_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+    MPI_Reduce(&gather_time, &gather_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+    MPI_Reduce(&scatter_time, &scatter_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+    MPI_Reduce(&mv_time, &mv_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+    MPI_Reduce(&mvTotal_time, &mvTotal_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
 
     if (matType == 0) {
         if (rank == 0) {
@@ -1009,6 +1020,7 @@ int main(int argc, char* argv[]) {
             std::cout << "(1) aMatGpu elem compute time = " << elem_compute_maxTime << "\n";
             std::cout << "(2) aMatGpu setup time = " << setup_maxTime << "\n";
             std::cout << "(3) aMatGpu matvec time = " << matvec_maxTime << "\n";
+            std::cout << "(4) aMatGpu (scatter, gather, mv, mvTotal) time = " << scatter_maxTime << ", " << gather_maxTime << ", " << mv_maxTime << ", " << mvTotal_maxTime << "\n";
             outFile << "aMatGpu, " << elem_compute_maxTime << ", " << setup_maxTime << ", " << matvec_maxTime << "\n";
         }
     }

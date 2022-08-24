@@ -386,6 +386,7 @@ int main(int argc, char* argv[]){
 
    free (Y);
    free (X); */
+   // ====================== finish profiling matvec ==============================
 
    // ======================= solve =================================================
    matvec_time.start();
@@ -402,13 +403,13 @@ int main(int argc, char* argv[]){
    // ===================== finish solve =========================================
    
    // print out matrix to file
-   /* if (matType == 0){
-      stMatBased->dump_mat("matrix.out");
-   } else {
-      stMatFree->dump_mat("matrix.out");
-   }
-   // print out rhs to file
-   par::dump_vec(meshMaps, rhs, "rhs.out"); */
+   // if (matType == 0){
+   //    stMatBased->dump_mat("matrix.out");
+   // } else {
+   //    stMatFree->dump_mat("matrix.out");
+   // }
+   // // print out rhs to file
+   // par::dump_vec(meshMaps, rhs, "rhs.out");
 
    // ============================ comparing with exact solution =================
    PetscScalar norm, alpha = -1.0;
@@ -464,15 +465,26 @@ int main(int argc, char* argv[]){
    if (rank == 0) {
       printf("L_inf norm of error = %20.10f\n", norm);
    }
+
+   long double gather_time, scatter_time, mv_time, mvTotal_time;
+   if ((matType == 3) || (matType == 4) || (matType == 5)) {
+      stMatFree->get_timer(&scatter_time, &gather_time, &mv_time, &mvTotal_time);
+   }
    // ============================ finish comparing with exact solution ============
 
    // computing time acrossing ranks and display
    long double elem_compute_maxTime;
    long double setup_maxTime;
    long double matvec_maxTime;
+   long double gather_maxTime, scatter_maxTime, mv_maxTime, mvTotal_maxTime;
+
    MPI_Reduce(&elem_compute_time.seconds, &elem_compute_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
    MPI_Reduce(&setup_time.seconds, &setup_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
    MPI_Reduce(&matvec_time.seconds, &matvec_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+   MPI_Reduce(&gather_time, &gather_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+   MPI_Reduce(&scatter_time, &scatter_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+   MPI_Reduce(&mv_time, &mv_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
+   MPI_Reduce(&mvTotal_time, &mvTotal_maxTime, 1, MPI_LONG_DOUBLE, MPI_MAX, 0, comm);
 
    if (matType == 0) {
       if (rank == 0) {
@@ -498,6 +510,7 @@ int main(int argc, char* argv[]){
          std::cout << "(1) aMatGpu elem compute time = " << elem_compute_maxTime << "\n";
          std::cout << "(2) aMatGpu setup time = " << setup_maxTime << "\n";
          std::cout << "(3) aMatGpu matvec time = " << matvec_maxTime << "\n";
+         std::cout << "(4) aMatGpu (scatter, gather, mv, mvTotal) time = " << scatter_maxTime << ", " << gather_maxTime << ", " << mv_maxTime << ", " << mvTotal_maxTime << "\n";
          outFile << "aMatGpu, " << elem_compute_maxTime << ", " << setup_maxTime << ", " << matvec_maxTime << "\n";
       }
    }

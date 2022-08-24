@@ -41,8 +41,8 @@
 #include <vector>
 
 #ifdef USE_GPU
-    #include "aMatGpu.hpp"
-    //#include "aMatGpu_1.hpp"
+    #include "aMatGpu.hpp" /* using graph-coloring to avoid omp atomic in gather_vHost2v */
+    //#include "aMatGpu_1.hpp" /* uniform distribution of matrices to streams, use omp atomic */
     #include <cuda.h>
     #include "magma_v2.h"
     #include "magma_lapack.h"
