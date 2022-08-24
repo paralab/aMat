@@ -53,6 +53,7 @@ set(INCLUDE_FILES
         examples/include/shapeFunc.hpp
         examples/include/solve.hpp
         include/aMatGpu.hpp
+        include/aMatGpu_1.hpp
         examples/include/GmshMesh.hpp)
 
 set(SOURCE_FILES

@@ -42,6 +42,7 @@
 
 #ifdef USE_GPU
     #include "aMatGpu.hpp"
+    //#include "aMatGpu_1.hpp"
     #include <cuda.h>
     #include "magma_v2.h"
     #include "magma_lapack.h"
