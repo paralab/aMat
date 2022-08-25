@@ -36,6 +36,10 @@ protected:
     std::vector<unsigned int> m_matId_2_blocksDim;
     std::vector<unsigned int> m_matId_2_blkId;
 
+    // used in no-stream scatter_u2Host()
+    unsigned int * m_matId_2_sId;
+    unsigned int * m_matId_2_localStreamMatId;
+
     const std::vector<double *> *m_epMat; // pointer to total elements
     std::vector<unsigned int> m_elemList; // list of elements handled by gpu
     unsigned int** m_localMap;
@@ -192,6 +196,9 @@ aMatGpu::~aMatGpu() {
     free(md_ueBufs);
 
     delete [] m_matIdsPerStream;
+
+    delete [] m_matId_2_sId;
+    delete [] m_matId_2_localStreamMatId;
 } // aMatGpu destructor
 
 
@@ -238,6 +245,11 @@ Error aMatGpu::compute_nMatrices() {
     }
     // update number of non-zero blocks, this is number of matrices handled by GPU_OVER_CPU
     mui_nMats = m_matId_2_eid.size();
+
+    // for non-stream scatter_u2uHost()
+    m_matId_2_sId = new unsigned int[mui_nMats];
+    m_matId_2_localStreamMatId = new unsigned int[mui_nMats];
+
     return Error::SUCCESS;
 }
 
@@ -269,7 +281,13 @@ Error aMatGpu::compute_nStreams() {
     mui_nMatsStream = new unsigned int[mui_nStreams];
     for (unsigned int s = 0; s < mui_nStreams; s++) {
         mui_nMatsStream[s] = m_matIdsPerStream[s].size();
+        for (unsigned int m = 0; m < m_matIdsPerStream[s].size(); m++) {
+            const unsigned int mId = m_matIdsPerStream[s][m];
+            m_matId_2_sId[mId] = s;
+            m_matId_2_localStreamMatId[mId] = m;
+        }
     }
+    
     return Error::SUCCESS;
 }
 
@@ -445,6 +463,31 @@ Error aMatGpu::transfer_matrices() {
 
 // loop over elements, based on the map, extract ue from u and put into md_uHost
 Error aMatGpu::scatter_u2uHost(double *u) {
+    #pragma omp parallel
+    {
+        const unsigned int tId = omp_get_thread_num();
+        if (md_ueBufs[tId] == nullptr) {
+            md_ueBufs[tId] = (double*)malloc(mui_matSize * sizeof(double));
+        }
+        double* ueLocal = md_ueBufs[tId];
+        #pragma omp for
+        for (unsigned m = 0; m < mui_nMats; m++) {
+            const unsigned int sid = m_matId_2_sId[m];
+            const unsigned int mid = m_matId_2_localStreamMatId[m];
+            const unsigned int eid = m_matId_2_eid[m];
+            const unsigned int block_j = m_matId_2_blkJ[m];
+            const unsigned int block_col_offset = block_j * mui_matSize;
+            for (unsigned int c = 0; c < mui_matSize; c++) {
+                const unsigned int colId = m_localMap[eid][block_col_offset + c];
+                ueLocal[c] = u[colId];
+                //md_uHost_s[sid][(i * mui_matSize) + c] = u[colId];
+            }
+            memcpy(&md_uHost_s[sid][mid * mui_matSize], ueLocal, mui_matSize * sizeof(double));
+        }
+    }
+    return Error::SUCCESS;
+}
+/* Error aMatGpu::scatter_u2uHost(double *u) {
     for (unsigned int sid = 0; sid < mui_nStreams; sid++) {
         #pragma omp parallel
         {
@@ -470,7 +513,7 @@ Error aMatGpu::scatter_u2uHost(double *u) {
         }
     }
     return Error::SUCCESS;
-} // scatter_u2uHost
+} // scatter_u2uHost */
 
 
 Error aMatGpu::gather_vHost2v(double *v) {
