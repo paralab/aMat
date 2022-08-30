@@ -29,92 +29,95 @@ protected:
     unsigned int mui_nMats; // number of matrices handled by device (i.e. total number of blocks)
     unsigned int mui_numDofsTotal; // number of local dofs (including ghost dofs)
 
-    // map from matrix id (i.e. non-zero block of element matrix) to {eid, i-index, j-index, blocksDim, blkId}
+    /* Notes:
+    - Matrix ids are determined as follows. From the given local map
+    (1) loop over elements, for each element loop over block pointers of the element
+    (2) if the block pointer is not nulptr, push back that (non-zero) block to the list of matrices
+    - The matrices ids will be in the order of that list 
+    - The data structure of element matrices is
+    m_epMat = [e1, e2, ..., eN], where ei = std::vector<double*>, some ei can be a nulptr
+    for a non-zero block: ei = [p1, p2, ..., pk] where k is the number of blocks for element ei
+    pk = [m1, m2, ..., mN] where mi is the ith component of the block k */
     std::vector<unsigned int> m_matId_2_eid;
     std::vector<unsigned int> m_matId_2_blkI;
     std::vector<unsigned int> m_matId_2_blkJ;
     std::vector<unsigned int> m_matId_2_blocksDim;
     std::vector<unsigned int> m_matId_2_blkId;
 
-    // used in no-stream scatter_u2Host()
-    unsigned int * m_matId_2_sId;
-    unsigned int * m_matId_2_localStreamMatId;
+    unsigned int * m_matId_2_sId;                   // map from matrix id to stream id (i.e. the stream that this matrix is belong to)
+    unsigned int * m_matId_2_localStreamMatId;      // map from matrix id to local-to-stream matrix id (i.e. matrix id inside the stream that the matrix is belong to)
 
-    const std::vector<double *> *m_epMat; // pointer to total elements
-    std::vector<unsigned int> m_elemList; // list of elements handled by gpu
-    unsigned int** m_localMap;
+    const std::vector<double *> *m_epMat;           // pointer to total elements
+    std::vector<unsigned int> m_elemList;           // list of elements handled by gpu
+    unsigned int** m_localMap;                      // local map given by user
 
-    // queue ID of each stream
-    magma_queue_t *m_queueStream;
+    magma_queue_t *m_queueStream;                   // queue ID of each stream
 
-    // number of matrices/blocks per stream
-    unsigned int *mui_nMatsStream;
+    unsigned int *mui_nMatsStream;                  // number of matrices (i.e. blocks) per stream
 
-    // list of matrix ids per stream
-    std::vector<unsigned int> * m_matIdsPerStream;
+    std::vector<unsigned int> * m_matIdsPerStream;  // list of matrix ids per stream
 
-    // address of array of double on device memory holding values of ke matrices, ue/ve vectors
+    /* address of array of double on device memory holding values of ke matrices, ue/ve vectors */
     double **md_kDevice_s;
     double **md_uDevice_s;
     double **md_vDevice_s;
 
-    // address of array of double on host memory holding values of ue/ve vectors, must be pinned memory
+    /* address of array of double on host memory holding values of ue/ve vectors, must be pinned memory */
     double **md_uHost_s;
     double **md_vHost_s;
 
-    // address of array of doulbe* on device memory holding address of each ke matrix, ue/ve vector
+    /* address of array of doulbe* on device memory holding address of each ke matrix, ue/ve vector */
     double ***m_kDevAddress_s;
     double ***m_uDevAddress_s;
     double ***m_vDevAddress_s;
 
-    unsigned int mui_nThreads; // max number of omp threads
-    double **md_ueBufs; // local-to-thread elemental vectors (used in open mp parallel)
+    unsigned int mui_nThreads;      // max number of omp threads
+    double **md_ueBufs;             // local-to-thread elemental vectors (used in open mp parallel)
 
 public:
     profiler_t gather_time;
 
-    // ========== methods ==========
 public:
     aMatGpu(unsigned int matSize, unsigned int nStreams, MPI_Comm comm);
 
     ~aMatGpu();
 
-    // set element matrices
+    /* set element matrices */
     Error set_matrix_pointer(const std::vector<double *> *epMat, const std::vector<unsigned int> elemList);
 
-    // set maps
+    /* set maps */
     Error set_localMap_pointer(unsigned int **localMap);
 
-    // set number of local dofs
+    /* set number of local dofs */
     Error set_numDofsTotal(unsigned int numDofsTotal);
 
-    // compute total non-zero blocks handled by gpu
+    /* compute total non-zero blocks handled by gpu */
     Error compute_nMatrices();
 
-    // determine number of streams using graph coloring
+    /* determine number of streams using graph coloring */
     Error compute_nStreams();
 
-    // setup gpu environment
+    /* setup gpu environment */
     Error setup_environment();
 
-    // allocate variables
+    /* allocate variables */
     Error allocate_variables();
 
-    // allocate memory on host and device
+    /* allocate memory on host and device */
     Error allocate_device_host_memory();
 
-    // loop over elements and transfer element matrix (could contain multiple blocks) to device memory
+    /* loop over elements and transfer element matrix (could contain multiple blocks) to device memory */
     Error transfer_matrices();
 
-    // loop over elements and copy element vectors to pinned host memory md_uHost
+    /* loop over elements and copy element vectors to pinned host memory md_uHost */
     Error scatter_u2uHost(double *u);
 
-    // put elemental vectors back to (local) vector
+    /* put elemental vectors back to (local) vector */
     Error gather_vHost2v(double *v);
 
-    // matrix-vector multiplication
-    Error matvec_v1(); // version 1
-    Error matvec_v2(); // version 2
+    /* matrix-vector multiplication */
+    Error matvec_v1(); // version 1, loop over streams then inside each loop: (1) transfer, (2) kernel execution, (3) transfer
+    Error matvec_v2(); // version 2, (1) loop over streams: transfer, (2) loop over streams: kernel execuation, (3) loop over streams: transfer
 
 protected:
 
@@ -487,33 +490,6 @@ Error aMatGpu::scatter_u2uHost(double *u) {
     }
     return Error::SUCCESS;
 }
-/* Error aMatGpu::scatter_u2uHost(double *u) {
-    for (unsigned int sid = 0; sid < mui_nStreams; sid++) {
-        #pragma omp parallel
-        {
-            const unsigned int tId = omp_get_thread_num();
-            if (md_ueBufs[tId] == nullptr) {
-               md_ueBufs[tId] = (double*)malloc(mui_matSize * sizeof(double));
-            }
-            double* ueLocal = md_ueBufs[tId];
-
-            #pragma omp for
-            for (unsigned int mid = 0; mid < mui_nMatsStream[sid]; mid++) {
-                const unsigned int m = m_matIdsPerStream[sid][mid];
-                const unsigned int eid = m_matId_2_eid[m];
-                const unsigned int block_j = m_matId_2_blkJ[m];
-                const unsigned int block_col_offset = block_j * mui_matSize;
-                for (unsigned int c = 0; c < mui_matSize; c++) {
-                    const unsigned int colId = m_localMap[eid][block_col_offset + c];
-                    ueLocal[c] = u[colId];
-                    //md_uHost_s[sid][(i * mui_matSize) + c] = u[colId];
-                }
-                memcpy(&md_uHost_s[sid][mid * mui_matSize], ueLocal, mui_matSize * sizeof(double));
-            }
-        }
-    }
-    return Error::SUCCESS;
-} // scatter_u2uHost */
 
 
 Error aMatGpu::gather_vHost2v(double *v) {

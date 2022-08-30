@@ -41,8 +41,9 @@
 #include <vector>
 
 #ifdef USE_GPU
-    #include "aMatGpu.hpp" /* using graph-coloring to avoid omp atomic in gather_vHost2v */
-    //#include "aMatGpu_1.hpp" /* uniform distribution of matrices to streams, use omp atomic */
+    #include "aMatGpu.hpp"      /* using graph-coloring to avoid omp atomic in gather_vHost2v, no stream in scatter_u2uHost */
+    //#include "aMatGpu_1.hpp"  /* uniform distribution of matrices to streams, use omp atomic, scatter_u2uHost is separate from matvec_v1/v2(), i.e. no overlapping between u2uHost and gpu procedures */
+    //#include "aMatGpu_2.hpp"  /* scatter_u2uHost is incorporated inside stream loop with matvec_v1() to have overlapping between u2uHost and gpu procedures, need to modify aMatFree::matvec_ghosted_... to comment out the call of matvec_v1()*/
     #include <cuda.h>
     #include "magma_v2.h"
     #include "magma_lapack.h"

@@ -101,12 +101,7 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI> {
         aMatGpu * m_aMatGpu; // for computing all elements (option 3) or only independent elements (option 4)
         aMatGpu * m_aMatGpu_dep; // for computing dependent elements (option 5)
         LI m_uiNumStreams = 0; // todo: user inputs number of streams
-        profiler_t scatter_time, mv_time, mvTotal_time;
     #endif
-
-    //2021.08.27
-    // AsyncExchangeCtx m_sendCtx(nullptr); // context for sending
-    // AsyncExchangeCtx m_recvCtx(nullptr); // context for receiving
 
     public:
     /**@brief constructor to initialize variables of aMatFree */
@@ -236,13 +231,6 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI> {
         m_uiNumStreams = nStreams;
         return Error::SUCCESS;
     }
-    Error get_timer(long double *scatterTime, long double *gatherTime, long double * mvTime, long double *mvTotalTime) {
-        *scatterTime = scatter_time.seconds;
-        *mvTime = mv_time.seconds;
-        *mvTotalTime = mvTotal_time.seconds;
-        *gatherTime = m_aMatGpu->gather_time.seconds;
-        return Error::SUCCESS;
-    }
     #endif
 
     protected:
@@ -341,7 +329,7 @@ class aMatFree : public aMat<aMatFree<DT, GI, LI>, DT, GI, LI> {
 
     #ifdef USE_GPU
         /**@brief initialize gpu */
-        Error init_gpu(unsigned int nIndElems, unsigned int nDepElems);
+        Error init_gpu();
         /**@brief finalize gpu */
         Error finalize_gpu();
         /**@brief matrix-vector multiplication using gpu */
@@ -431,9 +419,6 @@ aMatFree<DT, GI, LI>::aMatFree(Maps<DT, GI, LI>& mesh_maps, BC_METH bcType) : Pa
     #ifdef USE_GPU
     m_aMatGpu = nullptr;
     m_aMatGpu_dep = nullptr;
-    scatter_time.clear();
-    mv_time.clear();
-    mvTotal_time.clear();
     #endif
 
     // allocate memory holding elemental matrices
@@ -661,31 +646,22 @@ Error aMatFree<DT,GI,LI>::finalize_begin() {
         const std::vector<LI>& m_uivDependentElem = m_maps.get_dependentElem();
         LI** const m_uipLocalMap = m_maps.get_LocalMap();
         const LI m_uiNumElems = m_maps.get_NumElems();
-        const LI m_uiNumDofsTotal = m_maps.get_NumDofsTotal();
 
         // initialize MAGMA, allocate object m_aMatGpu and m_aMapGpu_dep for option 5
-        printf("rank %d, independent elems = %d, dependent elems = %d\n", m_uiRank, m_uivIndependentElem.size(), m_uivDependentElem.size());
-        init_gpu(m_uivIndependentElem.size(), m_uivDependentElem.size());
+        init_gpu();
 
         // 2021.01.06 set up GPU_OVER_CPU if it is chosen
         if (m_freeType == MATFREE_TYPE::GPU_OVER_CPU){
             if (m_uiRank == 0) printf("GPU method: GPU-CPU\n");
-            if (m_aMatGpu != nullptr) {
-                // link the object member pointers to element matrix, independent vector, and local map
-                m_aMatGpu->set_matrix_pointer(m_epMat, m_uivIndependentElem);
-                m_aMatGpu->set_localMap_pointer(m_uipLocalMap);
-                m_aMatGpu->set_numDofsTotal(m_uiNumDofsTotal);
-                m_aMatGpu->compute_nMatrices();
-                m_aMatGpu->compute_nStreams();
-                m_aMatGpu->setup_environment();
-                m_aMatGpu->allocate_variables();
+            // link the object member pointers to element matrix, independent vector, and local map
+            m_aMatGpu->set_matrix_pointer(m_epMat, m_uivIndependentElem);
+            m_aMatGpu->set_localMap_pointer(m_uipLocalMap);
 
-                // allocate device memory (ke, ue, ve) and host memory (ue, ve)
-                m_aMatGpu->allocate_device_host_memory();
+            // allocate device memory (ke, ue, ve) and host memory (ue, ve)
+            m_aMatGpu->allocate_device_host_memory();
 
-                // transfer matrices from host to device
-                m_aMatGpu->transfer_matrices();
-            }
+            // transfer matrices from host to device
+            m_aMatGpu->transfer_matrices();
         } else if (m_freeType == MATFREE_TYPE::GPU_PURE){
             if (m_uiRank == 0) printf("GPU method: pure GPU\n");
             // independent elements are all elements!
@@ -695,11 +671,6 @@ Error aMatFree<DT,GI,LI>::finalize_begin() {
             }
             m_aMatGpu->set_matrix_pointer(m_epMat, allElem);
             m_aMatGpu->set_localMap_pointer(m_uipLocalMap);
-            m_aMatGpu->set_numDofsTotal(m_uiNumDofsTotal);
-            m_aMatGpu->compute_nMatrices();
-            m_aMatGpu->compute_nStreams();
-            m_aMatGpu->setup_environment();
-            m_aMatGpu->allocate_variables();
 
             // allocate device memory (ke, ue, ve) and host memory (ue, ve)
             m_aMatGpu->allocate_device_host_memory();
@@ -708,34 +679,17 @@ Error aMatFree<DT,GI,LI>::finalize_begin() {
             m_aMatGpu->transfer_matrices();
         } else if (m_freeType == MATFREE_TYPE::GPU_OVER_GPU){
             if (m_uiRank == 0) printf("GPU method: GPU-GPU\n");
-            if (m_aMatGpu != nullptr) {
-                // for independent elements:
-                m_aMatGpu->set_matrix_pointer(m_epMat, m_uivIndependentElem);
-                m_aMatGpu->set_localMap_pointer(m_uipLocalMap);
-                m_aMatGpu->set_numDofsTotal(m_uiNumDofsTotal);
-                m_aMatGpu->compute_nMatrices();
-                m_aMatGpu->compute_nStreams();
-                m_aMatGpu->setup_environment();
-                m_aMatGpu->allocate_variables();
+            // for independent elements:
+            m_aMatGpu->set_matrix_pointer(m_epMat, m_uivIndependentElem);
+            m_aMatGpu->set_localMap_pointer(m_uipLocalMap);
+            m_aMatGpu->allocate_device_host_memory();
+            m_aMatGpu->transfer_matrices();
 
-                m_aMatGpu->allocate_device_host_memory();
-                
-                m_aMatGpu->transfer_matrices();
-            }
-            if (m_aMatGpu_dep != nullptr) {
-                // for dependent elements:
-                m_aMatGpu_dep->set_matrix_pointer(m_epMat, m_uivDependentElem);
-                m_aMatGpu_dep->set_localMap_pointer(m_uipLocalMap);
-                m_aMatGpu_dep->set_numDofsTotal(m_uiNumDofsTotal);
-                m_aMatGpu_dep->compute_nMatrices();
-                m_aMatGpu_dep->compute_nStreams();
-                m_aMatGpu_dep->setup_environment();
-                m_aMatGpu_dep->allocate_variables();
-
-                m_aMatGpu_dep->allocate_device_host_memory();
-                
-                m_aMatGpu_dep->transfer_matrices();
-            }
+            // for dependent elements:
+            m_aMatGpu_dep->set_matrix_pointer(m_epMat, m_uivDependentElem);
+            m_aMatGpu_dep->set_localMap_pointer(m_uipLocalMap);
+            m_aMatGpu_dep->allocate_device_host_memory();
+            m_aMatGpu_dep->transfer_matrices();
         }
     #endif
 
@@ -1703,8 +1657,8 @@ Error aMatFree<DT, GI, LI>::matvec(DT* v, const DT* u, bool isGhosted) {
         #else
             #ifndef USE_GPU
             if (m_freeType == MATFREE_TYPE::QUASI_FREE){
-                //matvec_ghosted_noOMP(v, (DT*)u);
-                matvec_ghosted_noOMP_noBlockDIM(v, (DT*)u);
+                matvec_ghosted_noOMP(v, (DT*)u);
+                //matvec_ghosted_noOMP_noBlockDIM(v, (DT*)u);
             } else if (m_freeType == MATFREE_TYPE::FREE){
                 matvec_ghosted_noOMP_free(v, (DT*)u);
             }
@@ -3643,7 +3597,7 @@ Error aMatFree<DT, GI, LI>::matvec_ghosted_noOMP_free(DT* v, DT* u) {
 
 #ifdef USE_GPU
 template<typename DT, typename GI, typename LI>
-Error aMatFree<DT,GI,LI>::init_gpu(unsigned int nIndElems, unsigned int nDepElems) {
+Error aMatFree<DT,GI,LI>::init_gpu() {
 
     magma_init();
 
@@ -3653,28 +3607,7 @@ Error aMatFree<DT,GI,LI>::init_gpu(unsigned int nIndElems, unsigned int nDepElem
     const LI blocks_dim = (LI)sqrt(m_epMat[eid].size());
     const LI m_uiMatSize = m_uiDofsPerElem[eid]/blocks_dim;
 
-    if (m_freeType == MATFREE_TYPE::GPU_PURE) {
-        m_aMatGpu = new aMatGpu(m_uiMatSize, m_uiNumStreams, m_comm);
-    } else if (m_freeType == MATFREE_TYPE::GPU_OVER_CPU) {
-        if (nIndElems > 0) {
-            /* if there are independent elements, then use GPU for those
-            otherwise, i.e. all elements are dependent, use cpu */
-            m_aMatGpu = new aMatGpu(m_uiMatSize, m_uiNumStreams, m_comm);
-        }
-    } else if (m_freeType == MATFREE_TYPE::GPU_OVER_GPU) {
-        if ((nIndElems > 0) && (nDepElems > 0)) {
-            /* if there are both dependent and independ elements*/
-            m_aMatGpu = new aMatGpu(m_uiMatSize, m_uiNumStreams, m_comm);
-            m_aMatGpu_dep = new aMatGpu(m_uiMatSize, m_uiNumStreams, m_comm);
-        } else if (nIndElems <= 0) {
-            /* there are only dependent elements */
-            m_aMatGpu_dep = new aMatGpu(m_uiMatSize, m_uiNumStreams, m_comm);
-        } else {
-            /* there are only independent elements */
-            m_aMatGpu = new aMatGpu(m_uiMatSize, m_uiNumStreams, m_comm);
-        }
-    }
-    
+    m_aMatGpu = new aMatGpu(m_uiMatSize, m_uiNumStreams, m_comm);
 
     // for overlap gpu with gpu: a separate object to handle dependent elements
     if (m_freeType == MATFREE_TYPE::GPU_OVER_GPU){
@@ -3698,7 +3631,6 @@ Error aMatFree<DT,GI,LI>::finalize_gpu(){
 template<typename DT, typename GI, typename LI>
 Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuPure(DT *v, DT *u){
     const LI m_uiDofPostGhostEnd    = m_maps.get_DofPostGhostEnd();
-    mvTotal_time.start();
     // initialize v (size of v = m_uiNodesPostGhostEnd = m_uiNumDofsTotal)
     for (LI i = 0; i < m_uiDofPostGhostEnd; i++) {
         v[i] = 0.0;
@@ -3714,10 +3646,7 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuPure(DT *v, DT *u){
     } */
 
     // extract element vectors ue's from u and place in uHost (managed by aMatGpu)
-    mv_time.start();
-    scatter_time.start();
     m_aMatGpu->scatter_u2uHost(u);
-    scatter_time.stop();
 
     // perform ve = ke * ue for e = 1...nElems using GPU_OVER_CPU
     m_aMatGpu->matvec_v1();
@@ -3726,8 +3655,6 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuPure(DT *v, DT *u){
     // accumulate elemental vectors ve's in vHost (managed by aMatGpu) to v
     // (note: inside this function, we synchronize stream to guaranty vHost received all vectors ve's)
     m_aMatGpu->gather_vHost2v(v);
-    //m_aMatGpu->gather_vHost2v_ew(v);
-    mv_time.stop();
 
     /* printf("v vector after gathering from vHost\n");
     for (LI i = 0; i < m_uiNumDofsTotal; i++){
@@ -3737,7 +3664,7 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuPure(DT *v, DT *u){
     // send data from ghost nodes back to owned nodes after computing v
     ghost_send_begin(v);
     ghost_send_end(v);
-    mvTotal_time.stop();
+
     return Error::SUCCESS;
 } // matvec_ghosted_gpuPure
 
@@ -3757,14 +3684,12 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuOverCpu(DT* v, DT* u){
     ghost_receive_begin(u);
 
     // while waiting for communication among MPI ranks, work on indepedent elements using GPU_OVER_CPU
-    if (m_aMatGpu != nullptr) {
-        // extract element vectors ue's from u and place in uHost (managed by aMatGpu)
-        m_aMatGpu->scatter_u2uHost(u);
+    // extract element vectors ue's from u and place in uHost (managed by aMatGpu)
+    m_aMatGpu->scatter_u2uHost(u);
 
-        // perform ve = ke * ue for e = 1...nElems using GPU_OVER_CPU
-        m_aMatGpu->matvec_v1();
-        //m_aMatGpu->matvec_v2();
-    }
+    // perform ve = ke * ue for e = 1...nElems using GPU_OVER_CPU
+    m_aMatGpu->matvec_v1();
+    //m_aMatGpu->matvec_v2();
 
     // finishing communication
     ghost_receive_end(u);
@@ -3844,7 +3769,6 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuOverCpu(DT* v, DT* u){
     // accumulate elemental vectors ve's in vHost (managed by aMatGpu) to v
     // (note: inside this function, we synchronize stream to guaranty vHost received all vectors ve's)
     m_aMatGpu->gather_vHost2v(v);
-    //m_aMatGpu->gather_vHost2v_ew(v);
 
     // send data from ghost nodes back to owned nodes after computing v
     ghost_send_begin(v);
@@ -3863,24 +3787,19 @@ Error aMatFree<DT,GI,LI>::matvec_ghosted_gpuOverGpu(DT *v, DT *u){
     }
 
     ghost_receive_begin(u);
-    if (m_aMatGpu != nullptr) {
-        // overlap computation of independent elements with MPI communications:
-        m_aMatGpu->scatter_u2uHost(u);
-        m_aMatGpu->matvec_v1();
-    }
-    ghost_receive_end(u);
-    if (m_aMatGpu != nullptr) {
-        m_aMatGpu->gather_vHost2v(v);
-        //m_aMatGpu->gather_vHost2v_ew(v);
-    }
 
-    if (m_aMatGpu_dep != nullptr){
-        m_aMatGpu_dep->scatter_u2uHost(u);
-        m_aMatGpu_dep->matvec_v1();
+    // overlap computation of independent elements with MPI communications:
+    m_aMatGpu->scatter_u2uHost(u);
+    m_aMatGpu->matvec_v1();
+
+    ghost_receive_end(u);
+
+    m_aMatGpu->gather_vHost2v(v);
+
+    m_aMatGpu_dep->scatter_u2uHost(u);
+    m_aMatGpu_dep->matvec_v1();
     m_aMatGpu_dep->gather_vHost2v(v);
-    //m_aMatGpu_dep->gather_vHost2v_ew(v);
-    }
-    
+
     // send data from ghost nodes back to owned nodes after computing v
     ghost_send_begin(v);
     ghost_send_end(v);

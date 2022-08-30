@@ -60,6 +60,7 @@ void meshGraph::greedyColoring()
 {
 	// Assign the first color to first vertex
 	color[0] = 0;
+	nColors = 1; // Han added, for the case of only 1 vertex in the graph
 
 	// Initialize remaining V-1 vertices as unassigned
 	for (int u = 1; u < V; u++)

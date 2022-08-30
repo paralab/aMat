@@ -1,6 +1,6 @@
 // class matvec on gpu used for aMat, allocate according to stream, distinguish independent/dependent elements
 // ASSUMPTIONS: all elements in the mesh have the same size of block matrix
-// version 1.1: use initial approach, i.e. uniformly distribute elements to streams --> need omp atomic in gather_vHost2v()
+// version 1.2: scatter_u2uHost() is inside stream loop so that cpu-gpu data transfer and kernel execution can start while cpu is still scattering
 #ifndef AMATGPU_H
 #define AMATGPU_H
 
@@ -13,6 +13,7 @@
 
 #include <vector>
 #include <assert.h>
+#include "meshGraph.hpp"
 
 enum class Error {
     SUCCESS, FAILED
@@ -35,6 +36,10 @@ protected:
     std::vector<unsigned int> m_matId_2_blkJ;
     std::vector<unsigned int> m_matId_2_blocksDim;
     std::vector<unsigned int> m_matId_2_blkId;
+
+    // used in no-stream scatter_u2Host()
+    unsigned int * m_matId_2_sId;
+    unsigned int * m_matId_2_localStreamMatId;
 
     const std::vector<double *> *m_epMat; // pointer to total elements
     std::vector<unsigned int> m_elemList; // list of elements handled by gpu
@@ -192,6 +197,9 @@ aMatGpu::~aMatGpu() {
     free(md_ueBufs);
 
     delete [] m_matIdsPerStream;
+
+    delete [] m_matId_2_sId;
+    delete [] m_matId_2_localStreamMatId;
 } // aMatGpu destructor
 
 
@@ -238,6 +246,11 @@ Error aMatGpu::compute_nMatrices() {
     }
     // update number of non-zero blocks, this is number of matrices handled by GPU_OVER_CPU
     mui_nMats = m_matId_2_eid.size();
+
+    // for non-stream scatter_u2uHost()
+    m_matId_2_sId = new unsigned int[mui_nMats];
+    m_matId_2_localStreamMatId = new unsigned int[mui_nMats];
+
     return Error::SUCCESS;
 }
 
@@ -245,41 +258,37 @@ Error aMatGpu::compute_nMatrices() {
 Require: {mui_nMats, mi_rank, mui_numDofsTotal, mui_matSize, m_matId_2_eid/blckI, m_localMap}
 Output: {mui_nStreams, m_matIdsPerStream} */
 Error aMatGpu::compute_nStreams() {
-
-    /* keep number of streams (set in constructor) which is given by user 
-    distribute uniformly matrices to stream */
-    printf("rank %d, number of streams: %d, number of matrices: %d\n", mi_rank, mui_nStreams, mui_nMats);
-
-    /* compute number of matrices for each stream */
-    mui_nMatsStream = new unsigned int[mui_nStreams];
-    const unsigned int residual = mui_nMats % mui_nStreams;
-    if (residual == 0) {
-        for (unsigned int sid = 0; sid < mui_nStreams; sid++) {
-            mui_nMatsStream[sid] = mui_nMats / mui_nStreams;
-        }
-    } else {
-        for (unsigned int sid = 0; sid < residual; sid++) {
-            mui_nMatsStream[sid] = ((mui_nMats - residual) / mui_nStreams) + 1;
-        }
-        for (unsigned int sid = residual; sid < mui_nStreams; sid++) {
-            mui_nMatsStream[sid] = ((mui_nMats - residual) / mui_nStreams);
-        }
-    }
+    meshGraph mGraph(mui_nMats, mi_rank);   // mui_nMats = number of matrices handled by gpu (i.e. non-zero blocks)
+    
+    /* create a graph from give mesh */
+    mGraph.mesh2Graph_xfem(mui_numDofsTotal, mui_nMats, mui_matSize, 
+                            m_matId_2_eid.data(), m_matId_2_blkI.data(), m_localMap);
+    
+    /* coloring the graph */
+    mGraph.greedyColoring();
+    
+    /* get number of colors which is the number of streams */
+    mui_nStreams = mGraph.nColors;
+    printf("rank %d, number of streams: %d\n", mi_rank, mui_nStreams);
 
     /* get list of matrices associated with each stream 
     m_matIdsPerStream[sId].size() = number of matrices in stream sId
     m_matIdsPerStream[sId][i] = matrix_Id of matrix i in stream sId */
     m_matIdsPerStream = new std::vector<unsigned int>[mui_nStreams];
-    unsigned int offset[mui_nStreams] = {0};
-    for (unsigned int s = 1; s < mui_nStreams; s++) {
-        offset[s] = offset[s-1] + mui_nMatsStream[s-1];
-    }
+    mGraph.computeVerticesPerColor(m_matIdsPerStream);
+
+    /* for using the interface of old code, I compute the number of matrices of each stream here,
+    although it can be known from the size() of std::vector */
+    mui_nMatsStream = new unsigned int[mui_nStreams];
     for (unsigned int s = 0; s < mui_nStreams; s++) {
-        for (unsigned int m = 0; m < mui_nMatsStream[s]; m++) {
-            m_matIdsPerStream[s].push_back(offset[s] + m);
+        mui_nMatsStream[s] = m_matIdsPerStream[s].size();
+        for (unsigned int m = 0; m < m_matIdsPerStream[s].size(); m++) {
+            const unsigned int mId = m_matIdsPerStream[s][m];
+            m_matId_2_sId[mId] = s;
+            m_matId_2_localStreamMatId[mId] = m;
         }
     }
-
+    
     return Error::SUCCESS;
 }
 
@@ -453,8 +462,10 @@ Error aMatGpu::transfer_matrices() {
 }// transfer_matrices
 
 
-// loop over elements, based on the map, extract ue from u and put into md_uHost
+/* loop over elements, based on the map, extract ue from u and put into md_uHost */
 Error aMatGpu::scatter_u2uHost(double *u) {
+    double alpha = MAGMA_D_MAKE(1.0, 0.0);
+    double beta = MAGMA_D_MAKE(0.0, 0.0);
     for (unsigned int sid = 0; sid < mui_nStreams; sid++) {
         #pragma omp parallel
         {
@@ -478,9 +489,27 @@ Error aMatGpu::scatter_u2uHost(double *u) {
                 memcpy(&md_uHost_s[sid][mid * mui_matSize], ueLocal, mui_matSize * sizeof(double));
             }
         }
+        // transfer uHost --> uDevice
+        magma_dsetvector_async(mui_nMatsStream[sid] * mui_matSize, md_uHost_s[sid], 1, md_uDevice_s[sid], 1,
+                               m_queueStream[sid]);
+
+        //printf("u vector in gpu:\n");
+        //magma_dprint_gpu(mui_matSize * mui_nMatsStream[sid], 1, md_uDevice_s[sid], mui_matSize * mui_nMatsStream[sid], m_queueStream[sid]);
+
+        // batched matrix-vector multiplication
+        magmablas_dgemv_batched(MagmaNoTrans, mui_matSize, mui_matSize, alpha, m_kDevAddress_s[sid], mui_matSize,
+                                m_uDevAddress_s[sid], 1, beta, m_vDevAddress_s[sid], 1, mui_nMatsStream[sid],
+                                m_queueStream[sid]);
+
+        //printf("v vector in gpu:\n");
+        //magma_dprint_gpu(mui_matSize * mui_nMatsStream[sid], 1, md_vDevice_s[sid], mui_matSize * mui_nMatsStream[sid], m_queueStream[sid]);
+
+        // transfer vDevice --> vHost
+        magma_dgetvector_async(mui_nMatsStream[sid] * mui_matSize, md_vDevice_s[sid], 1, md_vHost_s[sid], 1,
+                               m_queueStream[sid]);
     }
     return Error::SUCCESS;
-} // scatter_u2uHost
+}
 
 
 Error aMatGpu::gather_vHost2v(double *v) {
@@ -503,7 +532,8 @@ Error aMatGpu::gather_vHost2v(double *v) {
                         const unsigned int block_row_offset = block_i * mui_matSize;
                         for (unsigned int r = 0; r < mui_matSize; r++) {
                             const unsigned int rowId = m_localMap[eid][block_row_offset + r];
-                            #pragma omp atomic
+                            /* no need to omp atomic because the matrices in each stream are completely separate */
+                            //#pragma omp atomic
                             v[rowId] += md_vHost_s[sid][(mid * mui_matSize) + r];
                         }
                     }
