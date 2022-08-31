@@ -340,7 +340,7 @@ int main(int argc, char* argv[]){
 
    // ====================== profiling matvec ====================================
    // generate random vector of length = number of owned dofs
-   /* const unsigned int numDofsTotal = meshMaps.get_NumDofsTotal();
+   const unsigned int numDofsTotal = meshMaps.get_NumDofsTotal();
    const unsigned int numDofs = meshMaps.get_NumDofs();
 
    double* X = (double*) malloc(sizeof(double) * (numDofsTotal));
@@ -352,7 +352,7 @@ int main(int argc, char* argv[]){
    double* Y = (double*) malloc(sizeof(double) * (numDofsTotal));
 
    // total number of matvec's we want to profile
-   const unsigned int num_matvecs = 10;
+   const unsigned int num_matvecs = 50;
    if (rank == 0) printf("Number of matvecs= %d\n", num_matvecs);
 
    if( matType==0) {
@@ -385,11 +385,11 @@ int main(int argc, char* argv[]){
    }
 
    free (Y);
-   free (X); */
+   free (X);
    // ====================== finish profiling matvec ==============================
 
    // ======================= solve =================================================
-   matvec_time.start();
+   /* matvec_time.start();
    if (matType == 0)
       par::solve(*stMatBased, (const Vec)rhs, out);
    else
@@ -464,12 +464,12 @@ int main(int argc, char* argv[]){
 
    if (rank == 0) {
       printf("L_inf norm of error = %20.10f\n", norm);
-   }
+   } */
 
    long double gather_time, scatter_time, mv_time, mvTotal_time;
    if ((matType == 3) || (matType == 4) || (matType == 5)) {
       stMatFree->get_timer(&scatter_time, &gather_time, &mv_time, &mvTotal_time);
-   }
+   } 
    // ============================ finish comparing with exact solution ============
 
    // computing time acrossing ranks and display
