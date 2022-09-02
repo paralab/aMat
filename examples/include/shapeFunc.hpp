@@ -16,7 +16,7 @@
 
 namespace shape {
 
-    enum class ELEMTYPE {TRI3, TRI6, QUAD4, QUAD8, HEX8, HEX20, TET4, TET10};
+    enum class ELEMTYPE {TRI3, TRI6, QUAD4, QUAD8, HEX8, HEX20, TET4, TET10, HEX27};
     enum class ERROR {UNKNOWN_ELEMENT_TYPE, SUCCESS};
 
     template<typename DT>
@@ -43,6 +43,7 @@ namespace shape {
                 case shape::ELEMTYPE::HEX20: return 20; break;
                 case shape::ELEMTYPE::TET4: return 4; break;
                 case shape::ELEMTYPE::TET10: return 10; break;
+                case shape::ELEMTYPE::HEX27: return 27; break; // 2022.09.01, copied from aMat_dev
                 default:
                     return (unsigned int)shape::ERROR::UNKNOWN_ELEMENT_TYPE;
             };
@@ -62,6 +63,34 @@ namespace shape {
          * @param[out] pointer to dN values
         * */
         DT* dNvalues(const DT xi []);
+
+        // return values of quadratic Lagrange interpolation function at x
+        double LQuad(double x, unsigned int idx) {
+            if (idx == 0) {
+                return (0.5*x*(x - 1.0));
+            } else if (idx == 1) {
+                return (1.0 - x*x);
+            } else if (idx == 2) {
+                return (0.5*x*(x+1.0));
+            } else {
+                std::cout << "LQuad: index of quadratic Lagrange interpolation function is out of range\n";
+                exit(1);
+            }
+        }
+
+        // return values of derivative of quadratic Lagrange interpolation function at x
+        double DLQuad(double x, unsigned int idx) {
+            if (idx == 0) {
+                return (x - 0.5);
+            } else if (idx == 1) {
+                return (-2.0*x);
+            } else if (idx == 2) {
+                return (x + 0.5);
+            } else {
+                std::cout << "DLQuad: index of quadratic Lagrange interpolation function is out of range\n";
+                exit(1);
+            }
+        }
     };
 
     template <typename DT>
@@ -84,7 +113,8 @@ namespace shape {
             } else if ((elemType == shape::ELEMTYPE::HEX8) || 
                     (elemType == shape::ELEMTYPE::HEX20) ||
                     (elemType == shape::ELEMTYPE::TET4) ||
-                    (elemType == shape::ELEMTYPE::TET10)){
+                    (elemType == shape::ELEMTYPE::TET10) ||
+                    (elemType == shape::ELEMTYPE::HEX27)){
                 // 3D elements: linear or quadratic tetrahedron, linear or quadratic hexahedron
                 // dN[]/dxi, dN[]/deta and dN[]/dzeta
                 dN = new DT [ 3 * numNodes ];
@@ -237,6 +267,50 @@ namespace shape {
                 }
                 N[j] = 0.25 * (1 - xi[2]*xi[2])*(1 + xij*xi[0])*(1 + etaj*xi[1]);
             }
+        } else if (elemType == ELEMTYPE::HEX27){
+            const DT L0xi = LQuad(xi[0], 0);
+            const DT L1xi = LQuad(xi[0], 1);
+            const DT L2xi = LQuad(xi[0], 2);
+
+            const DT L0eta = LQuad(xi[1], 0);
+            const DT L1eta = LQuad(xi[1], 1);
+            const DT L2eta = LQuad(xi[1], 2);
+
+            const DT L0zeta = LQuad(xi[2], 0);
+            const DT L1zeta = LQuad(xi[2], 1);
+            const DT L2zeta = LQuad(xi[2], 2);
+            // this is to follow the node ordering of Gmsh: http://www.manpagez.com/info/gmsh/gmsh-2.2.6/gmsh_65.php#SEC65
+            // 8 corner nodes:
+            N[0] = L0xi * L0eta * L0zeta;
+            N[1] = L2xi * L0eta * L0zeta;
+            N[2] = L2xi * L2eta * L0zeta;
+            N[3] = L0xi * L2eta * L0zeta;
+            N[4] = L0xi * L0eta * L2zeta;
+            N[5] = L2xi * L0eta * L2zeta;
+            N[6] = L2xi * L2eta * L2zeta;
+            N[7] = L0xi * L2eta * L2zeta;
+            // 12 mid-side edge nodes:
+            N[8] = L1xi * L0eta * L0zeta;
+            N[9] = L0xi * L1eta * L0zeta;
+            N[10] = L0xi * L0eta * L1zeta;
+            N[11] = L2xi * L1eta * L0zeta;
+            N[12] = L2xi * L0eta * L1zeta;
+            N[13] = L1xi * L2eta * L0zeta;
+            N[14] = L2xi * L2eta * L1zeta;
+            N[15] = L0xi * L2eta * L1zeta;
+            N[16] = L1xi * L0eta * L2zeta;
+            N[17] = L0xi * L1eta * L2zeta;
+            N[18] = L2xi * L1eta * L2zeta;
+            N[19] = L1xi * L2eta * L2zeta;
+            // 6 face-center nodes
+            N[20] = L1xi * L1eta * L0zeta;
+            N[21] = L1xi * L0eta * L1zeta;
+            N[22] = L0xi * L1eta * L1zeta;
+            N[23] = L2xi * L1eta * L1zeta;
+            N[24] = L1xi * L2eta * L1zeta;
+            N[25] = L1xi * L1eta * L2zeta;
+            // 1 center node
+            N[26] = L1xi * L1eta * L1zeta;
         } else {
             std::cout << "Not implemented yet\n";
             exit(0);
@@ -526,7 +600,142 @@ namespace shape {
                 dN[j*3 + 1] = 0.25 * (1 - xi[2]*xi[2]) * etaj * (1 + xij*xi[0]);
                 dN[j*3 + 2] = 0.25 * (-2*xi[2]) * (1 + xij*xi[0]) * (1 + etaj*xi[1]);
             }    
-        
+        } else if (elemType == ELEMTYPE::HEX27) {
+            const DT L0xi = LQuad(xi[0], 0);
+            const DT L1xi = LQuad(xi[0], 1);
+            const DT L2xi = LQuad(xi[0], 2);
+
+            const DT L0eta = LQuad(xi[1], 0);
+            const DT L1eta = LQuad(xi[1], 1);
+            const DT L2eta = LQuad(xi[1], 2);
+
+            const DT L0zeta = LQuad(xi[2], 0);
+            const DT L1zeta = LQuad(xi[2], 1);
+            const DT L2zeta = LQuad(xi[2], 2);
+            
+            const DT dL0xi = DLQuad(xi[0], 0); // dL0(xi)/dxi
+            const DT dL1xi = DLQuad(xi[0], 1); // dL1(xi)/dxi
+            const DT dL2xi = DLQuad(xi[0], 2); // dL2(xi)/dxi
+
+            const DT dL0eta = DLQuad(xi[1], 0); // dL0(eta)/deta
+            const DT dL1eta = DLQuad(xi[1], 1); // dL1(eta)/deta
+            const DT dL2eta = DLQuad(xi[1], 2); // dL2(eta)/deta
+
+            const DT dL0zeta = DLQuad(xi[2], 0); // dL0(zeta)/dzeta
+            const DT dL1zeta = DLQuad(xi[2], 1); // dL1(zeta)/dzeta
+            const DT dL2zeta = DLQuad(xi[2], 2); // dL2(zeta)/dzeta
+
+            dN[0] = dL0xi * L0eta * L0zeta;
+            dN[1] = L0xi * dL0eta * L0zeta;
+            dN[2] = L0xi * L0eta * dL0zeta;
+
+            dN[3] = dL2xi * L0eta * L0zeta;
+            dN[4] = L2xi * dL0eta * L0zeta;
+            dN[5] = L2xi * L0eta * dL0zeta;
+
+            dN[6] = dL2xi * L2eta * L0zeta;
+            dN[7] = L2xi * dL2eta * L0zeta;
+            dN[8] = L2xi * L2eta * dL0zeta;
+
+            dN[9] = dL0xi * L2eta * L0zeta;
+            dN[10] = L0xi * dL2eta * L0zeta;
+            dN[11] = L0xi * L2eta * dL0zeta;
+
+            dN[12] = dL0xi * L0eta * L2zeta;
+            dN[13] = L0xi * dL0eta * L2zeta;
+            dN[14] = L0xi * L0eta * dL2zeta;
+
+            dN[15] = dL2xi * L0eta * L2zeta;
+            dN[16] = L2xi * dL0eta * L2zeta;
+            dN[17] = L2xi * L0eta * dL2zeta;
+
+            dN[18] = dL2xi * L2eta * L2zeta;
+            dN[19] = L2xi * dL2eta * L2zeta;
+            dN[20] = L2xi * L2eta * dL2zeta;
+
+            dN[21] = dL0xi * L2eta * L2zeta;
+            dN[22] = L0xi * dL2eta * L2zeta;
+            dN[23] = L0xi * L2eta * dL2zeta;
+
+            // 12 mid-side edge nodes:
+            dN[24] = dL1xi * L0eta * L0zeta;
+            dN[25] = L1xi * dL0eta * L0zeta;
+            dN[26] = L1xi * L0eta * dL0zeta;
+
+            dN[27] = dL0xi * L1eta * L0zeta;
+            dN[28] = L0xi * dL1eta * L0zeta;
+            dN[29] = L0xi * L1eta * dL0zeta;
+
+            dN[30] = dL0xi * L0eta * L1zeta;
+            dN[31] = L0xi * dL0eta * L1zeta;
+            dN[32] = L0xi * L0eta * dL1zeta;
+
+            dN[33] = dL2xi * L1eta * L0zeta;
+            dN[34] = L2xi * dL1eta * L0zeta;
+            dN[35] = L2xi * L1eta * dL0zeta;
+
+            dN[36] = dL2xi * L0eta * L1zeta;
+            dN[37] = L2xi * dL0eta * L1zeta;
+            dN[38] = L2xi * L0eta * dL1zeta;
+
+            dN[39] = dL1xi * L2eta * L0zeta;
+            dN[40] = L1xi * dL2eta * L0zeta;
+            dN[41] = L1xi * L2eta * dL0zeta;
+
+            dN[42] = dL2xi * L2eta * L1zeta;
+            dN[43] = L2xi * dL2eta * L1zeta;
+            dN[44] = L2xi * L2eta * dL1zeta;
+
+            dN[45] = dL0xi * L2eta * L1zeta;
+            dN[46] = L0xi * dL2eta * L1zeta;
+            dN[47] = L0xi * L2eta * dL1zeta;
+
+            dN[48] = dL1xi * L0eta * L2zeta;
+            dN[49] = L1xi * dL0eta * L2zeta;
+            dN[50] = L1xi * L0eta * dL2zeta;
+
+            dN[51] = dL0xi * L1eta * L2zeta;
+            dN[52] = L0xi * dL1eta * L2zeta;
+            dN[53] = L0xi * L1eta * dL2zeta;
+
+            dN[54] = dL2xi * L1eta * L2zeta;
+            dN[55] = L2xi * dL1eta * L2zeta;
+            dN[56] = L2xi * L1eta * dL2zeta;
+
+            dN[57] = dL1xi * L2eta * L2zeta;
+            dN[58] = L1xi * dL2eta * L2zeta;
+            dN[59] = L1xi * L2eta * dL2zeta;
+
+            // 6 face-center nodes
+            dN[60] = dL1xi * L1eta * L0zeta;
+            dN[61] = L1xi * dL1eta * L0zeta;
+            dN[62] = L1xi * L1eta * dL0zeta;
+
+            dN[63] = dL1xi * L0eta * L1zeta;
+            dN[64] = L1xi * dL0eta * L1zeta;
+            dN[65] = L1xi * L0eta * dL1zeta;
+
+            dN[66] = dL0xi * L1eta * L1zeta;
+            dN[67] = L0xi * dL1eta * L1zeta;
+            dN[68] = L0xi * L1eta * dL1zeta;
+
+            dN[69] = dL2xi * L1eta * L1zeta;
+            dN[70] = L2xi * dL1eta * L1zeta;
+            dN[71] = L2xi * L1eta * dL1zeta;
+
+            dN[72] = dL1xi * L2eta * L1zeta;
+            dN[73] = L1xi * dL2eta * L1zeta;
+            dN[74] = L1xi * L2eta * dL1zeta;
+
+            dN[75] = dL1xi * L1eta * L2zeta;
+            dN[76] = L1xi * dL1eta * L2zeta;
+            dN[77] = L1xi * L1eta * dL2zeta;
+
+            // 1 center node
+            dN[78] = dL1xi * L1eta * L1zeta;
+            dN[79] = L1xi * dL1eta * L1zeta;
+            dN[80] = L1xi * L1eta * dL1zeta;
+            
         } else {
             std::cout << "Not implemented yet\n";
             exit(0);

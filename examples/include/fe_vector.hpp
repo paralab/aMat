@@ -155,4 +155,10 @@ void fe_tet10_iso(Eigen::Matrix<double,30,1> &fe, const double* xe, const double
 void feT_tet10_iso(Eigen::Matrix<double,18,1> &feT, const double* xe, const double* tN,
                 const double* GaussPoints, const unsigned int nGauss);
 
+// element load vector for 27-node hex element for 3D elasticity, due to body force
+void fe_hex27_iso(double* fe, const double* xe, const double* bN,
+                const double* GaussPoints, const unsigned int nGauss);
+void fe_hex27_iso(Eigen::Matrix<double,81,1> &fe, const double* xe, const double* bN,
+                const double* GaussPoints, const unsigned int nGauss);
+
 #endif //ADAPTIVEMATRIX_KE_MATRIX_H

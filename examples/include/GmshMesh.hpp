@@ -36,7 +36,7 @@ private:
    const unsigned int NNODES_PER_ELEM [32] = {0, 2, 3, 4, 4, 8, 6, 5, 3, 6, 9, 10, 27, 18, 14, 1, 8,
                                              20, 15, 13, 9, 10, 12, 15, 13, 21, 4, 5, 6, 20, 35, 56};
    
-   const unsigned int MAX_NNODE_PER_ELEM = 10;  // todo: update this when more elements available
+   const unsigned int MAX_NNODE_PER_ELEM = 27;  // todo: update this when more elements available
    const unsigned int MAX_ELEM_FLAG = 4;        // todo: currently, Gmsh uses 3 flags for sequential, 4 flags for parallel
    unsigned int m_NDOF_PER_NODE;                // n dofs per node, e.g. potential problem is 1, 2D elasticity is 2, 3D elasticity is 3
 
@@ -50,8 +50,11 @@ private:
    unsigned long m_nElems_global;               // n elems for all ranks, bdr and interiror elems
    unsigned long m_nBdrElems_global;            // n bdr elems for all ranks
    unsigned long m_nItrElems_global;            // n interior elems for all ranks
+   unsigned long m_nPtrElems_global;             // 2021.12.23, number of point elements
+   unsigned long m_nLneElems_global;             // 2021.12.23, number of lines elements
 
    unsigned long * m_elemLabel_global;          // elem label, bdr & interior elems
+   
    unsigned int * m_elemType_global;            // elem type, bdr & interior elems
    unsigned int * m_elemFlag_global;            // elem flags, bdr & interior elems
    unsigned int * m_elemPart_global;            // elem partition, bdr & interior elems
@@ -59,15 +62,16 @@ private:
    unsigned long ** m_globalMap_global;         // global map, bdr & interior elems
 
    unsigned long * m_itrElemLabel_global;       // elem label, only interior elems
+
    unsigned int * m_itrElemType_global;         // elem type, only interior elems
    unsigned int * m_itrElemFlag_global;         // elem flags, only interior elems
    unsigned int * m_itrElemPart_global;         // elem partition, only interior elems
-   unsigned long ** m_itrGlobalMap_global;      // global map, only interior elems
 
+   unsigned long ** m_itrGlobalMap_global;      // global map, only interior elems
 
    // variables across ranks =============================================================================
    unsigned int * m_nElemCount;                       // number of owned elems
-   std::vector<unsigned long> * m_owned_nodes_rank;   // list of owned nodes
+   std::vector<unsigned long> * m_owned_nodes_rank;   // list of owned global id nodes
    unsigned int * m_nNodeCount;                       // number of owned nodes
    unsigned long * m_nNodeOffset;                     // node offset
 
@@ -169,20 +173,25 @@ public:
    /*@brief return number of local dofs */
    unsigned int get_nLocalDofs() const { return m_NDOF_PER_NODE * m_nLocalNodes; };
 
+   /*@brief return number of local dofs */
+   unsigned int get_nLocalNodes() const { return m_nLocalNodes; };
+
+   unsigned long * get_local2GlobalMap() const { return m_local2GlobalMap; }
+
    /*@brief build and return local to global Dof map */
    unsigned long * get_local2GlobalDofMap();
 
    /*@brief return start dof id owned by my rank */
    // this is not used by aMat, have it here because of Keith's (AFRL) request
-   unsigned long get_startGlobalDof();
+   unsigned int get_startGlobalDof();
 
    /*@brief return end dof id owned by my rank */
    // this is not used by aMat, have it here because of Keith's (AFRL) request
-   unsigned long get_endGlobalDof();
+   unsigned int get_endGlobalDof();
 
    /*@brief return number of dofs of all ranks */
    // this is not used by aMat, have it here because of Keith's (AFRL) request
-   unsigned long get_nDofsTotal() const { return m_nNodes_global * m_NDOF_PER_NODE; };
+   unsigned int get_nDofsTotal() const { return m_nNodes_global * m_NDOF_PER_NODE; };
 
    /*@brief return number of constraints (n dofs that are constrained) */
    // NOTE: THIS FUNCTION ASSUMES ALL BOUNDARY NODES ARE PRESCRIBED

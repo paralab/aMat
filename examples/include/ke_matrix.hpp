@@ -131,5 +131,11 @@ void ke_hex20_iso(double* ke, double* xe, double E, double nu,
 * */
 void ke_hex8_iso_crack_01(Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic> &ke, double* xe, double E, double nu,
                 const double* xw, const unsigned int NGT);
+
+/* 2022.09.01: copy from aMat_dev: quadratic 27-node element for elasticity */
+void ke_hex27_iso(double* ke, double* xe, double E, double nu,
+                const double* xw, const unsigned int NGT);
+void ke_hex27_iso(Eigen::Matrix<double,81,81> &ke, double* xe, double E, double nu,
+                const double* xw, const unsigned int NGT);
                 
 #endif //ADAPTIVEMATRIX_KE_MATRIX_H
